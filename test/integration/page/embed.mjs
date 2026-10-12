@@ -82,7 +82,17 @@ function configure(config) {
     .contentWindow.postMessage({ type: 'slicc-vault', v: 1, op: 'button', button: config }, vault);
 }
 
+function policy(files) {
+  const decoded = files.map((file) =>
+    typeof file.bytes === 'string'
+      ? { ...file, bytes: Uint8Array.from(atob(file.bytes), (char) => char.charCodeAt(0)) }
+      : file
+  );
+  return call('policy', { files: decoded });
+}
+
 window.harness = {
+  policy,
   vault,
   seen,
   events,

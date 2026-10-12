@@ -101,6 +101,7 @@ export interface VaultStatus {
   waiting: PendingRequest[];
   exportedAt: EpochMs | null;
   backupReminder: BackupReminder;
+  policy: PolicyFileState[];
 }
 
 export type BackupReminder = 'due' | 'dismissed' | null;
@@ -184,6 +185,7 @@ export interface ExitPolicyView {
 
 export interface Attestation {
   path: string;
+  bytes: Uint8Array;
   uid: number;
   gid: number;
   mode: number;
@@ -192,18 +194,19 @@ export interface Attestation {
   sha256: string;
   users: string;
   onRootFs: boolean;
-  parents: { path: string; uid: number; mode: number }[];
+  parents: { path: string; uid: number; gid: number; mode: number }[];
 }
 
-export interface PolicyUpload {
-  path: PolicyFile;
-  bytes: Uint8Array | string;
-  attestation: Attestation;
+export interface PolicyFileState {
+  path: string;
+  sha256: string | null;
+  accepted: boolean;
+  warnings: string[];
 }
 
 export interface PolicyResult {
   accepted: boolean;
-  files: { path: string; sha256: string | null; accepted: boolean; warnings: string[] }[];
+  files: PolicyFileState[];
   rules: (Rule & { secret: string })[];
   warnings: string[];
 }
@@ -278,7 +281,7 @@ export type Op =
   | { op: 'export'; passphrase: string }
   | { op: 'lock' }
   | { op: 'dismissBackupReminder' }
-  | { op: 'policy'; files: PolicyUpload[] };
+  | { op: 'policy'; files: Attestation[] };
 
 export type OpReply =
   | { op: 'sealed'; reply: SealedReply }

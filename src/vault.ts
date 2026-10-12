@@ -6,7 +6,7 @@ import { Keyring } from './lock.ts';
 import { EMPTY, type Policy } from './policy.ts';
 import { backupState, records, reminder, scrubVersion } from './records.ts';
 import { pending, waiting } from './requests.ts';
-import { loadPolicy } from './rules.ts';
+import { loadPolicy, loadStored } from './rules.ts';
 import type { Context } from './sealed.ts';
 
 export type Listener = (ns: string, parts: Part[]) => void | Promise<void>;
@@ -83,7 +83,11 @@ export async function start(options: Options = {}): Promise<Vault> {
       return { needed, version, ready: !needed || keyring.seen };
     },
     async status(ns) {
-      const [backup, held] = await Promise.all([backupState(db, ns), records(db, ns)]);
+      const [backup, held, stored] = await Promise.all([
+        backupState(db, ns),
+        records(db, ns),
+        loadStored(db, ns),
+      ]);
       const secrets = held.some((record) => record.kind === 'secret');
       return {
         version: config.version,
@@ -95,6 +99,7 @@ export async function start(options: Options = {}): Promise<Vault> {
         waiting: (await waiting(db, ns, now())).map(pending),
         exportedAt: backup.exportedAt,
         backupReminder: reminder(backup, secrets),
+        policy: stored.last ?? [],
       };
     },
   };

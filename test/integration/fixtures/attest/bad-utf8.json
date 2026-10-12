@@ -1,0 +1,37 @@
+{
+  "description": "bytes that are not UTF-8",
+  "trusted": false,
+  "reason": "isn't UTF-8",
+  "attestation": {
+    "path": "/etc/fnox/config.toml",
+    "bytes": "//4A",
+    "uid": 0,
+    "gid": 0,
+    "mode": 33188,
+    "ino": 1024,
+    "mtimeMs": 1760300000000,
+    "sha256": "ba778c0261008c8f71ae4061ad0162ffcbe63b52c91f89f236738131d1217ec7",
+    "users": "enforce",
+    "onRootFs": true,
+    "parents": [
+      {
+        "path": "/",
+        "uid": 0,
+        "gid": 0,
+        "mode": 16877
+      },
+      {
+        "path": "/etc",
+        "uid": 0,
+        "gid": 0,
+        "mode": 16877
+      },
+      {
+        "path": "/etc/fnox",
+        "uid": 0,
+        "gid": 0,
+        "mode": 16877
+      }
+    ]
+  }
+}

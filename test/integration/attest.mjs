@@ -4,28 +4,29 @@ export const CONFIG = '/etc/fnox/config.toml';
 export const POLICY = '/etc/slicc/secrets-policy.toml';
 
 export function attest(path, text, overrides = {}) {
-  const sha256 = createHash('sha256').update(text).digest('hex');
-  const dir = path.slice(0, path.lastIndexOf('/'));
-  return {
-    path,
-    bytes: text,
-    attestation: {
-      path,
+  const bytes = Buffer.from(text);
+  const parts = path.split('/').slice(1, -1);
+  const parents = ['/', ...parts.map((_, i) => `/${parts.slice(0, i + 1).join('/')}`)].map(
+    (dir) => ({
+      path: dir,
       uid: 0,
       gid: 0,
-      mode: 0o100644,
-      ino: 42,
-      mtimeMs: 1760000000000,
-      sha256,
-      users: 'enforce',
-      onRootFs: true,
-      parents: [
-        { path: dir, uid: 0, mode: 0o40755 },
-        { path: '/etc', uid: 0, mode: 0o40755 },
-        { path: '/', uid: 0, mode: 0o40755 },
-      ],
-      ...overrides,
-    },
+      mode: 0o40755,
+    })
+  );
+  return {
+    path,
+    bytes: bytes.toString('base64'),
+    uid: 0,
+    gid: 0,
+    mode: 0o100644,
+    ino: 42,
+    mtimeMs: 1760000000000,
+    sha256: createHash('sha256').update(bytes).digest('hex'),
+    users: 'enforce',
+    onRootFs: true,
+    parents,
+    ...overrides,
   };
 }
 

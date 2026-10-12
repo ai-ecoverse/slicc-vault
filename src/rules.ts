@@ -1,6 +1,5 @@
-import type { Attestation } from './attest.ts';
 import { verify } from './attest.ts';
-import type { PolicyChange, PolicyFile, PolicyResult } from './contract.ts';
+import type { PolicyChange, PolicyFile, PolicyFileState, PolicyResult } from './contract.ts';
 import { request, transact } from './db.ts';
 import {
   type Accepted,
@@ -18,6 +17,7 @@ import { audit } from './records.ts';
 export interface Stored {
   accepted: Accepted;
   seen: Record<string, string>;
+  last?: PolicyFileState[];
 }
 
 const EMPTY_STORE: Stored = { accepted: NONE, seen: {} };
@@ -45,9 +45,7 @@ interface Outcome {
 }
 
 async function judge(upload: unknown, accepted: Accepted): Promise<Outcome> {
-  const verdict = await verify(
-    (upload ?? {}) as { path: string; bytes: string; attestation: Attestation }
-  );
+  const verdict = await verify(upload);
   if (!verdict.trusted) {
     const { path, sha256, warning } = verdict;
     return { path, sha256, accepted: false, warnings: [warning], changes: [], next: accepted };
@@ -82,6 +80,15 @@ async function judge(upload: unknown, accepted: Accepted): Promise<Outcome> {
       next: accepted,
     };
   }
+}
+
+function states(outcomes: Outcome[]): PolicyFileState[] {
+  return outcomes.map(({ path, sha256, accepted, warnings }) => ({
+    path,
+    sha256,
+    accepted,
+    warnings,
+  }));
 }
 
 function current(accepted: Accepted, path: string): string | null {
@@ -119,7 +126,8 @@ export async function apply(
         at: now,
       });
     }
-    await request(tx.objectStore('meta').put({ accepted, seen }, `policy:${ns}`));
+    const last = states(outcomes);
+    await request(tx.objectStore('meta').put({ accepted, seen, last }, `policy:${ns}`));
   });
   const policy = build(accepted);
   const rules = (accepted.config?.parsed.rules ?? []).map(({ secret, rule }) => ({
@@ -128,12 +136,7 @@ export async function apply(
   }));
   const result: PolicyResult = {
     accepted: outcomes.length > 0 && outcomes.every((o) => o.accepted),
-    files: outcomes.map(({ path, sha256, accepted: ok, warnings }) => ({
-      path,
-      sha256,
-      accepted: ok,
-      warnings,
-    })),
+    files: states(outcomes),
     rules,
     warnings: outcomes.flatMap((o) => o.warnings),
   };
