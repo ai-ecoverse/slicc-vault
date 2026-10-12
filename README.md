@@ -101,7 +101,7 @@ iframe.contentWindow.postMessage({ type: 'slicc-vault', v: 1, op: 'hello', role:
 | `placeholders` | — | `{ placeholders, scrub }`: every placeholder of a record that isn't removed, active and inert, sorted |
 | `list` | — | `{ list: { secrets, refused, audit, auditMore, exits } }` for Settings › Secrets |
 | `audit` | `before?` (a `seq`), `limit?` (1–1000, default 100) | `{ audit, more, next? }`, newest first; pass `next` as `before` for the next page |
-| `put` | `name`, `value`, `request?` | `{ name, placeholder, state }`. A value typed in Settings, with source `settings`; on an existing name it's a rotation that keeps the placeholder. With `request`, it answers that pending value request (which must ask for `name`), so its `/dev/sealed` `status` becomes `done` |
+| `put` | `name`, `value`, `request?` | `{ name, placeholder, state }`. A value typed in Settings, with source `settings`; on an existing name it's a rotation that keeps the placeholder. With `request`, it answers that value request, which must still be pending and ask for `name` (else `EINVAL`, and nothing is stored), so its `/dev/sealed` `status` becomes `done` |
 | `seal` | `name`, `value`, `source`, `kind?` (default `secret`), `expiresAt?`, `refresh?` | `{ name, placeholder, state }`. bios's, for J1 leases and sign-in tokens |
 | `remove`, `restore` | `name`, `kind?` (default `secret`) | `{ name, placeholder, state }`. A record removed more than 30 days ago can't be restored (`ENOENT`) |
 | `cancel` | `request` | `{ state }`; the request's `/dev/sealed` `status` becomes `cancelled` |

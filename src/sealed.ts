@@ -80,7 +80,7 @@ const listOp: Handler = async (ctx) => {
   const now = ctx.now();
   const policy = ctx.policy();
   const secrets = (await records(ctx.db, ctx.ns))
-    .filter((entry) => entry.kind === 'secret' && !removed(entry, now))
+    .filter((entry) => entry.kind === 'secret' && !removed(entry))
     .sort((a, b) => a.name.localeCompare(b.name))
     .map((entry) => ({
       name: entry.name,
@@ -100,7 +100,7 @@ const testOp: Handler = async (ctx, req) => {
   optional(req, 'method', 32);
   optional(req, 'header', 256);
   const found = await record(ctx, name);
-  if (removed(found, ctx.now())) return { verdict: 'refuse', reason: `${name} was removed` };
+  if (removed(found)) return { verdict: 'refuse', reason: `${name} was removed` };
   return { verdict: 'refuse', reason: `no rule in /etc/fnox/config.toml names ${name}` };
 };
 
