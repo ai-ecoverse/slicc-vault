@@ -177,7 +177,7 @@ iframe.contentWindow.postMessage({ type: 'slicc-vault', v: 1, op: 'hello', role:
 | `dismissBackupReminder` | — | `{ backupReminder }`; the reminder becomes `dismissed` for this namespace |
 | `policy` | `files` | the attested policy files, below (Policy) |
 | `forward` | `head`, `body?`, `owner`, `exit`, `rawTraits`, with a `MessagePort` transferred alongside | the injected head, below (Forward) |
-| `materializeConsume` | `ticket`, `stamp`, `path`, `argv`, `cwd` | the values for the child's environment, below (Exec) |
+| `materializeConsume` | `ticket`, `stamp`, `path`, `argv`, `cwd`, `interpreters` | the values for the child's environment, below (Exec) |
 | `import`, `export`, anything else | | `ENOTSUP` |
 
 `put` and `seal` need the vault unlocked. They answer `EACCES` with a message starting `vault is locked` otherwise.
@@ -213,8 +213,8 @@ bios relays each kernel request unchanged as the `sealed` op, with the kernel's 
 
 `fnox exec` (§3.5) asks for a one-shot ticket, and the kernel redeems it when it execs the child.
 
-**`materialize`** (a `/dev/sealed` op) takes `names`, `path` (the absolute program fnox will exec), `argv` (exact, `argv[0]` included), `cwd`, and optionally `interpreter` (the absolute binfmt interpreter the kernel would use for `path`). `shellGrants: true` (`fnox exec --shell-grants`) adds every `shell = true` secret to `names`, which may then be omitted.
-- Each name must be a `secret` record (`ENOENT` otherwise). `real` says which will get their value: removed records and secrets without an `[exec]` grant stay `false` and keep their placeholder.
+**`materialize`** (a `/dev/sealed` op) takes `names`, `path` (the absolute program fnox will exec), `argv` (exact, `argv[0]` included), `cwd`, and optionally `interpreter`: fnox's claim of the absolute shebang or binfmt interpreter of `path`, omitted for a native program. It's only a claim; the kernel's chain at consume decides. `shellGrants: true` (`fnox exec --shell-grants`) adds every `shell = true` secret to `names`, which may then be omitted.
+- Each name must be a `secret` record (`ENOENT` otherwise) that hasn't expired (`EACCES: NAME expired; refreshing`). `real` says which will get their value: removed records and secrets without an `[exec]` grant stay `false` and keep their placeholder.
 - **`true`** (exec `any`): refused with `EACCES` when `path`, or `interpreter`, is a shell (`sh`, `bash`, `dash`, `zsh`, `fish`, `busybox`, `jsh`), an interpreter (`python*`, `node`, `deno`, `bun`, `perl`, `ruby`, `php`, `lua`, `wasmer`) or an env dumper or wrapper (`env`, `printenv`, `xargs`, `sudo`, `su`, `nohup`, `timeout`, `time`, `nice`, `strace`), by basename.
 - **`{ argv = [[…]] }`**: `real` only when `[path, ...argv[1..]]` starts with one of the listed prefixes. A listed shell or interpreter is allowed.
 - **`{ shell = true }`**: always `real`, with no program refusal.
@@ -223,7 +223,11 @@ bios relays each kernel request unchanged as the `sealed` op, with the kernel's 
 - Each real name is audited as `materialize { name, exec, path, argv, argvSha256, cwd, pid, ppid, uid, tag, ticket, consumed: false }`. `argv` is joined with spaces, scrubbed, and cut to 200 characters; `argvSha256` is the SHA-256 of each argument followed by a NUL byte.
 - The reply never carries a value. The ticket is 32 hex characters and expires after 30 s.
 
-**`materializeConsume`** (a page op, from bios for the kernel at exec) takes `{ ticket, stamp, path, argv, cwd }`, with `stamp` the exec'ing process. The vault burns the ticket, then requires that it's unexpired, from this namespace, that `stamp.ppid` is the pid that asked, and that `path`, `argv` (element by element) and `cwd` are exactly the ones it was issued for. Any mismatch is `EACCES: ticket refused: …`, and the ticket stays burned. It answers `{ values: { NAME: value }, placeholders: { NAME: placeholder } }` for the names that were real and still exist, and marks their audit entries `consumed`. The kernel swaps each env var whose value is exactly one of those placeholders, and compiles its own scrubber over these values for the child's output (S2).
+**`materializeConsume`** (a page op, from bios for the kernel at exec) takes `{ ticket, stamp, path, argv, cwd, interpreters }`, with `stamp` the exec'ing process and `interpreters` the absolute, symlink-resolved shebang/binfmt chain the kernel actually resolved for `path` (empty for a native binary), relayed unchanged. The vault burns the ticket, then requires that:
+- it's unexpired and from this namespace, `stamp.ppid` is the pid that asked, and `path`, `argv` (element by element) and `cwd` are exactly the ones it was issued for;
+- `interpreters` is a list of absolute paths, and fnox's claim matches it: a claimed `interpreter` equals `interpreters[0]`, and no claim means `interpreters` is empty;
+- under each real name's `[exec]` mode, no program in `path` and `interpreters` is refused: for `true` none may be on the refusal list; for `{ argv }` a refused one must itself be the program of one of the grant's prefixes; `{ shell = true }` allows any;
+- no real record has expired meanwhile. Any mismatch is `EACCES: ticket refused: …`, and the ticket stays burned. It answers `{ values: { NAME: value }, placeholders: { NAME: placeholder } }` for the names that were real and still exist, and marks their audit entries `consumed`. The kernel swaps each env var whose value is exactly one of those placeholders, and compiles its own scrubber over these values for the child's output (S2).
 
 ## Forward
 

@@ -352,6 +352,7 @@ export type Op =
       path: string;
       argv: string[];
       cwd: string;
+      interpreters: string[];
     };
 
 export type AgentOp =
