@@ -204,6 +204,8 @@ export async function answer(
   switch (request.op) {
     case 'forward':
       return forward(vault, ns, request, port);
+    case 'materializeConsume':
+      return vault.exec.consume(ns, request);
     case 'sealed':
       return { reply: await sealed(vault.context(ns), request.req, request.stamp) };
     case 'status':

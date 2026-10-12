@@ -2,8 +2,8 @@
 
 The separate-origin vault at `vault.sliccy.ai`. It holds the sealed secrets, OAuth tokens, and model and MCP credentials of SLICC seven, so that no value ever reaches the model provider. The design is `secrets-tokens-design.md` (revision 4) in slicc-agent-plan. This README is the spec of what is built.
 
-- **Built:** the key store, records, origin namespacing, auto-unlock with an optional passkey or passphrase lock, the embedding API with its `page` and `agent` roles, the page's `put`, `seal`, `remove`, `restore`, `cancel` and `lock`, the scrub state, the lock button and its popup, the attested policy (rules, `[exec]`, `[exits]`, `[limits]`), the injector and `forward` with the response scrub (S1), the agent's `redact`, `redactStream` and `endpoints` (S3), the model and MCP refusal, and the vault side of the `/dev/sealed` ops `seal`, `placeholder`, `list`, `test`, `request`, `status`, `cancel` and `materialize`.
-- **Not built yet:** exec (`materialize`), `import` and `export`, and the agent's `model`, `mcp`, `records`, `grant` and `refresh`. They answer as described below.
+- **Built:** the key store, records, origin namespacing, auto-unlock with an optional passkey or passphrase lock, the embedding API with its `page` and `agent` roles, the page's `put`, `seal`, `remove`, `restore`, `cancel` and `lock`, the scrub state, the lock button and its popup, the attested policy (rules, `[exec]`, `[exits]`, `[limits]`), the injector and `forward` with the response scrub (S1), the agent's `redact`, `redactStream` and `endpoints` (S3), the model and MCP refusal, exec tickets (`materialize` and `materializeConsume`), and the vault side of the `/dev/sealed` ops `seal`, `placeholder`, `list`, `test`, `request`, `status`, `cancel` and `materialize`.
+- **Not built yet:** `import` and `export`, and the agent's `model`, `mcp`, `records`, `grant` and `refresh`. They answer as described below.
 - **The vault has no network stack.** It never fetches anything but its own `config.json` and `embedders.json`: bios sends every request the vault prepares.
 
 ## Documents and hosting
@@ -160,7 +160,7 @@ iframe.contentWindow.postMessage({ type: 'slicc-vault', v: 1, op: 'hello', role:
 - On `port2` it answers `{ v: 1, op: 'welcome', role, status }`, or `{ v: 1, op: 'refused', error }` for another protocol version or an unknown role.
 - Everything after that goes over the port. The namespace and the role are fixed by the hello. Requests are `{ v: 1, id, op, ...fields }`; replies are `{ v: 1, id, op, ...fields }` or `{ v: 1, id, error: { code, message } }`. Each port is answered in order (FIFO).
 - **Roles:** `page` (the default) is bios and spectrum. bios may hand spectrum a page port of its own, or relay; the messages are the same. `agent` is the port bios hands the agent worker: it may use only `redact`, `redactStream`, `push`, `idle`, `end`, `drop`, `endpoints`, `model`, `mcp`, `records`, `grant` and `refresh` (the last five `ENOTSUP` in this version), and anything else is `EACCES`. The agent port gets no events. Its ops are below (The agent's ops).
-- **Values:** only `forward` puts a value into the page, inside the head it returns, and only where an accepted rule allows it. No other op, event or reply carries one, and nothing on the agent port ever does.
+- **Values:** only `forward` (inside the head it returns, where an accepted rule allows it) and `materializeConsume` (for an `[exec]` grant) put a value into the page. No other op, event or reply carries one, and nothing on the agent port ever does.
 
 | op (page role) | fields | reply |
 |---|---|---|
@@ -177,6 +177,7 @@ iframe.contentWindow.postMessage({ type: 'slicc-vault', v: 1, op: 'hello', role:
 | `dismissBackupReminder` | — | `{ backupReminder }`; the reminder becomes `dismissed` for this namespace |
 | `policy` | `files` | the attested policy files, below (Policy) |
 | `forward` | `head`, `body?`, `owner`, `exit`, `rawTraits`, with a `MessagePort` transferred alongside | the injected head, below (Forward) |
+| `materializeConsume` | `ticket`, `stamp`, `path`, `argv`, `cwd` | the values for the child's environment, below (Exec) |
 | `import`, `export`, anything else | | `ENOTSUP` |
 
 `put` and `seal` need the vault unlocked. They answer `EACCES` with a message starting `vault is locked` otherwise.
@@ -203,10 +204,26 @@ bios relays each kernel request unchanged as the `sealed` op, with the kernel's 
 | `request` | `kind: "jerk-seal"`, `provider` | the same |
 | `status` | `id` | `{ state }`, with `placeholder` and `record` once a value request is `done` |
 | `cancel` | `id` | `{ state }`: `cancelled`, or the state it had already reached |
-| `materialize` | `names`, `path`, `argv`, `cwd` | checked, then always `EACCES` in this version |
+| `materialize` | `names` (or `shellGrants: true`), `path`, `argv`, `cwd`, `interpreter?` | `{ ticket, expiresAt, real: { NAME: true \| false } }`, below (Exec) |
 
 - **Requests** expire 300 s after they're made. Each uid has at most one pending request per namespace; a second one is `EAGAIN`. `status` and `cancel` see only the caller's own requests (uid 0 sees all), and others get `ENOENT`.
 - A value request shows up in `status.waiting` and is answered by the page's `put` with its `request` id, or ended by `cancel`. `oauth` and `jerk-seal` requests can only be cancelled in this version.
+
+## Exec
+
+`fnox exec` (§3.5) asks for a one-shot ticket, and the kernel redeems it when it execs the child.
+
+**`materialize`** (a `/dev/sealed` op) takes `names`, `path` (the absolute program fnox will exec), `argv` (exact, `argv[0]` included), `cwd`, and optionally `interpreter` (the absolute binfmt interpreter the kernel would use for `path`). `shellGrants: true` (`fnox exec --shell-grants`) adds every `shell = true` secret to `names`, which may then be omitted.
+- Each name must be a `secret` record (`ENOENT` otherwise). `real` says which will get their value: removed records and secrets without an `[exec]` grant stay `false` and keep their placeholder.
+- **`true`** (exec `any`): refused with `EACCES` when `path`, or `interpreter`, is a shell (`sh`, `bash`, `dash`, `zsh`, `fish`, `busybox`, `jsh`), an interpreter (`python*`, `node`, `deno`, `bun`, `perl`, `ruby`, `php`, `lua`, `wasmer`) or an env dumper or wrapper (`env`, `printenv`, `xargs`, `sudo`, `su`, `nohup`, `timeout`, `time`, `nice`, `strace`), by basename.
+- **`{ argv = [[…]] }`**: `real` only when `[path, ...argv[1..]]` starts with one of the listed prefixes. A listed shell or interpreter is allowed.
+- **`{ shell = true }`**: always `real`, with no program refusal.
+- **Limits,** per secret and uid, counted from the audit log: `materialize_per_minute` (10) and `materialize_per_day` (200), and `shell_per_day` (5,000, with no per-minute limit) for shell grants. Over a limit is `EAGAIN: materialize limit for NAME (10/min)`.
+- A locked vault answers `EACCES` (`vault is locked`).
+- Each real name is audited as `materialize { name, exec, path, argv, argvSha256, cwd, pid, ppid, uid, tag, ticket, consumed: false }`. `argv` is joined with spaces, scrubbed, and cut to 200 characters; `argvSha256` is the SHA-256 of each argument followed by a NUL byte.
+- The reply never carries a value. The ticket is 32 hex characters and expires after 30 s.
+
+**`materializeConsume`** (a page op, from bios for the kernel at exec) takes `{ ticket, stamp, path, argv, cwd }`, with `stamp` the exec'ing process. The vault burns the ticket, then requires that it's unexpired, from this namespace, that `stamp.ppid` is the pid that asked, and that `path`, `argv` (element by element) and `cwd` are exactly the ones it was issued for. Any mismatch is `EACCES: ticket refused: …`, and the ticket stays burned. It answers `{ values: { NAME: value }, placeholders: { NAME: placeholder } }` for the names that were real and still exist, and marks their audit entries `consumed`. The kernel swaps each env var whose value is exactly one of those placeholders, and compiles its own scrubber over these values for the child's output (S2).
 
 ## Forward
 

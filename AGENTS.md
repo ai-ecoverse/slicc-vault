@@ -2,7 +2,7 @@
 
 README.md is the spec; keep it exact when behaviour changes. The design is secrets-tokens-design.md (rev 3) in slicc-agent-plan.
 
-- Only `forward` (by an accepted rule) may hand a value to the page; nothing ever reaches the agent role or the model.
+- Only `forward` (by an accepted rule) and `materializeConsume` (by an `[exec]` grant) may hand a value to the page; nothing ever reaches the agent role or the model.
 - No third-party runtime JS in src/: CSS-only Spectrum 2, own code only.
 - No comments in any file. Only README.md and AGENTS.md as docs.
 - Unit tests live in the gitignored test/unit/ and must cover every changed line of src/ (`npm run test:unit`).

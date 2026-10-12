@@ -2,6 +2,7 @@ import { type Channel, channel, type Message, type Part } from './channel.ts';
 import { type Config, load } from './config.ts';
 import type { ScrubState, VaultStatus } from './contract.ts';
 import { open } from './db.ts';
+import { Exec } from './exec.ts';
 import { Keyring } from './lock.ts';
 import { EMPTY, type Policy } from './policy.ts';
 import { backupState, records, reminder, scrubVersion } from './records.ts';
@@ -25,6 +26,7 @@ export interface Vault {
   context(ns: string): Context;
   scrub(ns: string): Promise<ScrubState>;
   scrubbers: Scrubbers;
+  exec: Exec;
   status(ns: string): Promise<VaultStatus>;
 }
 
@@ -47,6 +49,7 @@ export async function start(options: Options = {}): Promise<Vault> {
   };
   const vault: Vault = {
     scrubbers: undefined as unknown as Scrubbers,
+    exec: undefined as unknown as Exec,
     db,
     config,
     keyring,
@@ -72,6 +75,7 @@ export async function start(options: Options = {}): Promise<Vault> {
         db,
         ns,
         keyring,
+        exec: vault.exec,
         policy: () => vault.policy(ns),
         now,
         changed: () => vault.changed(ns, ['secrets', 'requests', 'audit']),
@@ -108,6 +112,7 @@ export async function start(options: Options = {}): Promise<Vault> {
     else if (message.type !== 'popup') void keyring.receive(message);
   });
   vault.scrubbers = new Scrubbers(vault);
+  vault.exec = new Exec(vault);
   const reload = async (ns: string, parts: Part[]) => {
     if (parts.includes('exits') && policies.has(ns)) await vault.loadPolicy(ns);
     await notify(ns, parts);
