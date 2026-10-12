@@ -31,13 +31,13 @@
     "dist/types"
   ],
   "scripts": {
-    "prepare": "[ ! -e .git ] || lefthook install",
-    "build": "node build.mjs && tsc -p tsconfig.build.json",
+    "prepare": "node scripts/endpoints.mjs && { [ ! -e .git ] || lefthook install; }",
+    "build": "node scripts/endpoints.mjs && node build.mjs && tsc -p tsconfig.build.json",
     "prepack": "npm run build",
     "start": "npm run build && node test/integration/serve.mjs",
     "pretest": "npm run build && playwright-core install --no-shell chromium",
     "test": "node --test --test-timeout=300000 --test-global-setup=node_modules/@ai-ecoverse/slicc-shared-web/harness/global.mjs 'test/integration/*.test.mjs'",
-    "test:unit": "NODE_NO_WARNINGS=1 mcr -c node_modules/@ai-ecoverse/slicc-shared-web/mcr.config.mjs node --import fake-indexeddb/auto --test --test-force-exit 'test/unit/**/*.test.mjs'",
+    "test:unit": "node scripts/endpoints.mjs && NODE_NO_WARNINGS=1 mcr -c node_modules/@ai-ecoverse/slicc-shared-web/mcr.config.mjs node --import fake-indexeddb/auto --test --test-force-exit 'test/unit/**/*.test.mjs'",
     "typecheck": "tsc",
     "lint": "slicc-lint",
     "format": "biome check --write .",
@@ -46,8 +46,10 @@
     "release": "semantic-release"
   },
   "devDependencies": {
+    "@ai-ecoverse/slicc-scrub": "1.0.0",
     "@ai-ecoverse/slicc-shared-web": "1.13.1",
     "@biomejs/biome": "2.5.15",
+    "@earendil-works/pi-ai": "1.0.4",
     "@happy-dom/global-registrator": "20.14.5",
     "@spectrum-css/button": "14.2.0",
     "@spectrum-css/textfield": "8.2.0",

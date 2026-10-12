@@ -52,7 +52,6 @@ export class Keyring {
   readonly db: IDBDatabase;
   readonly bus: Bus;
   key: CryptoKey | null = null;
-  seen = false;
   id = '';
   mode: LockMode = 'auto';
   kek: Kek | null = null;
@@ -175,7 +174,6 @@ export class Keyring {
 
   private set(key: CryptoKey): void {
     this.key = key;
-    this.seen = true;
     this.emit();
   }
 

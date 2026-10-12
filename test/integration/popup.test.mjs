@@ -228,7 +228,7 @@ test('the agent port gets only agent ops', async (t) => {
     [
       [1, 'EACCES'],
       [2, 'EACCES'],
-      [3, 'ENOTSUP'],
+      [3, 'EINVAL'],
     ]
   );
   assert.equal(replies[4].op, 'refused');

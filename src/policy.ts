@@ -4,6 +4,7 @@ import type {
   ExitPolicyView,
   PolicyChange,
   PolicyFile,
+  RefusedRule,
   Rule,
 } from './contract.ts';
 import { PLACEHOLDER } from './records.ts';
@@ -14,6 +15,7 @@ export const POLICY_FILE = '/etc/slicc/secrets-policy.toml';
 export const FILES: readonly PolicyFile[] = [CONFIG_FILE, POLICY_FILE];
 
 export interface Policy {
+  refused(): RefusedRule[];
   placeholder(name: string): string | null;
   rules(name: string): Rule[];
   exec(name: string): ExecMode;
@@ -224,13 +226,23 @@ export function diffExtra(before: ExtraPolicy | null, after: ExtraPolicy): Polic
   return changes;
 }
 
-export function build(accepted: Accepted): Policy {
+export type Refuse = (rule: Rule) => boolean;
+
+export function build(accepted: Accepted, refuse: Refuse = () => false): Policy {
   const config = accepted.config?.parsed ?? { secrets: {}, rules: [] };
   const extra = accepted.extra?.parsed ?? { exec: {}, exits: {}, limits: LIMITS };
+  const kept = config.rules.filter((entry) => !refuse(entry.rule));
+  const refused = config.rules
+    .filter((entry) => refuse(entry.rule))
+    .map(({ secret, rule }) => ({
+      secret,
+      rule,
+      reason: `${secret}: ${rule.domain} is a model or MCP endpoint; the vault never injects there`,
+    }));
   return {
+    refused: () => refused,
     placeholder: (name) => (Object.hasOwn(config.secrets, name) ? config.secrets[name] : null),
-    rules: (name) =>
-      config.rules.filter((entry) => entry.secret === name).map((entry) => entry.rule),
+    rules: (name) => kept.filter((entry) => entry.secret === name).map((entry) => entry.rule),
     exec: (name) => (Object.hasOwn(extra.exec, name) ? extra.exec[name].mode : false),
     argv: (name) => (Object.hasOwn(extra.exec, name) ? (extra.exec[name].argv ?? null) : null),
     exits: (name) => (Object.hasOwn(extra.exits, name) ? extra.exits[name] : null),

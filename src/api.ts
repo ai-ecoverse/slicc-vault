@@ -1,3 +1,4 @@
+import { AgentPort } from './agent.ts';
 import type { Part } from './channel.ts';
 import { embedded } from './config.ts';
 import type {
@@ -13,6 +14,7 @@ import type {
 } from './contract.ts';
 import { all, transact } from './db.ts';
 import { Refused, refusal } from './errors.ts';
+import { forward } from './forward.ts';
 import {
   checkName,
   checkValue,
@@ -36,6 +38,7 @@ export const AGENT_OPS = new Set([
   'redact',
   'redactStream',
   'push',
+  'idle',
   'end',
   'drop',
   'model',
@@ -56,6 +59,7 @@ interface Session {
   port: MessagePort;
   last: string;
   queue: Promise<void>;
+  agent?: AgentPort;
 }
 
 type StoredAudit = AuditEntry & { ns: string };
@@ -85,7 +89,13 @@ export async function list(vault: Vault, ns: string): Promise<VaultList> {
     .sort((a, b) => a.name.localeCompare(b.name) || a.kind.localeCompare(b.kind))
     .map((record) => view(record, policy, now));
   const { audit: entries, more } = await audit(vault, ns);
-  return { secrets, refused: [], audit: entries, auditMore: more, exits: policy.view() };
+  return {
+    secrets,
+    refused: policy.refused(),
+    audit: entries,
+    auditMore: more,
+    exits: policy.view(),
+  };
 }
 
 async function live(vault: Vault, ns: string): Promise<string[]> {
@@ -185,8 +195,15 @@ async function cancel(vault: Vault, ns: string, request: Fields): Promise<Fields
   return { state: settled.state };
 }
 
-export async function answer(vault: Vault, ns: string, request: Fields): Promise<Fields> {
+export async function answer(
+  vault: Vault,
+  ns: string,
+  request: Fields,
+  port?: MessagePort
+): Promise<Fields> {
   switch (request.op) {
+    case 'forward':
+      return forward(vault, ns, request, port);
     case 'sealed':
       return { reply: await sealed(vault.context(ns), request.req, request.stamp) };
     case 'status':
@@ -212,8 +229,8 @@ export async function answer(vault: Vault, ns: string, request: Fields): Promise
       vault.keyring.lock();
       return {};
     case 'policy': {
-      const { result, policy, changed } = await apply(vault.db, ns, request.files, vault.now());
-      vault.setPolicy(ns, policy);
+      const { result, changed } = await apply(vault.db, ns, request.files, vault.now());
+      await vault.loadPolicy(ns);
       if (changed) await vault.changed(ns, ['secrets', 'exits', 'audit']);
       return { ...result };
     }
@@ -256,9 +273,17 @@ export class Server {
       port.postMessage({ v: 1, op: 'refused', error: { code: 'EINVAL', message } });
       return false;
     }
-    const session: Session = { ns: event.origin, role, port, last: '', queue: Promise.resolve() };
+    const agent = role === 'agent' ? new AgentPort(this.vault, event.origin) : undefined;
+    const session: Session = {
+      ns: event.origin,
+      role,
+      port,
+      last: '',
+      queue: Promise.resolve(),
+      ...(agent ? { agent } : {}),
+    };
     this.sessions.add(session);
-    port.onmessage = (message) => void this.handle(session, message.data);
+    port.onmessage = (message) => void this.handle(session, message.data, message.ports);
     port.start();
     session.queue = this.welcome(session);
     return true;
@@ -266,23 +291,26 @@ export class Server {
 
   async welcome(session: Session): Promise<void> {
     await this.vault.loadPolicy(session.ns);
+    await this.vault.scrubbers.get(session.ns);
     const status = await this.vault.status(session.ns);
     session.port.postMessage({ v: 1, op: 'welcome', role: session.role, status });
   }
 
-  handle(session: Session, data: unknown): Promise<void> {
-    session.queue = session.queue.then(() => this.reply(session, data));
+  handle(session: Session, data: unknown, ports: readonly MessagePort[] = []): Promise<void> {
+    session.queue = session.queue.then(() => this.reply(session, data, ports));
     return session.queue;
   }
 
-  async reply(session: Session, data: unknown): Promise<void> {
+  async reply(session: Session, data: unknown, ports: readonly MessagePort[] = []): Promise<void> {
     const request = (data ?? {}) as Fields;
     const id = typeof request.id === 'number' ? request.id : -1;
     let reply: Reply;
     try {
       if (request.v !== 1) throw new Refused('EINVAL', 'this vault speaks protocol 1');
       forRole(session.role, request.op);
-      const fields = await answer(this.vault, session.ns, request);
+      const fields = session.agent
+        ? await session.agent.answer(request)
+        : await answer(this.vault, session.ns, request, ports[0]);
       reply = { v: 1, id, op: request.op, ...fields } as Reply;
     } catch (error) {
       reply = { v: 1, id, error: refusal(error) };
@@ -298,6 +326,7 @@ export class Server {
 
   async changed(ns: string, parts: Part[]): Promise<void> {
     if (![...this.sessions].some((session) => session.ns === ns)) return;
+    await this.vault.scrubbers.get(ns);
     const shown = parts.filter((part) => part !== 'requests') as ('secrets' | 'audit' | 'exits')[];
     const [current, scrub, status] = await Promise.all([
       live(this.vault, ns),
