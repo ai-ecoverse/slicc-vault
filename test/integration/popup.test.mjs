@@ -136,11 +136,19 @@ test('the page seals leases and tokens, and removes and restores secrets', async
     ]
   );
   assert.deepEqual(list.refused, []);
+  const noKind = await page.evaluate(() =>
+    window.harness.call('remove', { name: 'ADOBE_REFRESH' })
+  );
+  assert.equal(noKind.error.code, 'ENOENT');
+  const grantGone = await page.evaluate(() =>
+    window.harness.call('remove', { name: 'ADOBE_REFRESH', kind: 'grant' })
+  );
+  assert.equal(grantGone.state, 'removed');
   assert.equal(list.secrets[1].exits, undefined);
   const audit = await page.evaluate(async () => window.harness.call('audit', { limit: 2 }));
   assert.deepEqual(
     audit.audit.map((entry) => entry.type),
-    ['restore', 'remove']
+    ['remove', 'restore']
   );
   assert.equal(audit.more, true);
   const older = await page.evaluate(
@@ -149,10 +157,10 @@ test('the page seals leases and tokens, and removes and restores secrets', async
   );
   assert.deepEqual(
     older.audit.map((entry) => entry.type),
-    ['seal', 'seal']
+    ['remove', 'seal', 'seal']
   );
   const scrub = await page.evaluate(async () => (await window.harness.call('placeholders')).scrub);
-  assert.deepEqual(scrub, { needed: true, version: 4, ready: true });
+  assert.deepEqual(scrub, { needed: true, version: 5, ready: true });
 });
 
 test('a popup without a hand-off from a vault button does nothing', async (t) => {

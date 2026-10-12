@@ -2,7 +2,7 @@ import { hex, random } from './bytes.ts';
 import type { RecordKind, RecordSource, RecordState, SecretView } from './contract.ts';
 import { all, request, transact } from './db.ts';
 import { Refused } from './errors.ts';
-import { encrypt, type Sealed } from './keys.ts';
+import { type Dek, encrypt, type Keys, type Sealed } from './keys.ts';
 import type { Policy } from './policy.ts';
 
 export const NAME = /^[A-Za-z_][A-Za-z0-9_]*$/;
@@ -124,9 +124,13 @@ function guard(existing: VaultRecord | undefined, input: SealInput): void {
   );
 }
 
-export async function seal(db: IDBDatabase, dek: CryptoKey, input: SealInput): Promise<Sealing> {
-  const sealed = await encrypt(dek, input.value, aad(input.ns, input.kind, input.name));
+export async function seal(db: IDBDatabase, dek: Dek, input: SealInput): Promise<Sealing> {
+  const sealed = await encrypt(dek.key, input.value, aad(input.ns, input.kind, input.name));
   return transact(db, ['records', 'audit', 'meta'], 'readwrite', async (tx) => {
+    const keys = (await request(tx.objectStore('meta').get('keys'))) as Keys | undefined;
+    if ((keys?.id ?? '') !== dek.id) {
+      throw new Refused('EAGAIN', 'the vault was re-keyed meanwhile; try again');
+    }
     const store = tx.objectStore('records');
     const existing = (await request(store.get([input.ns, input.kind, input.name]))) as
       | VaultRecord
@@ -201,14 +205,16 @@ export function records(db: IDBDatabase, ns: string): Promise<VaultRecord[]> {
 async function mark(
   db: IDBDatabase,
   ns: string,
+  kind: RecordKind,
   name: string,
   now: number,
   removing: boolean
 ): Promise<VaultRecord> {
   return transact(db, ['records', 'audit', 'meta'], 'readwrite', async (tx) => {
     const store = tx.objectStore('records');
-    const record = (await request(store.get([ns, 'secret', name]))) as VaultRecord | undefined;
-    if (!record) throw new Refused('ENOENT', `no record named ${name}`);
+    const record = (await request(store.get([ns, kind, name]))) as VaultRecord | undefined;
+    const gone = record?.removedAt !== undefined && now - record.removedAt > RESTORABLE;
+    if (!record || gone) throw new Refused('ENOENT', `no record named ${name}`);
     if (removing) record.removedAt = now;
     else delete record.removedAt;
     await request(store.put(record));
@@ -228,18 +234,20 @@ export function remove(
   db: IDBDatabase,
   ns: string,
   name: string,
-  now: number
+  now: number,
+  kind: RecordKind = 'secret'
 ): Promise<VaultRecord> {
-  return mark(db, ns, name, now, true);
+  return mark(db, ns, kind, name, now, true);
 }
 
 export function restore(
   db: IDBDatabase,
   ns: string,
   name: string,
-  now: number
+  now: number,
+  kind: RecordKind = 'secret'
 ): Promise<VaultRecord> {
-  return mark(db, ns, name, now, false);
+  return mark(db, ns, kind, name, now, false);
 }
 
 export function purge(db: IDBDatabase, now: number): Promise<number> {

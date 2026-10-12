@@ -15,8 +15,20 @@ test('a passphrase lock locks injection-side ops and unlocks from the popup', as
   const first = await page.evaluate(seal, 'BEFORE_LOCK', 'value-before-lock');
   const manage = await openPopup(cdp, page, { kind: 'protect' }, 'Vault lock');
   await press(manage, 'Protect with a passphrase');
+  const protect = () =>
+    [...document.querySelectorAll('button')].find((b) => b.textContent === 'Protect').disabled;
+  await typeInto(manage, '#passphrase', 'too short');
+  assert.equal(
+    await manage.evaluate(() => document.querySelector('#strength').textContent),
+    'At least 12 characters: 3 more.'
+  );
+  assert.equal(await manage.evaluate(protect), true);
+  await manage.evaluate(() => {
+    document.querySelector('#passphrase').value = '';
+  });
   await typeInto(manage, '#passphrase', 'correct horse battery');
   await typeInto(manage, '#confirm', 'correct horse battery');
+  assert.equal(await manage.evaluate(protect), false);
   await press(manage, 'Protect');
   await manage.until(() => document.body.textContent.includes('Protected with a passphrase.'));
   await page.until(async () => (await window.harness.call('status')).status.lock === 'passphrase');
@@ -35,18 +47,21 @@ test('a passphrase lock locks injection-side ops and unlocks from the popup', as
   await page.until(() => document.title === 'ready');
   const welcome = await page.evaluate(() => window.harness.connect());
   assert.equal(welcome.status.locked, true);
+  assert.deepEqual(welcome.status.scrub, { needed: true, version: 2, ready: false });
   const unlock = await openPopup(cdp, page, 'auto', 'Unlock vault');
   await typeInto(unlock, '#passphrase', 'wrong passphrase');
   await press(unlock, 'Unlock');
-  await unlock.until(() =>
-    document.querySelector('.error').textContent.includes('does not unlock')
+  await unlock.until(
+    () =>
+      document.querySelector('.error').textContent === "That passphrase doesn't unlock this vault."
   );
-  await unlock.evaluate(() => {
-    document.querySelector('#passphrase').value = '';
-  });
+  assert.equal(await unlock.evaluate(() => document.querySelector('#passphrase').value), '');
+  assert.equal(await unlock.evaluate(() => document.activeElement?.id), 'passphrase');
   await typeInto(unlock, '#passphrase', 'correct horse battery');
   await press(unlock, 'Unlock');
   await page.until(async () => (await window.harness.call('status')).status.locked === false);
+  const ready = await page.evaluate(async () => (await window.harness.call('status')).status.scrub);
+  assert.equal(ready.ready, true);
   const after = await page.evaluate(seal, 'AFTER_UNLOCK', 'value-after-unlock');
   assert.match(after.placeholder, /^fnox_proxy_/);
   const seen = await page.evaluate(() => JSON.stringify(window.harness.seen));
@@ -94,6 +109,15 @@ test('a passkey with PRF protects the vault and unlocks it', async (t) => {
   );
   await press(manage, 'Unlock with passkey');
   await page.until(async () => (await window.harness.call('status')).status.locked === false);
+  await manage.until(() => document.body.textContent.includes('Protected with a passkey.'));
+  await press(manage, 'Remove protection');
+  await manage.until(() => document.querySelector('main h1').textContent === 'Remove protection?');
+  assert.match(
+    await manage.evaluate(() => document.querySelector('main').textContent),
+    /unlock by itself on this device/
+  );
+  await press(manage, 'Remove protection');
+  await page.until(async () => (await window.harness.call('status')).status.lock === 'auto');
   const sealed = await page.evaluate(seal, 'WITH_PASSKEY', 'value-with-passkey');
   assert.match(sealed.placeholder, /^fnox_proxy_/);
 });

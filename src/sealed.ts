@@ -57,7 +57,7 @@ const sealOp: Handler = async (ctx, req, stamp) => {
   const name = checkName(req.name);
   const value = checkValue(req.value);
   const now = ctx.now();
-  const { record: sealed } = await seal(ctx.db, ctx.keyring.require(), {
+  const { record: sealed } = await seal(ctx.db, ctx.keyring.use(), {
     ns: ctx.ns,
     kind: 'secret',
     name,

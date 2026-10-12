@@ -1,13 +1,14 @@
 import { random } from './bytes.ts';
 import type { PopupIntent, PopupState } from './contract.ts';
 import { button, field, h, prefersDark, themed } from './dom.ts';
-import { Refused, refusal } from './errors.ts';
+import { refusal } from './errors.ts';
 import { claim, drop, type Handoff } from './intents.ts';
 import { fromPassphrase, fromPrf, ITERATIONS, type Kek } from './keys.ts';
+import { WRONG_KEY } from './lock.ts';
 import { enroll, evaluate } from './passkey.ts';
 import { start, type Vault } from './vault.ts';
 
-export const MIN_PASSPHRASE = 8;
+export const MIN_PASSPHRASE = 12;
 const CLAIM_TRIES = 20;
 
 function sleep(ms: number): Promise<void> {
@@ -18,8 +19,17 @@ function errorLine(): HTMLParagraphElement {
   return h('p', { class: 'error', role: 'alert' });
 }
 
-function show(line: HTMLElement, error: unknown): void {
-  line.textContent = refusal(error).message;
+function show(line: HTMLElement, error: unknown, wrong?: string): void {
+  const { message } = refusal(error);
+  line.textContent = wrong && message === WRONG_KEY ? wrong : message;
+}
+
+export function strength(first: string, second: string): string {
+  if (first.length < MIN_PASSPHRASE) {
+    return `At least ${MIN_PASSPHRASE} characters: ${MIN_PASSPHRASE - first.length} more.`;
+  }
+  if (second !== first) return 'Type the same passphrase again.';
+  return '';
 }
 
 export class Popup {
@@ -127,7 +137,7 @@ export class Popup {
                   await keyring.unlock(await fromPrf(output, kek.salt));
                   await after();
                 } catch (caught) {
-                  show(error, caught);
+                  show(error, caught, "That passkey doesn't unlock this vault.");
                 }
               })();
             },
@@ -149,7 +159,9 @@ export class Popup {
         pass.input.value = '';
         await after();
       } catch (caught) {
-        show(error, caught);
+        show(error, caught, "That passphrase doesn't unlock this vault.");
+        pass.input.value = '';
+        pass.input.focus();
       }
     };
     pass.input.addEventListener('keydown', (event) => {
@@ -232,12 +244,7 @@ export class Popup {
           'primary',
           'outline'
         ),
-        button(
-          'Remove protection',
-          () => void run(() => keyring.unprotect())(),
-          'secondary',
-          'outline'
-        )
+        button('Remove protection', () => this.confirmView(), 'secondary', 'outline')
       )
     );
   }
@@ -252,6 +259,29 @@ export class Popup {
     });
   }
 
+  confirmView(): void {
+    const error = errorLine();
+    const remove = async () => {
+      try {
+        await this.vault.keyring.unprotect();
+        this.protectView();
+      } catch (caught) {
+        show(error, caught);
+      }
+    };
+    this.frame(
+      'Remove protection?',
+      h('p', {}, 'The vault will unlock by itself on this device.'),
+      h(
+        'div',
+        { class: 'actions' },
+        button('Cancel', () => this.protectView(), 'secondary', 'outline'),
+        button('Remove protection', () => void remove(), 'negative')
+      ),
+      error
+    );
+  }
+
   passphraseView(): void {
     const error = errorLine();
     const first = field('passphrase', 'New passphrase', {
@@ -262,20 +292,23 @@ export class Popup {
       type: 'password',
       autocomplete: 'new-password',
     });
+    const hint = h('p', { class: 'muted', id: 'strength', 'aria-live': 'polite' });
+    const submit = button('Protect', () => void save(), 'accent');
+    const check = () => {
+      hint.textContent = strength(first.input.value, second.input.value);
+      submit.disabled = hint.textContent !== '';
+    };
+    first.input.setAttribute('aria-describedby', 'strength');
+    first.input.addEventListener('input', check);
+    second.input.addEventListener('input', check);
     const save = async () => {
       try {
-        if (first.input.value.length < MIN_PASSPHRASE) {
-          throw new Refused('EINVAL', `use at least ${MIN_PASSPHRASE} characters`);
-        }
-        if (first.input.value !== second.input.value) {
-          throw new Refused('EINVAL', 'the passphrases differ');
-        }
         const salt = random(16);
         const kek = await fromPassphrase(first.input.value, salt);
         await this.vault.keyring.protect(kek, { kind: 'passphrase', salt, iterations: ITERATIONS });
         first.input.value = '';
         second.input.value = '';
-        await this.protectView();
+        this.protectView();
       } catch (caught) {
         show(error, caught);
       }
@@ -289,14 +322,16 @@ export class Popup {
       ),
       first.field,
       second.field,
+      hint,
       h(
         'div',
         { class: 'actions' },
-        button('Cancel', () => void this.protectView(), 'secondary', 'outline'),
-        button('Protect', () => void save(), 'accent')
+        button('Cancel', () => this.protectView(), 'secondary', 'outline'),
+        submit
       ),
       error
     );
+    check();
     first.input.focus();
   }
 }

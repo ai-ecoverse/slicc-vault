@@ -49,6 +49,7 @@ Everything lives in the vault origin's IndexedDB, database `slicc-vault`, versio
 - While protected, a document starts locked and asks the other open vault documents (over the origin's `BroadcastChannel` `slicc-vault`) for the unwrapped key. Unlocking in the popup unwraps the key as non-extractable and hands it to every open vault document the same way.
 - `Lock now` drops the key from every document. Closing every vault document has the same effect.
 - **Protecting** makes a new data key, re-encrypts every record under it, and stores it wrapped, in one transaction. If a record changed meanwhile, protecting fails with `EAGAIN` and changes nothing. **Removing protection** stores the current key as non-extractable again.
+- Every data key has an id, stored with it. A seal checks that id in the same transaction that writes the record, so a value encrypted under a key that was replaced meanwhile is refused with `EAGAIN` rather than stored unreadable.
 - While locked, `seal` answers `EACCES` with a message starting `vault is locked`. Ops that need no value (`placeholder`, `list`, `status`, ...) still work.
 
 ## Records
@@ -102,7 +103,7 @@ iframe.contentWindow.postMessage({ type: 'slicc-vault', v: 1, op: 'hello', role:
 | `audit` | `before?` (a `seq`), `limit?` (1–1000, default 100) | `{ audit, more, next? }`, newest first; pass `next` as `before` for the next page |
 | `put` | `name`, `value`, `request?` | `{ name, placeholder, state }`. A value typed in Settings, with source `settings`; on an existing name it's a rotation that keeps the placeholder. With `request`, it answers that pending value request (which must ask for `name`), so its `/dev/sealed` `status` becomes `done` |
 | `seal` | `name`, `value`, `source`, `kind?` (default `secret`), `expiresAt?`, `refresh?` | `{ name, placeholder, state }`. bios's, for J1 leases and sign-in tokens |
-| `remove`, `restore` | `name` | `{ name, placeholder, state }` |
+| `remove`, `restore` | `name`, `kind?` (default `secret`) | `{ name, placeholder, state }`. A record removed more than 30 days ago can't be restored (`ENOENT`) |
 | `cancel` | `request` | `{ state }`; the request's `/dev/sealed` `status` becomes `cancelled` |
 | `lock` | — | `{}`; drops the key everywhere when the lock is on |
 | `import`, `export`, anything else | | `ENOTSUP` |
@@ -177,9 +178,12 @@ The button writes its intent to `intents` under a random 128-bit nonce and opens
 | intent | what the popup does |
 |---|---|
 | `unlock` | unlocks with the passkey or passphrase, then closes |
-| `protect` | while unlocked: **Protect with a passkey** (WebAuthn PRF), **Protect with a passphrase** (at least 8 characters, typed twice), or, once protected, **Lock now** and **Remove protection** |
+| `protect` | while unlocked: **Protect with a passkey** (WebAuthn PRF), **Protect with a passphrase**, or, once protected, **Lock now** and **Remove protection** |
 
-A locked vault asks to be unlocked first, whatever the intent.
+- A locked vault asks to be unlocked first, whatever the intent.
+- A wrong passphrase or passkey says so ("That passphrase doesn't unlock this vault."), and a wrong passphrase is cleared from the field.
+- A new passphrase needs at least 12 characters, typed twice. The popup says what's missing as you type, and **Protect** stays disabled until both fields pass.
+- **Remove protection** asks first: "Remove protection? The vault will unlock by itself on this device." 
 
 ## Types for bios and spectrum
 
