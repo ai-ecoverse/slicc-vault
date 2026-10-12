@@ -154,7 +154,14 @@ export class Keyring {
     this.kek = keys.mode === 'auto' ? null : keys.kek;
   }
 
-  async receive(message: KeyMessage): Promise<void> {
+  private inbox: Promise<void> = Promise.resolve();
+
+  receive(message: KeyMessage): Promise<void> {
+    this.inbox = this.inbox.then(() => this.handle(message));
+    return this.inbox;
+  }
+
+  private async handle(message: KeyMessage): Promise<void> {
     if (message.type === 'keys') return this.load(message.key ?? null);
     if (message.type === 'lock' && this.mode !== 'auto') {
       this.key = null;
