@@ -1,0 +1,4 @@
+{
+  "extends": "@ai-ecoverse/slicc-shared-web/tsconfig.json",
+  "include": ["src/**/*.ts"]
+}
