@@ -30,6 +30,7 @@ export interface Ticket {
   argv: string[];
   cwd: string;
   pid: number;
+  interpreter: string | null;
   expiresAt: number;
 }
 
@@ -103,6 +104,22 @@ export async function argvSha256(argv: string[]): Promise<string> {
   return hex(new Uint8Array(await crypto.subtle.digest('SHA-256', bytes)));
 }
 
+export function allowedChain(
+  policy: Policy,
+  name: string,
+  path: string,
+  chain: string[]
+): string | null {
+  const mode = policy.exec(name);
+  if (mode === 'shell') return null;
+  const programs = [path, ...chain];
+  if (mode === 'argv') {
+    const named = new Set((policy.argv(name) as string[][]).map((prefix) => prefix[0]));
+    return programs.find((program) => refusedProgram(program) && !named.has(program)) ?? null;
+  }
+  return programs.find(refusedProgram) ?? null;
+}
+
 function real(policy: Policy, name: string, ask: Asked): boolean {
   const mode = policy.exec(name);
   if (mode === 'shell') return true;
@@ -154,6 +171,10 @@ function shown(argv: string[], redact: (text: string) => string): string {
   return text.length > ARGV_SHOWN ? `${text.slice(0, ARGV_SHOWN - 1)}…` : text;
 }
 
+function expired(record: VaultRecord, now: number): boolean {
+  return record.expiresAt !== undefined && record.expiresAt <= now;
+}
+
 export class Exec {
   readonly vault: Vault;
   readonly tickets = new Map<string, Ticket>();
@@ -176,6 +197,8 @@ export class Exec {
     for (const name of names) {
       const record = held.get(name);
       if (!record) throw new Refused('ENOENT', `no record named ${name}`);
+      if (expired(record, this.vault.now()))
+        throw new Refused('EACCES', `${name} expired; refreshing`);
       answer[name] = !removed(record) && real(policy, name, ask);
     }
     const now = this.vault.now();
@@ -217,6 +240,7 @@ export class Exec {
       argv: ask.argv,
       cwd: ask.cwd,
       pid: stamp.pid,
+      interpreter: ask.interpreter,
       expiresAt,
     });
     if (revealed.length) await this.vault.changed(ns, ['audit']);
@@ -239,6 +263,19 @@ export class Exec {
     if (!argv || argv.length !== found.argv.length || argv.some((a, i) => a !== found.argv[i]))
       fail('another argv');
     if (req.cwd !== found.cwd) fail('another cwd');
+    const chain = req.interpreters;
+    if (!Array.isArray(chain) || !chain.every((p) => typeof p === 'string' && p.startsWith('/'))) {
+      fail('the kernel sent no interpreter chain');
+    }
+    const interpreters = chain as string[];
+    if (found.interpreter !== (interpreters[0] ?? null)) {
+      fail("fnox's interpreter isn't the one the kernel resolved");
+    }
+    const policy = this.vault.policy(ns);
+    for (const name of found.names) {
+      const blocked = allowedChain(policy, name, found.path, interpreters);
+      if (blocked) fail(`${name} isn't revealed to ${blocked}`);
+    }
     const key = this.vault.keyring.key;
     if (!key) throw new Refused('EACCES', 'vault is locked: unlock it in the vault window');
     const held = await records(this.vault.db, ns);
@@ -248,6 +285,7 @@ export class Exec {
         | VaultRecord
         | undefined;
       if (!record || removed(record)) continue;
+      if (expired(record, this.vault.now())) fail(`${name} expired`);
       values[name] = await decrypt(key, record.sealed, aad(record.ns, record.kind, record.name));
     }
     await this.mark(ns, found);
