@@ -6,6 +6,7 @@ import { Keyring } from './lock.ts';
 import { EMPTY, type Policy } from './policy.ts';
 import { backupState, records, reminder, scrubVersion } from './records.ts';
 import { pending, waiting } from './requests.ts';
+import { loadPolicy } from './rules.ts';
 import type { Context } from './sealed.ts';
 
 export type Listener = (ns: string, parts: Part[]) => void | Promise<void>;
@@ -16,6 +17,8 @@ export interface Vault {
   keyring: Keyring;
   bus: Channel;
   policy(ns: string): Policy;
+  loadPolicy(ns: string): Promise<Policy>;
+  setPolicy(ns: string, policy: Policy): void;
   now(): number;
   changed(ns: string, parts: Part[]): Promise<void>;
   onChange(listener: Listener): () => void;
@@ -37,6 +40,7 @@ export async function start(options: Options = {}): Promise<Vault> {
   const keyring = new Keyring(db, bus);
   const now = options.now ?? Date.now;
   const listeners = new Set<Listener>();
+  const policies = new Map<string, Policy>();
   const notify = async (ns: string, parts: Part[]) => {
     await Promise.all([...listeners].map((listener) => listener(ns, parts)));
   };
@@ -46,7 +50,15 @@ export async function start(options: Options = {}): Promise<Vault> {
     keyring,
     bus,
     now,
-    policy: () => EMPTY,
+    policy: (ns) => policies.get(ns) ?? EMPTY,
+    async loadPolicy(ns) {
+      const loaded = await loadPolicy(db, ns);
+      policies.set(ns, loaded);
+      return loaded;
+    },
+    setPolicy(ns, policy) {
+      policies.set(ns, policy);
+    },
     async changed(ns, parts) {
       bus.post({ type: 'changed', ns, parts });
       await notify(ns, parts);
@@ -87,9 +99,13 @@ export async function start(options: Options = {}): Promise<Vault> {
     },
   };
   bus.listen((message: Message) => {
-    if (message.type === 'changed') void notify(message.ns, message.parts);
+    if (message.type === 'changed') void reload(message.ns, message.parts);
     else if (message.type !== 'popup') void keyring.receive(message);
   });
+  const reload = async (ns: string, parts: Part[]) => {
+    if (parts.includes('exits') && policies.has(ns)) await vault.loadPolicy(ns);
+    await notify(ns, parts);
+  };
   await keyring.load();
   return vault;
 }

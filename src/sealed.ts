@@ -2,7 +2,7 @@ import type { SealedReply, Stamp } from './contract.ts';
 import { Refused, refusal } from './errors.ts';
 import type { Keyring } from './lock.ts';
 import type { Policy } from './policy.ts';
-import { checkName, checkValue, find, records, removed, seal, state } from './records.ts';
+import { checkName, checkValue, find, records, removed, rulesFor, seal, state } from './records.ts';
 import { create, current, get, settle } from './requests.ts';
 
 export const MAX_REQUEST = 64 * 1024;
@@ -87,7 +87,7 @@ const listOp: Handler = async (ctx) => {
       placeholder: entry.placeholder,
       state: state(entry, policy, now),
       exec: policy.exec(entry.name),
-      rules: policy.rules(entry.name),
+      rules: rulesFor(entry, policy),
       ...(entry.expiresAt === undefined ? {} : { expiresAt: entry.expiresAt }),
     }));
   return { secrets };

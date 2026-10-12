@@ -182,6 +182,32 @@ export interface ExitPolicyView {
   restricted: { name: string; exits: ExitName[] }[];
 }
 
+export interface Attestation {
+  path: string;
+  uid: number;
+  gid: number;
+  mode: number;
+  ino: number;
+  mtimeMs: EpochMs;
+  sha256: string;
+  users: string;
+  onRootFs: boolean;
+  parents: { path: string; uid: number; mode: number }[];
+}
+
+export interface PolicyUpload {
+  path: PolicyFile;
+  bytes: Uint8Array | string;
+  attestation: Attestation;
+}
+
+export interface PolicyResult {
+  accepted: boolean;
+  files: { path: string; sha256: string | null; accepted: boolean; warnings: string[] }[];
+  rules: (Rule & { secret: string })[];
+  warnings: string[];
+}
+
 export interface VaultList {
   secrets: SecretView[];
   refused: RefusedRule[];
@@ -251,7 +277,8 @@ export type Op =
   | { op: 'import'; kind: ImportKind; bytes: Uint8Array; password?: string; pick?: string[] }
   | { op: 'export'; passphrase: string }
   | { op: 'lock' }
-  | { op: 'dismissBackupReminder' };
+  | { op: 'dismissBackupReminder' }
+  | { op: 'policy'; files: PolicyUpload[] };
 
 export type OpReply =
   | { op: 'sealed'; reply: SealedReply }
@@ -264,7 +291,8 @@ export type OpReply =
   | ({ op: 'import' } & ImportResult)
   | { op: 'export'; bundle: Uint8Array }
   | { op: 'lock' }
-  | { op: 'dismissBackupReminder'; backupReminder: BackupReminder };
+  | { op: 'dismissBackupReminder'; backupReminder: BackupReminder }
+  | ({ op: 'policy' } & PolicyResult);
 
 export type Request = Op & { v: Protocol; id: number };
 

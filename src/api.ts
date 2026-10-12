@@ -27,6 +27,7 @@ import {
   view,
 } from './records.ts';
 import { current, get, settle } from './requests.ts';
+import { apply } from './rules.ts';
 import { sealed } from './sealed.ts';
 import type { Vault } from './vault.ts';
 
@@ -210,6 +211,12 @@ export async function answer(vault: Vault, ns: string, request: Fields): Promise
     case 'lock':
       vault.keyring.lock();
       return {};
+    case 'policy': {
+      const { result, policy, changed } = await apply(vault.db, ns, request.files, vault.now());
+      vault.setPolicy(ns, policy);
+      if (changed) await vault.changed(ns, ['secrets', 'exits', 'audit']);
+      return { ...result };
+    }
     case 'dismissBackupReminder': {
       await dismissBackup(vault.db, ns);
       await vault.changed(ns, []);
@@ -253,11 +260,12 @@ export class Server {
     this.sessions.add(session);
     port.onmessage = (message) => void this.handle(session, message.data);
     port.start();
-    void this.welcome(session);
+    session.queue = this.welcome(session);
     return true;
   }
 
   async welcome(session: Session): Promise<void> {
+    await this.vault.loadPolicy(session.ns);
     const status = await this.vault.status(session.ns);
     session.port.postMessage({ v: 1, op: 'welcome', role: session.role, status });
   }

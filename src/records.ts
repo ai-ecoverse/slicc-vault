@@ -4,6 +4,7 @@ import type {
   RecordKind,
   RecordSource,
   RecordState,
+  Rule,
   SecretView,
 } from './contract.ts';
 import { all, request, transact } from './db.ts';
@@ -81,9 +82,14 @@ export function removed(record: VaultRecord): boolean {
   return record.removedAt !== undefined;
 }
 
+export function rulesFor(record: VaultRecord, policy: Policy): Rule[] {
+  if (record.kind !== 'secret' || policy.placeholder(record.name) !== record.placeholder) return [];
+  return policy.rules(record.name);
+}
+
 export function state(record: VaultRecord, policy: Policy, now: number): RecordState {
   if (removed(record)) return 'removed';
-  return policy.rules(record.name).length > 0 ? 'active' : 'inert';
+  return rulesFor(record, policy).length > 0 ? 'active' : 'inert';
 }
 
 export function device(source: RecordSource): string | null {
@@ -92,9 +98,10 @@ export function device(source: RecordSource): string | null {
 }
 
 export function view(record: VaultRecord, policy: Policy, now: number): SecretView {
-  const rules = policy.rules(record.name);
-  const exits = policy.exits(record.name);
-  const argv = policy.argv(record.name);
+  const secret = record.kind === 'secret';
+  const rules = rulesFor(record, policy);
+  const exits = secret ? policy.exits(record.name) : null;
+  const argv = secret ? policy.argv(record.name) : null;
   return {
     name: record.name,
     kind: record.kind,
@@ -105,7 +112,7 @@ export function view(record: VaultRecord, policy: Policy, now: number): SecretVi
     domains: [...new Set(rules.map((rule) => rule.domain))],
     rules,
     ...(exits ? { exits } : {}),
-    exec: policy.exec(record.name),
+    exec: secret ? policy.exec(record.name) : false,
     ...(argv ? { execArgv: argv } : {}),
     createdAt: record.createdAt,
     ...(record.usedAt === undefined ? {} : { usedAt: record.usedAt }),
