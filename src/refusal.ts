@@ -81,13 +81,17 @@ export function patterns(registered: Registered): Endpoint[] {
   return [...BUILT_IN_ENDPOINTS, ...[...model, ...mcp].filter((e): e is Endpoint => e !== null)];
 }
 
+export function hostOf(url: URL): string {
+  return url.hostname.toLowerCase().replace(/\.+$/, '');
+}
+
 export function refusedUrl(registered: Registered, url: URL): boolean {
-  const host = url.hostname.toLowerCase();
+  const host = hostOf(url);
   return patterns(registered).some((pattern) => covers(pattern, host, url.pathname));
 }
 
 export function mcpServer(registered: Registered, url: URL): McpServer | null {
-  const host = url.hostname.toLowerCase();
+  const host = hostOf(url);
   for (const server of registered.mcp) {
     const pattern = endpoint(server.url, true);
     const sameScheme = URL.parse(server.url)?.protocol === url.protocol;
