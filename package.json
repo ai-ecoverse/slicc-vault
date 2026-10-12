@@ -46,7 +46,7 @@
     "release": "semantic-release"
   },
   "devDependencies": {
-    "@ai-ecoverse/slicc-shared-web": "1.13.0",
+    "@ai-ecoverse/slicc-shared-web": "1.13.1",
     "@biomejs/biome": "2.5.15",
     "@happy-dom/global-registrator": "20.14.5",
     "@spectrum-css/button": "14.2.0",
