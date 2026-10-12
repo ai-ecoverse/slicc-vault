@@ -128,7 +128,7 @@ materialize_per_day = 200
 shell_per_day = 5000
 ```
 
-- `[exec]`: `true` is `exec: 'any'`, `{ argv = [[…]] }` is `'argv'` (each prefix an absolute program path), and `{ shell = true }` is `'shell'`. Anything else is a warning, and `exec` stays `false`. VAULT-1d acts on them.
+- `[exec]`: `true` is `exec: 'any'`, exactly `{ argv = [[…]] }` is `'argv'` (each prefix an absolute program path), and exactly `{ shell = true }` is `'shell'`. Anything else, a table with other or extra keys included, is a warning, and `exec` stays `false`. VAULT-1d acts on them.
 - `[exits]` is **optional**: a secret without a line may use every exit; a line restricts it to the exits listed (`page`, `proxy`, `tailscale`, `device:<name>`). Unknown names are dropped from the line with a warning, which leaves the line narrower, never wider.
 - `[limits]` overrides the defaults above with positive integers.
 
