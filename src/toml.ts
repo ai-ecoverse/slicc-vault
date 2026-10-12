@@ -202,14 +202,31 @@ class Parser {
     this.pos += token.length;
     if (token === 'true') return true;
     if (token === 'false') return false;
-    if (DATE.test(token)) return token + this.time();
-    if (TIME.test(token)) return token;
+    if (DATE.test(token)) return this.date(token + this.time());
+    if (TIME.test(token)) return this.clock(token);
     if (SPECIAL.test(token))
       return token.endsWith('nan') ? Number.NaN : Number(token.replace('inf', 'Infinity'));
     const radix = RADIX.exec(token);
     if (radix) return this.radix(token, radix[1], radix[2]);
     if (DECIMAL.test(token)) return Number(token.replace(/_/g, ''));
     return this.fail(`unsupported value ${token}`);
+  }
+
+  date(text: string): string {
+    const [, y, m, d] = /^(\d{4})-(\d{2})-(\d{2})/.exec(text) as RegExpExecArray;
+    const day = new Date(Date.UTC(Number(y), Number(m) - 1, Number(d)));
+    const valid = day.getUTCMonth() === Number(m) - 1 && day.getUTCDate() === Number(d);
+    if (!valid) this.fail(`bad date ${text}`);
+    const time = /[Tt ](\d{2}:\d{2}(:\d{2})?)/.exec(text);
+    if (time) this.clock(time[1]);
+    return text;
+  }
+
+  clock(text: string): string {
+    const [h, m, sec = '0'] = text.split(':');
+    if (Number(h) > 23 || Number(m) > 59 || Number.parseFloat(sec) >= 61)
+      this.fail(`bad time ${text}`);
+    return text;
   }
 
   time(): string {
