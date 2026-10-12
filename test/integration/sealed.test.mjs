@@ -162,7 +162,7 @@ test('framing and field errors answer with errno names', async (t) => {
     assert.equal(replies[key].error.code, 'EINVAL', key);
   }
   assert.equal(replies.missing.error.code, 'ENOENT');
-  assert.equal(replies.materialize.error.code, 'EACCES');
+  assert.equal(replies.materialize.error.code, 'ENOENT');
   const unknown = await page.evaluate(() => window.harness.call('reveal'));
   assert.equal(unknown.error.code, 'ENOTSUP');
 });

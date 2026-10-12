@@ -344,6 +344,14 @@ export type Op =
       owner: Stamp;
       exit: ExitName;
       rawTraits: RawTraits;
+    }
+  | {
+      op: 'materializeConsume';
+      ticket: string;
+      stamp: Stamp;
+      path: string;
+      argv: string[];
+      cwd: string;
     };
 
 export type AgentOp =
@@ -376,7 +384,12 @@ export type OpReply =
   | { op: 'lock' }
   | { op: 'dismissBackupReminder'; backupReminder: BackupReminder }
   | ({ op: 'policy' } & PolicyResult)
-  | ({ op: 'forward' } & ForwardResult);
+  | ({ op: 'forward' } & ForwardResult)
+  | {
+      op: 'materializeConsume';
+      values: Record<string, string>;
+      placeholders: Record<string, string>;
+    };
 
 export type Request = Op & { v: Protocol; id: number };
 

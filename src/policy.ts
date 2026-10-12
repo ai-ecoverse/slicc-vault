@@ -21,6 +21,8 @@ export interface Policy {
   exec(name: string): ExecMode;
   argv(name: string): string[][] | null;
   exits(name: string): ExitName[] | null;
+  limits(): Limits;
+  shells(): string[];
   view(): ExitPolicyView;
 }
 
@@ -246,6 +248,12 @@ export function build(accepted: Accepted, refuse: Refuse = () => false): Policy 
     exec: (name) => (Object.hasOwn(extra.exec, name) ? extra.exec[name].mode : false),
     argv: (name) => (Object.hasOwn(extra.exec, name) ? (extra.exec[name].argv ?? null) : null),
     exits: (name) => (Object.hasOwn(extra.exits, name) ? extra.exits[name] : null),
+    limits: () => extra.limits,
+    shells: () =>
+      Object.entries(extra.exec)
+        .filter(([, entry]) => entry.mode === 'shell')
+        .map(([name]) => name)
+        .sort(),
     view: () => ({
       file: POLICY_FILE,
       sha256: accepted.extra?.sha256 ?? null,

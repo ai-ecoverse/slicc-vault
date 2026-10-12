@@ -1,5 +1,6 @@
 import type { ExitName, SealedReply, Stamp } from './contract.ts';
 import { Refused, refusal } from './errors.ts';
+import type { Exec } from './exec.ts';
 import { prepare } from './inject.ts';
 import type { Keyring } from './lock.ts';
 import type { Policy } from './policy.ts';
@@ -14,6 +15,7 @@ export interface Context {
   db: IDBDatabase;
   ns: string;
   keyring: Keyring;
+  exec: Exec;
   policy(): Policy;
   now(): number;
   changed(): Promise<void>;
@@ -173,20 +175,7 @@ const cancelOp: Handler = async (ctx, req, stamp) => {
   return { state: settled.state };
 };
 
-const materializeOp: Handler = async (_ctx, req) => {
-  const names = req.names;
-  if (!Array.isArray(names) || names.length === 0) {
-    throw new Refused('EINVAL', 'names must be a non-empty list');
-  }
-  names.forEach(checkName);
-  if (!string(req, 'path').startsWith('/') || !string(req, 'cwd').startsWith('/')) {
-    throw new Refused('EINVAL', 'path and cwd must be absolute');
-  }
-  if (!Array.isArray(req.argv) || !req.argv.every((arg) => typeof arg === 'string')) {
-    throw new Refused('EINVAL', 'argv must be a list of strings');
-  }
-  throw new Refused('EACCES', 'materialize is not supported by this vault version');
-};
+const materializeOp: Handler = (ctx, req, stamp) => ctx.exec.materialize(ctx.ns, req, stamp);
 
 export const OPS: Record<string, Handler> = {
   seal: sealOp,
