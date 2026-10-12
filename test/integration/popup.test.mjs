@@ -28,6 +28,7 @@ test('a value request is answered with put from the page', async (t) => {
     [[pending.id, 'value', 'NPM_TOKEN', 'publish @acme/pkg', 1000]]
   );
   assert.deepEqual(status.scrub, { needed: false, version: 0, ready: true });
+  assert.deepEqual([status.exportedAt, status.backupReminder], [null, null]);
   const short = await page.evaluate(() =>
     window.harness.call('put', { name: 'NPM_TOKEN', value: 'short' })
   );
@@ -60,6 +61,15 @@ test('a value request is answered with put from the page', async (t) => {
     pending.id
   );
   assert.deepEqual(done, { v: 1, state: 'done', placeholder: put.placeholder, record: 'inert' });
+  const reminded = await page.evaluate(async () => (await window.harness.call('status')).status);
+  assert.deepEqual([reminded.exportedAt, reminded.backupReminder], [null, 'due']);
+  const dismissed = await page.evaluate(() => window.harness.call('dismissBackupReminder'));
+  assert.equal(dismissed.backupReminder, 'dismissed');
+  await page.until(() =>
+    window.harness.events.some(
+      (e) => e.event === 'status' && e.status.backupReminder === 'dismissed'
+    )
+  );
   const rotated = await page.evaluate(
     (value) => window.harness.call('put', { name: 'NPM_TOKEN', value: `${value}x` }),
     VALUE

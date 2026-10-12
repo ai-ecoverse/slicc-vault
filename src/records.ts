@@ -1,5 +1,11 @@
 import { hex, random } from './bytes.ts';
-import type { RecordKind, RecordSource, RecordState, SecretView } from './contract.ts';
+import type {
+  BackupReminder,
+  RecordKind,
+  RecordSource,
+  RecordState,
+  SecretView,
+} from './contract.ts';
 import { all, request, transact } from './db.ts';
 import { Refused } from './errors.ts';
 import { type Dek, encrypt, type Keys, type Sealed } from './keys.ts';
@@ -175,6 +181,35 @@ export function scrubVersion(db: IDBDatabase, ns: string): Promise<number> {
   return transact(db, ['meta'], 'readonly', async (tx) => {
     return ((await request(tx.objectStore('meta').get(`scrub:${ns}`))) as number | undefined) ?? 0;
   });
+}
+
+export interface Backup {
+  exportedAt: number | null;
+  dismissed: boolean;
+}
+
+export function backupState(db: IDBDatabase, ns: string): Promise<Backup> {
+  return transact(db, ['meta'], 'readonly', async (tx) => {
+    const stored = (await request(tx.objectStore('meta').get(`backup:${ns}`))) as
+      | Backup
+      | undefined;
+    return stored ?? { exportedAt: null, dismissed: false };
+  });
+}
+
+export function dismissBackup(db: IDBDatabase, ns: string): Promise<Backup> {
+  return transact(db, ['meta'], 'readwrite', async (tx) => {
+    const meta = tx.objectStore('meta');
+    const stored = (await request(meta.get(`backup:${ns}`))) as Backup | undefined;
+    const next = { exportedAt: stored?.exportedAt ?? null, dismissed: true };
+    await request(meta.put(next, `backup:${ns}`));
+    return next;
+  });
+}
+
+export function reminder(backup: Backup, secrets: boolean): BackupReminder {
+  if (backup.exportedAt !== null || !secrets) return null;
+  return backup.dismissed ? 'dismissed' : 'due';
 }
 
 export async function audit(
