@@ -233,8 +233,8 @@ export type Op =
   | { op: 'audit'; before?: number; limit?: number }
   | { op: 'put'; name: string; value: string; request?: string }
   | { op: 'cancel'; request: string }
-  | { op: 'remove'; name: string }
-  | { op: 'restore'; name: string }
+  | { op: 'remove'; name: string; kind?: RecordKind }
+  | { op: 'restore'; name: string; kind?: RecordKind }
   | {
       op: 'seal';
       name: string;

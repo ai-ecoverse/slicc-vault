@@ -13,9 +13,15 @@ export type Kek =
   | { kind: 'passphrase'; salt: Uint8Array<ArrayBuffer>; iterations: number }
   | { kind: 'passkey'; salt: Uint8Array<ArrayBuffer>; credential: string };
 
-export type Keys =
+export type Keys = (
   | { mode: 'auto'; dek: CryptoKey }
-  | { mode: Kek['kind']; wrapped: Sealed; kek: Kek };
+  | { mode: Kek['kind']; wrapped: Sealed; kek: Kek }
+) & { id: string };
+
+export interface Dek {
+  key: CryptoKey;
+  id: string;
+}
 
 export function generate(extractable: boolean): Promise<CryptoKey> {
   return crypto.subtle.generateKey(AES, extractable, ['encrypt', 'decrypt']);

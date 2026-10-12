@@ -114,7 +114,7 @@ async function put(vault: Vault, ns: string, request: Fields): Promise<Fields> {
     throw new Refused('EINVAL', `request ${pending.id} asks for another value`);
   }
   const now = vault.now();
-  const { record } = await seal(vault.db, vault.keyring.require(), {
+  const { record } = await seal(vault.db, vault.keyring.use(), {
     ns,
     kind: 'secret',
     name,
@@ -149,7 +149,7 @@ async function sealFromPage(vault: Vault, ns: string, request: Fields): Promise<
     throw new Refused('EINVAL', 'refresh must be a string');
   }
   const expiresAt = optionalNumber(request.expiresAt, 'expiresAt');
-  const { record } = await seal(vault.db, vault.keyring.require(), {
+  const { record } = await seal(vault.db, vault.keyring.use(), {
     ns,
     kind,
     name,
@@ -167,7 +167,9 @@ async function sealFromPage(vault: Vault, ns: string, request: Fields): Promise<
 
 async function mark(vault: Vault, ns: string, request: Fields, removing: boolean) {
   const name = checkName(request.name);
-  const record = await (removing ? remove : restore)(vault.db, ns, name, vault.now());
+  const kind = (request.kind ?? 'secret') as RecordKind;
+  if (!KINDS.has(kind)) throw new Refused('EINVAL', 'kind must be secret, grant, model or mcp');
+  const record = await (removing ? remove : restore)(vault.db, ns, name, vault.now(), kind);
   await vault.changed(ns, ['secrets', 'audit']);
   return { ...result(vault, ns, record) };
 }

@@ -31,10 +31,18 @@ function session(cdp, sessionId) {
   return { sessionId, send, evaluate, until };
 }
 
+async function activePort(profile) {
+  for (let tries = 0; ; tries++) {
+    const text = await readFile(`${profile}/DevToolsActivePort`, 'utf8').catch(() => '');
+    const [port, path] = text.trim().split('\n');
+    if (port && path) return { port, path };
+    if (tries > 100) throw new Error('no DevToolsActivePort');
+    await sleep(50);
+  }
+}
+
 export async function browser(chrome) {
-  const [port, path] = (await readFile(`${chrome.profile}/DevToolsActivePort`, 'utf8'))
-    .trim()
-    .split('\n');
+  const { port, path } = await activePort(chrome.profile);
   const cdp = await connect(`ws://127.0.0.1:${port}${path}`);
   const used = new Set();
   async function target(pattern, ms = 15000) {
@@ -108,7 +116,18 @@ export async function openPopup(cdp, page, intent, label) {
       ]);
       throw new Error(`${error.message}\nbutton: ${JSON.stringify(state)}`);
     });
-  await click(page, '#button');
+  for (let attempt = 0; ; attempt++) {
+    const clicks = await page.evaluate(() => window.harness.buttonEvents.length);
+    await click(page, '#button');
+    const opened = await page
+      .within(
+        5000,
+        (from) => window.harness.buttonEvents.slice(from).find((e) => e.event === 'popup'),
+        clicks
+      )
+      .catch(() => null);
+    if (opened?.state === 'opened' || attempt === 2) break;
+  }
   const popup = await cdp.target(/\/popup\.html#[0-9a-f]{32}$/);
   await popup.until(() => document.querySelector('main h1') !== null);
   return popup;
