@@ -51,11 +51,68 @@ async function connect(path = '/') {
   return Promise.race([welcome, new Promise((resolve) => setTimeout(() => resolve(null), 3000))]);
 }
 
-function call(op, fields = {}) {
+function call(op, fields = {}, transfer = [], via = null) {
   const id = next++;
   return new Promise((resolve) => {
     waiting.set(id, resolve);
-    port.postMessage({ v: 1, id, op, ...fields });
+    (via ?? port).postMessage({ v: 1, id, op, ...fields }, transfer);
+  });
+}
+
+async function forward(fields, response = null) {
+  const channel = new MessageChannel();
+  const parts = [];
+  const done = new Promise((resolve) => {
+    channel.port1.onmessage = (event) => {
+      const data = event.data;
+      parts.push(
+        data.op === 'body' ? { op: 'body', text: new TextDecoder().decode(data.chunk) } : data
+      );
+      if (data.op === 'end' || data.op === 'error') resolve();
+    };
+  });
+  const reply = await call('forward', fields, [channel.port2]);
+  if (!response || !reply.head) return { reply, parts };
+  channel.port1.postMessage({ op: 'response', ...response.head });
+  for (const chunk of response.chunks) {
+    const bytes = new TextEncoder().encode(chunk);
+    channel.port1.postMessage({ op: 'body', chunk: bytes }, [bytes.buffer]);
+  }
+  channel.port1.postMessage(
+    response.error ? { op: 'error', message: response.error } : { op: 'end' }
+  );
+  await done;
+  return { reply, parts };
+}
+
+let agentPort = null;
+const agentWaiting = new Map();
+
+async function agent() {
+  const iframe = document.querySelector('iframe[hidden]');
+  const channel = new MessageChannel();
+  agentPort = channel.port1;
+  const welcome = new Promise((resolve) => {
+    agentPort.onmessage = (event) => {
+      record('agent', event.data);
+      if (event.data.op === 'welcome') return resolve(event.data);
+      agentWaiting.get(event.data.id)?.(event.data);
+      agentWaiting.delete(event.data.id);
+    };
+  });
+  iframe.contentWindow.postMessage(
+    { type: 'slicc-vault', v: 1, op: 'hello', role: 'agent' },
+    vault,
+    [channel.port2]
+  );
+  return welcome;
+}
+
+function ask(op, fields = {}) {
+  const id = next++;
+  return new Promise((resolve) => {
+    agentWaiting.set(id, resolve);
+    agentPort.postMessage({ v: 1, id, op, ...fields });
   });
 }
 
@@ -93,6 +150,9 @@ function policy(files) {
 
 window.harness = {
   policy,
+  forward,
+  agent,
+  ask,
   vault,
   seen,
   events,

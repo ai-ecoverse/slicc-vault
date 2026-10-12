@@ -7,6 +7,7 @@ import { EMPTY, type Policy } from './policy.ts';
 import { backupState, records, reminder, scrubVersion } from './records.ts';
 import { pending, waiting } from './requests.ts';
 import { loadPolicy, loadStored } from './rules.ts';
+import { Scrubbers } from './scrubbers.ts';
 import type { Context } from './sealed.ts';
 
 export type Listener = (ns: string, parts: Part[]) => void | Promise<void>;
@@ -18,12 +19,12 @@ export interface Vault {
   bus: Channel;
   policy(ns: string): Policy;
   loadPolicy(ns: string): Promise<Policy>;
-  setPolicy(ns: string, policy: Policy): void;
   now(): number;
   changed(ns: string, parts: Part[]): Promise<void>;
   onChange(listener: Listener): () => void;
   context(ns: string): Context;
   scrub(ns: string): Promise<ScrubState>;
+  scrubbers: Scrubbers;
   status(ns: string): Promise<VaultStatus>;
 }
 
@@ -45,6 +46,7 @@ export async function start(options: Options = {}): Promise<Vault> {
     await Promise.all([...listeners].map((listener) => listener(ns, parts)));
   };
   const vault: Vault = {
+    scrubbers: undefined as unknown as Scrubbers,
     db,
     config,
     keyring,
@@ -56,9 +58,7 @@ export async function start(options: Options = {}): Promise<Vault> {
       policies.set(ns, loaded);
       return loaded;
     },
-    setPolicy(ns, policy) {
-      policies.set(ns, policy);
-    },
+
     async changed(ns, parts) {
       bus.post({ type: 'changed', ns, parts });
       await notify(ns, parts);
@@ -80,7 +80,7 @@ export async function start(options: Options = {}): Promise<Vault> {
     async scrub(ns) {
       const [held, version] = await Promise.all([records(db, ns), scrubVersion(db, ns)]);
       const needed = held.length > 0;
-      return { needed, version, ready: !needed || keyring.seen };
+      return { needed, version, ready: vault.scrubbers.ready(ns, needed) };
     },
     async status(ns) {
       const [backup, held, stored] = await Promise.all([
@@ -107,6 +107,7 @@ export async function start(options: Options = {}): Promise<Vault> {
     if (message.type === 'changed') void reload(message.ns, message.parts);
     else if (message.type !== 'popup') void keyring.receive(message);
   });
+  vault.scrubbers = new Scrubbers(vault);
   const reload = async (ns: string, parts: Part[]) => {
     if (parts.includes('exits') && policies.has(ns)) await vault.loadPolicy(ns);
     await notify(ns, parts);

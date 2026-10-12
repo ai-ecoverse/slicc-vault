@@ -1,9 +1,11 @@
-import type { SealedReply, Stamp } from './contract.ts';
+import type { ExitName, SealedReply, Stamp } from './contract.ts';
 import { Refused, refusal } from './errors.ts';
+import { prepare } from './inject.ts';
 import type { Keyring } from './lock.ts';
 import type { Policy } from './policy.ts';
 import { checkName, checkValue, find, records, removed, rulesFor, seal, state } from './records.ts';
 import { create, current, get, settle } from './requests.ts';
+import { loadRegistered } from './rules.ts';
 
 export const MAX_REQUEST = 64 * 1024;
 const PROMPT = 200;
@@ -93,15 +95,35 @@ const listOp: Handler = async (ctx) => {
   return { secrets };
 };
 
-const testOp: Handler = async (ctx, req) => {
+const testOp: Handler = async (ctx, req, stamp) => {
   const name = checkName(req.name);
   const url = URL.parse(string(req, 'url', 8192));
   if (!url) throw new Refused('EINVAL', 'url must be an absolute URL');
-  optional(req, 'method', 32);
-  optional(req, 'header', 256);
+  const method = optional(req, 'method', 32) ?? 'GET';
+  const header = optional(req, 'header', 256) ?? 'authorization';
+  const exit = optional(req, 'exit', 128) ?? 'page';
   const found = await record(ctx, name);
-  if (removed(found)) return { verdict: 'refuse', reason: `${name} was removed` };
-  return { verdict: 'refuse', reason: `no rule in /etc/fnox/config.toml names ${name}` };
+  const [held, registered] = await Promise.all([
+    records(ctx.db, ctx.ns),
+    loadRegistered(ctx.db, ctx.ns),
+  ]);
+  const prepared = await prepare({
+    ns: ctx.ns,
+    head: { method, url: url.href, headers: [[header, `Bearer ${found.placeholder}`]] },
+    owner: stamp,
+    exit: exit as ExitName,
+    traits: { manualRedirects: exit !== 'page', encodedBodies: false },
+    records: held,
+    policy: ctx.policy(),
+    registered,
+    key: ctx.keyring.key,
+    now: ctx.now(),
+  });
+  if (!prepared.ok) return { verdict: 'refuse', reason: prepared.reason };
+  return {
+    verdict: 'inject',
+    reason: `${name} would be sent in ${header.toLowerCase()} to ${prepared.host}`,
+  };
 };
 
 function requestFields(req: Fields): {

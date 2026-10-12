@@ -134,6 +134,15 @@ export interface ForwardEntry extends AuditBase {
   exit: ExitName;
 }
 
+export interface McpEntry extends AuditBase {
+  type: 'mcp';
+  server: string;
+  domain: string;
+  method: string;
+  path: string;
+  exit: ExitName;
+}
+
 export interface RevealEntry extends AuditBase {
   type: 'materialize';
   exec: ExecMode;
@@ -169,7 +178,53 @@ export interface PolicyEntry {
   warning?: string;
 }
 
-export type AuditEntry = ForwardEntry | RevealEntry | SealEntry | RemoveEntry | PolicyEntry;
+export type AuditEntry =
+  | ForwardEntry
+  | McpEntry
+  | RevealEntry
+  | SealEntry
+  | RemoveEntry
+  | PolicyEntry;
+
+export interface RequestHead {
+  method: string;
+  url: string;
+  headers: [string, string][];
+}
+
+export interface RawTraits {
+  manualRedirects?: boolean;
+  encodedBodies?: boolean;
+}
+
+export type ForwardResult =
+  | { head: RequestHead; body?: Uint8Array }
+  | { refused: { status: number; reason: string } };
+
+export type ResponsePart =
+  | {
+      op: 'response';
+      status: number;
+      statusText: string;
+      url: string;
+      redirected?: boolean;
+      headers: [string, string][];
+    }
+  | { op: 'body'; chunk: Uint8Array }
+  | { op: 'end' }
+  | { op: 'error'; message: string };
+
+export interface McpServerEntry {
+  server: string;
+  url: string;
+  names?: string[];
+}
+
+export interface ScrubHit {
+  name: string;
+  form: string;
+  count: number;
+}
 
 export interface AuditPage {
   audit: AuditEntry[];
@@ -281,7 +336,32 @@ export type Op =
   | { op: 'export'; passphrase: string }
   | { op: 'lock' }
   | { op: 'dismissBackupReminder' }
-  | { op: 'policy'; files: Attestation[] };
+  | { op: 'policy'; files: Attestation[] }
+  | {
+      op: 'forward';
+      head: RequestHead;
+      body?: Uint8Array | string;
+      owner: Stamp;
+      exit: ExitName;
+      rawTraits: RawTraits;
+    };
+
+export type AgentOp =
+  | { op: 'redact'; texts: (string | Uint8Array)[] }
+  | { op: 'redactStream'; stream: string }
+  | { op: 'push'; stream: string; chunk: Uint8Array }
+  | { op: 'idle'; stream: string }
+  | { op: 'end'; stream: string }
+  | { op: 'drop'; stream: string }
+  | { op: 'endpoints'; model?: string[]; mcp?: (string | McpServerEntry)[] };
+
+export type AgentReply =
+  | { op: 'redact'; texts: (string | Uint8Array)[]; hits: ScrubHit[]; version: number }
+  | { op: 'redactStream'; stream: string; idleMs: number; version: number }
+  | { op: 'push' | 'idle'; chunk: Uint8Array }
+  | { op: 'end'; chunk: Uint8Array; hits: ScrubHit[] }
+  | { op: 'drop' }
+  | { op: 'endpoints'; ok: true };
 
 export type OpReply =
   | { op: 'sealed'; reply: SealedReply }
@@ -295,7 +375,8 @@ export type OpReply =
   | { op: 'export'; bundle: Uint8Array }
   | { op: 'lock' }
   | { op: 'dismissBackupReminder'; backupReminder: BackupReminder }
-  | ({ op: 'policy' } & PolicyResult);
+  | ({ op: 'policy' } & PolicyResult)
+  | ({ op: 'forward' } & ForwardResult);
 
 export type Request = Op & { v: Protocol; id: number };
 

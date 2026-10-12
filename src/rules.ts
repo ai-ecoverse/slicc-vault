@@ -1,6 +1,7 @@
 import { verify } from './attest.ts';
-import type { PolicyChange, PolicyFile, PolicyFileState, PolicyResult } from './contract.ts';
+import type { PolicyChange, PolicyFile, PolicyFileState, PolicyResult, Rule } from './contract.ts';
 import { request, transact } from './db.ts';
+import { Refused } from './errors.ts';
 import {
   type Accepted,
   build,
@@ -14,7 +15,15 @@ import {
   parseConfig,
   parseExtra,
 } from './policy.ts';
-import { audit } from './records.ts';
+import { audit, NAME } from './records.ts';
+import {
+  contains,
+  endpoint,
+  type McpServer,
+  NO_ENDPOINTS,
+  patterns,
+  type Registered,
+} from './refusal.ts';
 
 export interface Stored {
   accepted: Accepted;
@@ -33,8 +42,77 @@ export function loadStored(db: IDBDatabase, ns: string): Promise<Stored> {
   });
 }
 
+export function loadRegistered(db: IDBDatabase, ns: string): Promise<Registered> {
+  return transact(db, ['meta'], 'readonly', async (tx) => {
+    const stored = (await request(tx.objectStore('meta').get(`endpoints:${ns}`))) as
+      | Registered
+      | undefined;
+    return stored ?? NO_ENDPOINTS;
+  });
+}
+
+export function refuser(registered: Registered) {
+  const all = patterns(registered);
+  return (rule: Rule) => all.some((pattern) => contains(pattern, rule.domain, rule.paths));
+}
+
 export async function loadPolicy(db: IDBDatabase, ns: string): Promise<Policy> {
-  return build((await loadStored(db, ns)).accepted);
+  const [stored, registered] = await Promise.all([loadStored(db, ns), loadRegistered(db, ns)]);
+  return build(stored.accepted, refuser(registered));
+}
+
+function servers(value: unknown): McpServer[] {
+  if (!Array.isArray(value)) throw new Refused('EINVAL', 'mcp must be a list');
+  return value.map((entry) => {
+    const item = typeof entry === 'string' ? { server: entry, url: entry, names: [] } : entry;
+    const names = Array.isArray(item?.names) ? item.names : [];
+    const valid =
+      typeof item?.server === 'string' &&
+      typeof item.url === 'string' &&
+      endpoint(item.url, true) !== null &&
+      names.every((name: unknown) => typeof name === 'string' && NAME.test(name));
+    if (!valid) throw new Refused('EINVAL', `not an MCP server: ${JSON.stringify(entry)}`);
+    return { server: item.server, url: item.url, names };
+  });
+}
+
+export function register(
+  db: IDBDatabase,
+  ns: string,
+  model: unknown,
+  mcp: unknown
+): Promise<{ registered: Registered; added: number }> {
+  const models = model === undefined ? [] : model;
+  if (
+    !Array.isArray(models) ||
+    !models.every((url) => typeof url === 'string' && endpoint(url, false))
+  ) {
+    throw new Refused('EINVAL', 'model must be a list of https base URLs');
+  }
+  const mcps = mcp === undefined ? [] : servers(mcp);
+  return transact(db, ['meta'], 'readwrite', async (tx) => {
+    const meta = tx.objectStore('meta');
+    const stored =
+      ((await request(meta.get(`endpoints:${ns}`))) as Registered | undefined) ?? NO_ENDPOINTS;
+    const modelUrls = [...new Set([...stored.model, ...models])];
+    const byUrl = new Map(stored.mcp.map((server) => [`${server.server} ${server.url}`, server]));
+    for (const server of mcps) {
+      const key = `${server.server} ${server.url}`;
+      const known = byUrl.get(key);
+      byUrl.set(
+        key,
+        known ? { ...known, names: [...new Set([...known.names, ...server.names])] } : server
+      );
+    }
+    const registered = { model: modelUrls, mcp: [...byUrl.values()] };
+    const added =
+      registered.model.length -
+      stored.model.length +
+      registered.mcp.reduce((sum, s) => sum + s.names.length + 1, 0) -
+      stored.mcp.reduce((sum, s) => sum + s.names.length + 1, 0);
+    await request(meta.put(registered, `endpoints:${ns}`));
+    return { registered, added };
+  });
 }
 
 export const SEEN = 64;
@@ -113,7 +191,7 @@ export async function apply(
   ns: string,
   files: unknown,
   now: number
-): Promise<{ result: PolicyResult; policy: Policy; changed: boolean }> {
+): Promise<{ result: PolicyResult; changed: boolean }> {
   const uploads = Array.isArray(files) ? files.slice(0, 2) : [];
   const evaluations: Evaluation[] = [];
   for (const upload of uploads) evaluations.push(await evaluate(upload));
@@ -153,5 +231,5 @@ export async function apply(
     rules,
     warnings: evaluations.flatMap((e) => e.warnings),
   };
-  return { result, policy: build(accepted), changed };
+  return { result, changed };
 }

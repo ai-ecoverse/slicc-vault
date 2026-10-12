@@ -2,8 +2,9 @@
 
 The separate-origin vault at `vault.sliccy.ai`. It holds the sealed secrets, OAuth tokens, and model and MCP credentials of SLICC seven, so that no value ever reaches the model provider. The design is `secrets-tokens-design.md` (revision 4) in slicc-agent-plan. This README is the spec of what is built.
 
-- **Built:** the key store, records, origin namespacing, auto-unlock with an optional passkey or passphrase lock, the embedding API with its `page` and `agent` roles, the page's `put`, `seal`, `remove`, `restore`, `cancel` and `lock`, the scrub state, the lock button and its popup, the attested policy (rules, `[exec]`, `[exits]`, `[limits]`), and the vault side of the `/dev/sealed` ops `seal`, `placeholder`, `list`, `test`, `request`, `status`, `cancel` and `materialize`.
-- **Not built yet:** `forward` and the scrubber (`test` always refuses), exec, `import` and `export`, and the agent's ops. They answer as described below.
+- **Built:** the key store, records, origin namespacing, auto-unlock with an optional passkey or passphrase lock, the embedding API with its `page` and `agent` roles, the page's `put`, `seal`, `remove`, `restore`, `cancel` and `lock`, the scrub state, the lock button and its popup, the attested policy (rules, `[exec]`, `[exits]`, `[limits]`), the injector and `forward` with the response scrub (S1), the agent's `redact`, `redactStream` and `endpoints` (S3), the model and MCP refusal, and the vault side of the `/dev/sealed` ops `seal`, `placeholder`, `list`, `test`, `request`, `status`, `cancel` and `materialize`.
+- **Not built yet:** exec (`materialize`), `import` and `export`, and the agent's `model`, `mcp`, `records`, `grant` and `refresh`. They answer as described below.
+- **The vault has no network stack.** It never fetches anything but its own `config.json` and `embedders.json`: bios sends every request the vault prepares.
 
 ## Documents and hosting
 
@@ -139,7 +140,7 @@ Accepted policy is kept per namespace in IndexedDB, and loaded when an embedder 
 `scrub { needed, version, ready }` tells bios and the agent whether output must pass the vault's scrubber before it reaches the model. It's per namespace:
 - `needed` is false only when the namespace holds no plaintext at all: no record of any kind or state, removed ones included until they're purged.
 - `version` counts every change to the namespace's set of values: each seal, rotation, removal, restore and purge.
-- `ready` is false only when values exist but this vault frame never held the data key since it loaded, which is a reload with the lock on, before unlock. Locking again later doesn't clear it, because the compiled scrubber stays in memory for the frame's life.
+- `ready` is false only when values exist, the vault is locked, and this frame has no compiled scrubber for the namespace: a reload with the lock on, before unlock. The scrubber (`@ai-ecoverse/slicc-scrub`, over every value of the namespace, records of every kind and state) is compiled whenever the frame holds the key and the set of values changed, and is kept in memory for the frame's life, so locking stops value use but never scrubbing.
 
 It's in `status`, in `placeholders` replies and in every `placeholders` push. After `put` and `seal`, the push with the new pair goes out **before** the reply.
 
@@ -158,12 +159,13 @@ iframe.contentWindow.postMessage({ type: 'slicc-vault', v: 1, op: 'hello', role:
 - The frame answers only when the message comes from its own parent window, from an allowed origin, matching `location.ancestorOrigins[0]` when the browser exposes it. Anything else gets no answer at all.
 - On `port2` it answers `{ v: 1, op: 'welcome', role, status }`, or `{ v: 1, op: 'refused', error }` for another protocol version or an unknown role.
 - Everything after that goes over the port. The namespace and the role are fixed by the hello. Requests are `{ v: 1, id, op, ...fields }`; replies are `{ v: 1, id, op, ...fields }` or `{ v: 1, id, error: { code, message } }`. Each port is answered in order (FIFO).
-- **Roles:** `page` (the default) is bios and spectrum. bios may hand spectrum a page port of its own, or relay; the messages are the same. `agent` is the port bios hands the agent worker: it may use only `redact`, `redactStream`, `push`, `end`, `drop`, `model`, `mcp`, `endpoints`, `records`, `grant` and `refresh` (all `ENOTSUP` in this version), and anything else is `EACCES`. The agent port gets no events.
+- **Roles:** `page` (the default) is bios and spectrum. bios may hand spectrum a page port of its own, or relay; the messages are the same. `agent` is the port bios hands the agent worker: it may use only `redact`, `redactStream`, `push`, `idle`, `end`, `drop`, `endpoints`, `model`, `mcp`, `records`, `grant` and `refresh` (the last five `ENOTSUP` in this version), and anything else is `EACCES`. The agent port gets no events. Its ops are below (The agent's ops).
+- **Values:** only `forward` puts a value into the page, inside the head it returns, and only where an accepted rule allows it. No other op, event or reply carries one, and nothing on the agent port ever does.
 
 | op (page role) | fields | reply |
 |---|---|---|
 | `sealed` | `req` (the `/dev/sealed` request object, or its JSON text), `stamp` (`{ pid, ppid, uid, gid, tag }` from the kernel) | `{ reply }`, the §3.7 reply, below |
-| `status` | — | `{ status: { version, protocol, origin, locked, lock, scrub, waiting, exportedAt, backupReminder } }` |
+| `status` | — | `{ status: { version, protocol, origin, locked, lock, scrub, waiting, exportedAt, backupReminder, policy } }` |
 | `placeholders` | — | `{ placeholders, scrub }`: every placeholder of a record that isn't removed, active and inert, sorted |
 | `list` | — | `{ list: { secrets, refused, audit, auditMore, exits } }` for Settings › Secrets |
 | `audit` | `before?` (a `seq`), `limit?` (1–1000, default 100) | `{ audit, more, next? }`, newest first; pass `next` as `before` for the next page |
@@ -174,6 +176,7 @@ iframe.contentWindow.postMessage({ type: 'slicc-vault', v: 1, op: 'hello', role:
 | `lock` | — | `{}`; drops the key everywhere when the lock is on |
 | `dismissBackupReminder` | — | `{ backupReminder }`; the reminder becomes `dismissed` for this namespace |
 | `policy` | `files` | the attested policy files, below (Policy) |
+| `forward` | `head`, `body?`, `owner`, `exit`, `rawTraits`, with a `MessagePort` transferred alongside | the injected head, below (Forward) |
 | `import`, `export`, anything else | | `ENOTSUP` |
 
 `put` and `seal` need the vault unlocked. They answer `EACCES` with a message starting `vault is locked` otherwise.
@@ -194,7 +197,7 @@ bios relays each kernel request unchanged as the `sealed` op, with the kernel's 
 | `seal` | `name`, `value` | `{ placeholder, state }`. A new name creates a `process` record. An existing one is rotated and keeps its placeholder, but only when its value came from a process; a value from Settings, jerk, OAuth or an import is replaced only by uid 0, and anyone else gets `EEXIST` |
 | `placeholder` | `name` | `{ placeholder, state }`, including `removed`; `ENOENT` when there's no record |
 | `list` | — | `{ secrets: [{ name, placeholder, state, exec, rules, expiresAt? }] }`, records of kind `secret` that aren't removed, with their rules and `[exec]` mode |
-| `test` | `name`, `url`, `method?`, `header?` | `{ verdict, reason }`. Without policy it's always `refuse`; `ENOENT` for an unknown name |
+| `test` | `name`, `url`, `method?` (`GET`), `header?` (`authorization`), `exit?` (`page`) | `{ verdict: 'inject' \| 'refuse', reason }`: the injector's verdict for `Bearer <placeholder>` in that header, without sending anything; `ENOENT` for an unknown name |
 | `request` | `kind: "value"`, `name`, `prompt?` (≤ 200 characters) | `{ state: "pending", id }` |
 | `request` | `kind: "oauth"`, `provider`, `oauth` (an object) | the same |
 | `request` | `kind: "jerk-seal"`, `provider` | the same |
@@ -204,6 +207,49 @@ bios relays each kernel request unchanged as the `sealed` op, with the kernel's 
 
 - **Requests** expire 300 s after they're made. Each uid has at most one pending request per namespace; a second one is `EAGAIN`. `status` and `cancel` see only the caller's own requests (uid 0 sees all), and others get `ENOENT`.
 - A value request shows up in `status.waiting` and is answered by the page's `put` with its `request` id, or ended by `cancel`. `oauth` and `jerk-seal` requests can only be cancelled in this version.
+
+## Forward
+
+bios's exit router asks the vault to inject a request the kernel forwarded (an owner-bearing request that carries a placeholder), then sends it itself:
+
+```js
+const channel = new MessageChannel();
+port.postMessage({ v: 1, id, op: 'forward', head, body, owner, exit, rawTraits }, [channel.port2]);
+```
+
+- `head` is `{ method, url, headers: [name, value][] }`; `owner` the kernel's `{ pid, ppid, uid, gid, tag }`; `exit` the exit bios chose (`page`, `proxy`, `tailscale` or `device:<name>`); `rawTraits` that exit's `{ manualRedirects?, encodedBodies? }`. `body` (bytes or a string) is needed only for MCP requests (below); for every other request it stays in bios, because bodies are never injected.
+- **The reply** is `{ head }`, the same head with the values filled in, or `{ refused: { status, reason } }`: `403` with a one-line reason, or `502` for an exit with encoded bodies. A refused request must not be sent anywhere. Malformed fields are `EINVAL`.
+- **The response** goes back over `channel.port1`, scrubbed: bios posts `{ op: 'response', status, statusText, url, redirected?, headers }`, then any number of `{ op: 'body', chunk: Uint8Array }`, then `{ op: 'end' }` or `{ op: 'error', message }`. The vault answers with the same messages, with `statusText`, `url`, every header name and value, the body and the error scrubbed over every value of the namespace. A value in its raw form comes back as its placeholder, anything else as `[redacted:NAME]`. The body is scrubbed as a stream; after 250 ms without input, a held tail shorter than 16 bytes is let through.
+
+**The injector**, fnox's proxy semantics:
+- **Refused before anything is sent:** a placeholder in the URL or in a header name; credentials in the URL; a scheme other than `https:` or a port other than 443 (except §3.16.3's kernel servers, below); an ambiguous path (`.`/`..` segments, `\`, `%2e`, `%2f`, `%5c`, `%25`, checked on the raw URL); an exit with encoded bodies; no placeholder of this vault at all; a record that is removed, expired ("NAME expired; refreshing") or not a `secret`; a locked vault; no rule (in `/etc/fnox/config.toml`) whose exact domain, header, method and path allow it; an exit the secret's `[exits]` line doesn't list; the same placeholder twice in one header value; a header other than `authorization` on an exit that follows redirects (`manualRedirects` false); CR, LF or NUL after substitution.
+- **Paths** in rules are globs: `*` stays within a segment, `**` crosses segments, `?` is one character.
+- **Injected:** each placeholder is replaced inside the rule's header value, so `Bearer …` and `token …` templates work. In `Authorization: Basic`, the credential is decoded, the user and password parts substituted (a substituted user may not contain `:`), and re-encoded. A Basic value that holds a placeholder but isn't valid base64 of UTF-8 is refused.
+- **Audited:** each injection adds a `forward` audit entry `{ name, domain, method, path, rule, exit, uid, tag }` and sets the record's `usedAt`. Never headers, bodies or values.
+
+## Model and MCP endpoints
+
+The vault never injects a secret into a model or MCP endpoint, whatever a rule says.
+- **The built-in list** is generated at build time (`scripts/endpoints.mjs`, into the gitignored `src/endpoints.json`) from every provider base URL in pi-ai's catalog (`@earendil-works/pi-ai`, pinned in `devDependencies`), plus `bedrock-runtime.*` and `bedrock-runtime-fips.*.amazonaws.com`, Azure OpenAI and AI services, and Adobe's LLM proxy. Each entry is a host (with `*` for one label) and a path prefix (`*` for one segment, from templated segments).
+- **Registered endpoints:** the agent's `endpoints` op adds model base URLs and MCP servers for its namespace. They only ever add.
+- **At policy parse:** a rule that can reach only refused URLs (its domain matches, and the endpoint has no path prefix or every path of the rule lies under it) is dropped and listed in `list.refused` with the reason `NAME: host is a model or MCP endpoint; the vault never injects there`. Other rules on the same host stay.
+- **At request time:** `forward` refuses any URL under the refused set, before rules: `403 host is a model or MCP endpoint; the vault never injects there`.
+- **Kernel programs calling a registered MCP server (§3.16.1):** a `forward` whose URL lies under a registered MCP server isn't refused but handled for that server only. Only `mcp` records the server lists in `names` are filled in; a `secret`, `grant` or `model` placeholder is refused ("secrets are never sent to model or MCP endpoints"). The reply carries `body`, the request body scrubbed over every value, which bios sends instead of its own copy; the response is scrubbed as above; each call is audited as `mcp` with `server`, uid and tag.
+- **`http://<port>.kernel.localhost/<path>`** (port 1–65535, never 9222, no explicit port) is the one `http:` form an MCP server may have (§3.16.3). Everything else must be `https:` on 443.
+
+## The agent's ops
+
+| op | fields | reply |
+|---|---|---|
+| `redact` | `texts`: strings and `Uint8Array`s | `{ texts, hits, version }`: each text scrubbed, in the same order and type; `hits` totals `{ name, form, count }` |
+| `redactStream` | `stream` (an id) | `{ stream, idleMs, version }`; at most 64 streams per port (`EAGAIN`) |
+| `push` | `stream`, `chunk` (bytes) | `{ chunk }`: what can be released, scrubbed |
+| `idle` | `stream` | `{ chunk }`: a held tail under 16 bytes, after `idleMs` without input |
+| `end` | `stream` | `{ chunk, hits }`: the rest, and the stream is gone |
+| `drop` | `stream` | `{}` |
+| `endpoints` | `model?`: https base URLs; `mcp?`: `{ server, url, names? }` or a URL string | `{ ok: true }`; new entries re-check the policy and push `changed` |
+
+`redact` and `redactStream` need a compiled scrubber: with the lock on, before the first unlock since the frame loaded, they answer `EACCES` ("unlock the vault to continue"). They never return a value: matches are replaced, everything else passes through.
 
 ## The button (`button.html`)
 
@@ -262,8 +308,8 @@ The npm package `@ai-ecoverse/slicc-vault` holds only TypeScript types, built fr
 - **`exec`**: `false` means the value is never revealed to a program; `any`, `argv` (with `execArgv`, the allowed argv prefixes) and `shell` are the `[exec]` modes under which `fnox exec` may hand it to a program.
 - **`exits`** is present only when `/etc/slicc/secrets-policy.toml` restricts that secret; absent means every exit (`page`, `proxy`, `tailscale`, `device:<id>`).
 - **`kind`**: `secret` (a credential programs use through rules), **`grant`** (a sign-in's refresh token, never injected; show it as "Sign-in"), `model` (a model provider key), `mcp` (an MCP server credential). `provider` and `account` name the service and the signed-in account where one is known.
-- **`AuditEntry`**: `forward` is a use of a value in a request, with the exit that carried it; **`materialize` is shown as "Revealed to a program"**; `seal`, `remove`, `restore` and `policy` (with its `changes`) record changes. Every entry has a `seq` for paging.
-- **`VaultList.refused`** lists rules the vault dropped because they name a model or MCP endpoint (empty until VAULT-1b).
+- **`AuditEntry`**: `forward` is a use of a value in a request, with the exit that carried it; `mcp` a kernel program's call to a registered MCP server; **`materialize` is shown as "Revealed to a program"**; `seal`, `remove`, `restore` and `policy` (with its `changes`) record changes. Every entry has a `seq` for paging.
+- **`VaultList.refused`** lists rules the vault dropped because they name a model or MCP endpoint.
 - **`PendingRequest.prompt`** is untrusted, agent-written text of at most 200 characters.
 - **`ExitPolicyView`** is read-only: the secrets `/etc/slicc/secrets-policy.toml` restricts to certain exits.
 
