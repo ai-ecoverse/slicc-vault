@@ -4,7 +4,7 @@ import type { ScrubState, VaultStatus } from './contract.ts';
 import { open } from './db.ts';
 import { Keyring } from './lock.ts';
 import { EMPTY, type Policy } from './policy.ts';
-import { records, scrubVersion } from './records.ts';
+import { backupState, records, reminder, scrubVersion } from './records.ts';
 import { pending, waiting } from './requests.ts';
 import type { Context } from './sealed.ts';
 
@@ -71,6 +71,8 @@ export async function start(options: Options = {}): Promise<Vault> {
       return { needed, version, ready: !needed || keyring.seen };
     },
     async status(ns) {
+      const [backup, held] = await Promise.all([backupState(db, ns), records(db, ns)]);
+      const secrets = held.some((record) => record.kind === 'secret');
       return {
         version: config.version,
         protocol: 1,
@@ -79,6 +81,8 @@ export async function start(options: Options = {}): Promise<Vault> {
         lock: keyring.mode,
         scrub: await vault.scrub(ns),
         waiting: (await waiting(db, ns, now())).map(pending),
+        exportedAt: backup.exportedAt,
+        backupReminder: reminder(backup, secrets),
       };
     },
   };

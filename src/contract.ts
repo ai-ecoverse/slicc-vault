@@ -99,7 +99,11 @@ export interface VaultStatus {
   lock: LockMode;
   scrub: ScrubState;
   waiting: PendingRequest[];
+  exportedAt: EpochMs | null;
+  backupReminder: BackupReminder;
 }
+
+export type BackupReminder = 'due' | 'dismissed' | null;
 
 export type Availability = 'connecting' | 'waiting' | 'locked' | 'ready';
 
@@ -246,7 +250,8 @@ export type Op =
     }
   | { op: 'import'; kind: ImportKind; bytes: Uint8Array; password?: string; pick?: string[] }
   | { op: 'export'; passphrase: string }
-  | { op: 'lock' };
+  | { op: 'lock' }
+  | { op: 'dismissBackupReminder' };
 
 export type OpReply =
   | { op: 'sealed'; reply: SealedReply }
@@ -258,7 +263,8 @@ export type OpReply =
   | { op: 'cancel'; state: RequestState }
   | ({ op: 'import' } & ImportResult)
   | { op: 'export'; bundle: Uint8Array }
-  | { op: 'lock' };
+  | { op: 'lock' }
+  | { op: 'dismissBackupReminder'; backupReminder: BackupReminder };
 
 export type Request = Op & { v: Protocol; id: number };
 

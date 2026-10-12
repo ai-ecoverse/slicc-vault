@@ -68,6 +68,10 @@ Everything lives in the vault origin's IndexedDB, database `slicc-vault`, versio
 - **Removing** sets `removedAt`. A removed record keeps its placeholder, can be restored with `restore`, and is deleted for good 30 days later. Sealing a removed name brings it back with a new value and the same placeholder.
 - **Times** are epoch milliseconds everywhere.
 
+## Backup reminder
+
+`status.exportedAt` is the time of the namespace's last successful `export`, or `null` if it never exported. `status.backupReminder` is `due` once the namespace holds a `secret` record and has never exported, `dismissed` after `dismissBackupReminder`, and `null` otherwise (no secrets yet, or exported). `export` arrives with VAULT-1e; until then `exportedAt` stays `null`.
+
 ## Scrub state
 
 `scrub { needed, version, ready }` tells bios and the agent whether output must pass the vault's scrubber before it reaches the model. It's per namespace:
@@ -97,7 +101,7 @@ iframe.contentWindow.postMessage({ type: 'slicc-vault', v: 1, op: 'hello', role:
 | op (page role) | fields | reply |
 |---|---|---|
 | `sealed` | `req` (the `/dev/sealed` request object, or its JSON text), `stamp` (`{ pid, ppid, uid, gid, tag }` from the kernel) | `{ reply }`, the §3.7 reply, below |
-| `status` | — | `{ status: { version, protocol, origin, locked, lock, scrub, waiting } }` |
+| `status` | — | `{ status: { version, protocol, origin, locked, lock, scrub, waiting, exportedAt, backupReminder } }` |
 | `placeholders` | — | `{ placeholders, scrub }`: every placeholder of a record that isn't removed, active and inert, sorted |
 | `list` | — | `{ list: { secrets, refused, audit, auditMore, exits } }` for Settings › Secrets |
 | `audit` | `before?` (a `seq`), `limit?` (1–1000, default 100) | `{ audit, more, next? }`, newest first; pass `next` as `before` for the next page |
@@ -106,6 +110,7 @@ iframe.contentWindow.postMessage({ type: 'slicc-vault', v: 1, op: 'hello', role:
 | `remove`, `restore` | `name`, `kind?` (default `secret`) | `{ name, placeholder, state }`. A record removed more than 30 days ago can't be restored (`ENOENT`) |
 | `cancel` | `request` | `{ state }`; the request's `/dev/sealed` `status` becomes `cancelled` |
 | `lock` | — | `{}`; drops the key everywhere when the lock is on |
+| `dismissBackupReminder` | — | `{ backupReminder }`; the reminder becomes `dismissed` for this namespace |
 | `import`, `export`, anything else | | `ENOTSUP` |
 
 `put` and `seal` need the vault unlocked. They answer `EACCES` with a message starting `vault is locked` otherwise.

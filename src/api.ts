@@ -16,6 +16,7 @@ import { Refused, refusal } from './errors.ts';
 import {
   checkName,
   checkValue,
+  dismissBackup,
   placeholders,
   records,
   remove,
@@ -209,6 +210,11 @@ export async function answer(vault: Vault, ns: string, request: Fields): Promise
     case 'lock':
       vault.keyring.lock();
       return {};
+    case 'dismissBackupReminder': {
+      await dismissBackup(vault.db, ns);
+      await vault.changed(ns, []);
+      return { backupReminder: (await vault.status(ns)).backupReminder };
+    }
     default:
       throw new Refused('ENOTSUP', `this vault has no op ${String(request.op)}`);
   }
