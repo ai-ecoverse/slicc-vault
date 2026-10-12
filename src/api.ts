@@ -25,7 +25,7 @@ import {
   type VaultRecord,
   view,
 } from './records.ts';
-import { get, settle } from './requests.ts';
+import { current, get, settle } from './requests.ts';
 import { sealed } from './sealed.ts';
 import type { Vault } from './vault.ts';
 
@@ -113,6 +113,8 @@ async function put(vault: Vault, ns: string, request: Fields): Promise<Fields> {
   if (pending && (pending.kind !== 'value' || pending.name !== name)) {
     throw new Refused('EINVAL', `request ${pending.id} asks for another value`);
   }
+  const ended = pending ? current(pending, vault.now()) : 'pending';
+  if (ended !== 'pending') throw new Refused('EINVAL', `request ${pending?.id} is ${ended}`);
   const now = vault.now();
   const { record } = await seal(vault.db, vault.keyring.use(), {
     ns,

@@ -85,6 +85,16 @@ test('a value request is cancelled from the page', async (t) => {
     pending.id
   );
   assert.equal(status.state, 'cancelled');
+  const stale = await page.evaluate(
+    (id) =>
+      window.harness.call('put', { name: 'NOPE_TOKEN', value: 'value-after-cancel', request: id }),
+    pending.id
+  );
+  assert.equal(stale.error.code, 'EINVAL');
+  const none = await page.evaluate(() =>
+    window.harness.sealed({ v: 1, op: 'placeholder', name: 'NOPE_TOKEN' })
+  );
+  assert.equal(none.error.code, 'ENOENT');
   const missing = await page.evaluate(() => window.harness.call('cancel', { request: 'req_nope' }));
   assert.equal(missing.error.code, 'ENOENT');
 });

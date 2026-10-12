@@ -71,12 +71,12 @@ export function checkValue(value: unknown): string {
   return value;
 }
 
-export function removed(record: VaultRecord, now: number): boolean {
-  return record.removedAt !== undefined && record.removedAt <= now;
+export function removed(record: VaultRecord): boolean {
+  return record.removedAt !== undefined;
 }
 
 export function state(record: VaultRecord, policy: Policy, now: number): RecordState {
-  if (removed(record, now)) return 'removed';
+  if (removed(record)) return 'removed';
   return policy.rules(record.name).length > 0 ? 'active' : 'inert';
 }
 
@@ -116,7 +116,7 @@ async function unused(store: IDBObjectStore): Promise<string> {
 }
 
 function guard(existing: VaultRecord | undefined, input: SealInput): void {
-  if (!existing || removed(existing, input.now)) return;
+  if (!existing || removed(existing)) return;
   if (existing.source === 'process' || input.uid === 0 || input.source !== 'process') return;
   throw new Refused(
     'EEXIST',
@@ -143,14 +143,14 @@ export async function seal(db: IDBDatabase, dek: Dek, input: SealInput): Promise
       placeholder: existing?.placeholder ?? (await unused(store)),
       sealed,
       source: input.source,
-      createdAt: existing && !removed(existing, input.now) ? existing.createdAt : input.now,
+      createdAt: existing && !removed(existing) ? existing.createdAt : input.now,
       updatedAt: input.now,
       ...(input.expiresAt === undefined ? {} : { expiresAt: input.expiresAt }),
       ...(input.refresh === undefined ? {} : { refresh: input.refresh }),
     };
     await request(store.put(record));
     await bump(tx, input.ns);
-    const rotated = existing !== undefined && !removed(existing, input.now);
+    const rotated = existing !== undefined && !removed(existing);
     await audit(tx, input.ns, {
       type: 'seal',
       name: input.name,
@@ -264,7 +264,7 @@ export function purge(db: IDBDatabase, now: number): Promise<number> {
 
 export function placeholders(list: VaultRecord[], now: number): string[] {
   return list
-    .filter((record) => !removed(record, now))
+    .filter((record) => !removed(record))
     .map((record) => record.placeholder)
     .sort();
 }
