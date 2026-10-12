@@ -74,20 +74,36 @@ Everything lives in the vault origin's IndexedDB, database `slicc-vault`, versio
 
 ## Policy
 
-The rules come only from two root-owned kernel files, which bios reads through the kernel's page-only `kernel.attest(path)` and hands over with the `policy` op, at boot and whenever either file changes:
+The rules come only from two root-owned kernel files. bios reads them with the kernel's page-only `kernel.attest(path)` (KS-7), at boot and whenever either file changes, and passes the results through unchanged:
 
 ```js
-port.postMessage({ v: 1, id, op: 'policy', files: [{ path, bytes, attestation }] });
+port.postMessage({ v: 1, id, op: 'policy', files: [await kernel.attest('/etc/fnox/config.toml'), await kernel.attest('/etc/slicc/secrets-policy.toml')] });
 ```
 
-`attestation` is the kernel's `{ path, uid, gid, mode, ino, mtimeMs, sha256, users, onRootFs, parents: [{ path, uid, mode }] }`. The vault trusts a file only when:
-- `path` is `/etc/fnox/config.toml` or `/etc/slicc/secrets-policy.toml`, and the attestation is for that path;
-- the SHA-256 of `bytes` (a string or bytes, UTF-8) equals `attestation.sha256`;
-- `uid` is 0 and `mode & 0o022` is 0;
-- `parents` is not empty, and every parent has uid 0 and `mode & 0o022` of 0;
-- `onRootFs` is true, and `users` is `enforce`.
+**An attestation** is exactly `{ path, bytes, uid, gid, mode, ino, mtimeMs, sha256, users, onRootFs, parents }`, nothing more or less:
 
-Otherwise it keeps the policy it last accepted for that file and warns, e.g. `rules not trusted: /etc/fnox/config.toml: it isn't root-owned`. A file that doesn't parse is treated the same way. The reply is `{ accepted, files: [{ path, sha256, accepted, warnings }], rules: [{ secret, domain, header, methods, paths }], warnings }`, with `rules` the rules now in effect.
+| field | format |
+|---|---|
+| `path` | the canonical absolute path the kernel read (it refuses symlinks and mount points) |
+| `bytes` | the file's bytes, a `Uint8Array`, read in the same step as the stats |
+| `uid`, `gid`, `mode` | integers; `mode` includes the type bits (`0o100644`) |
+| `ino`, `mtimeMs` | numbers |
+| `sha256` | 64 lower-case hex characters |
+| `users` | the kernel's users mode: `off`, `report` or `enforce` |
+| `onRootFs` | true only on the root file system, under no mount |
+| `parents` | every directory from `/` down to the file's, each exactly `{ path, uid, gid, mode }` |
+
+The vault trusts a file only when:
+- `path` is `/etc/fnox/config.toml` or `/etc/slicc/secrets-policy.toml`, and the object has exactly the fields above in those formats;
+- the SHA-256 the vault computes over `bytes` equals `sha256` (the field alone is never trusted);
+- `uid` is 0, and `mode` is a regular file with `mode & 0o022` of 0;
+- `parents` lists exactly the directories above `path`, in order from `/`, each with uid 0, a directory type and `mode & 0o022` of 0;
+- `onRootFs` is true, and `users` is `enforce`;
+- `bytes` is UTF-8 and parses.
+
+Otherwise the vault keeps the policy it last accepted for that file, so the rules it would have changed stay as they were (new ones stay inert), and warns, e.g. `rules not trusted: /etc/fnox/config.toml: kernel users must be enforce`. The reply is `{ accepted, files: [{ path, sha256, accepted, warnings }], rules: [{ secret, domain, header, methods, paths }], warnings }`, with `rules` the rules now in effect. `status.policy` repeats `files` from the last `policy` call, so Settings can show why rules aren't trusted.
+
+**The KS-7 conformance fixtures** are `test/integration/fixtures/attest/*.json`: `{ description, trusted, reason?, attestation }`, with `bytes` as base64, written by `make.mjs` next to them. `good-*` must be trusted, and every `bad-*` must be refused with a warning containing `reason`. The vault's own tests run them through the `policy` op, and the kernel's tests can check that `kernel.attest` produces the good shape.
 
 **`/etc/fnox/config.toml`**, the injection policy, read the way fnox reads it:
 - `[secrets]`: entries whose `provider` (or the file's `default_provider`) is `seven`, and whose `value` is a placeholder.

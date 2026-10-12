@@ -1,0 +1,37 @@
+{
+  "description": "sha256 in upper case",
+  "trusted": false,
+  "reason": "isn't in the kernel's format",
+  "attestation": {
+    "path": "/etc/fnox/config.toml",
+    "bytes": "ZGVmYXVsdF9wcm92aWRlciA9ICJzZXZlbiIKCltwcm92aWRlcnMuc2V2ZW5dCnR5cGUgPSAic2VhbGVkIgoKW3NlY3JldHNdCkdJVEhVQl9UT0tFTiA9IHsgcHJvdmlkZXIgPSAic2V2ZW4iLCB2YWx1ZSA9ICJmbm94X3Byb3h5XzAxMjM0NTY3ODlhYmNkZWYwMTIzNDU2NyIgfQoKW1twcm94eS5ydWxlc11dCnNlY3JldCA9ICJHSVRIVUJfVE9LRU4iCmRvbWFpbiA9ICJhcGkuZ2l0aHViLmNvbSIKbWV0aG9kcyA9IFsiR0VUIl0K",
+    "uid": 0,
+    "gid": 0,
+    "mode": 33188,
+    "ino": 1024,
+    "mtimeMs": 1760300000000,
+    "sha256": "77710711B3ABE2E4F49432F059901F3A83E108DC7655A0EE608EC70768772DF0",
+    "users": "enforce",
+    "onRootFs": true,
+    "parents": [
+      {
+        "path": "/",
+        "uid": 0,
+        "gid": 0,
+        "mode": 16877
+      },
+      {
+        "path": "/etc",
+        "uid": 0,
+        "gid": 0,
+        "mode": 16877
+      },
+      {
+        "path": "/etc/fnox",
+        "uid": 0,
+        "gid": 0,
+        "mode": 16877
+      }
+    ]
+  }
+}

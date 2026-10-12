@@ -1,79 +1,114 @@
 import { hex } from './bytes.ts';
-import type { PolicyFile } from './contract.ts';
+import type { Attestation, PolicyFile } from './contract.ts';
 import { FILES } from './policy.ts';
-
-export interface Attestation {
-  path: string;
-  uid: number;
-  gid: number;
-  mode: number;
-  ino: number;
-  mtimeMs: number;
-  sha256: string;
-  users: string;
-  onRootFs: boolean;
-  parents: { path: string; uid: number; mode: number }[];
-}
-
-export interface Upload {
-  path: string;
-  bytes: Uint8Array | string;
-  attestation: Attestation;
-}
 
 export type Verdict =
   | { trusted: true; path: PolicyFile; sha256: string; text: string }
   | { trusted: false; path: string; sha256: string | null; warning: string };
 
 const WRITABLE = 0o022;
+const TYPE = 0o170000;
+const FILE = 0o100000;
+const DIRECTORY = 0o040000;
+const FIELDS = [
+  'path',
+  'bytes',
+  'uid',
+  'gid',
+  'mode',
+  'ino',
+  'mtimeMs',
+  'sha256',
+  'users',
+  'onRootFs',
+  'parents',
+];
+const PARENT_FIELDS = ['path', 'uid', 'gid', 'mode'];
+const USERS = new Set(['off', 'report', 'enforce']);
 
-function bytesOf(bytes: unknown): Uint8Array<ArrayBuffer> | null {
-  if (typeof bytes === 'string') return new TextEncoder().encode(bytes);
-  if (bytes instanceof Uint8Array) return new Uint8Array(bytes);
-  if (bytes instanceof ArrayBuffer) return new Uint8Array(bytes.slice(0));
-  return null;
+type Fields = Record<string, unknown>;
+
+function integer(value: unknown): boolean {
+  return typeof value === 'number' && Number.isInteger(value);
 }
 
-function problem(path: string, attestation: Partial<Attestation> | undefined, sha256: string) {
-  if (!attestation || typeof attestation !== 'object') return 'it has no attestation';
-  if (attestation.path !== path) return 'its attestation is for another path';
-  if (attestation.sha256 !== sha256) return "its bytes don't match the attestation";
+function exactly(value: unknown, fields: string[]): value is Fields {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
+  const keys = Object.keys(value);
+  return keys.length === fields.length && fields.every((field) => keys.includes(field));
+}
+
+function wellFormedParent(parent: unknown): boolean {
+  if (!exactly(parent, PARENT_FIELDS)) return false;
+  return (
+    typeof parent.path === 'string' &&
+    integer(parent.uid) &&
+    integer(parent.gid) &&
+    integer(parent.mode)
+  );
+}
+
+export function wellFormed(value: unknown): value is Attestation {
+  if (!exactly(value, FIELDS)) return false;
+  return (
+    typeof value.path === 'string' &&
+    value.bytes instanceof Uint8Array &&
+    integer(value.uid) &&
+    integer(value.gid) &&
+    integer(value.mode) &&
+    typeof value.ino === 'number' &&
+    typeof value.mtimeMs === 'number' &&
+    typeof value.sha256 === 'string' &&
+    /^[0-9a-f]{64}$/.test(value.sha256) &&
+    typeof value.users === 'string' &&
+    USERS.has(value.users) &&
+    typeof value.onRootFs === 'boolean' &&
+    Array.isArray(value.parents) &&
+    value.parents.every(wellFormedParent)
+  );
+}
+
+export function ancestors(path: string): string[] {
+  const parts = path.split('/').slice(1, -1);
+  return ['/', ...parts.map((_, i) => `/${parts.slice(0, i + 1).join('/')}`)];
+}
+
+function safe(mode: number, type: number): boolean {
+  return (mode & TYPE) === type && (mode & WRITABLE) === 0;
+}
+
+function problem(attestation: Attestation, sha256: string): string | null {
+  if (sha256 !== attestation.sha256) return "its bytes don't match the attestation";
   if (attestation.uid !== 0) return "it isn't root-owned";
-  if (typeof attestation.mode !== 'number' || attestation.mode & WRITABLE) {
-    return 'it is writable by group or others';
-  }
-  const parents = Array.isArray(attestation.parents) ? attestation.parents : null;
-  if (
-    !parents?.length ||
-    !parents.every((p) => p.uid === 0 && typeof p.mode === 'number' && !(p.mode & WRITABLE))
-  ) {
+  if (!safe(attestation.mode, FILE))
+    return "it isn't a regular file, or is writable by group or others";
+  const expected = ancestors(attestation.path);
+  const parents = attestation.parents;
+  const listed =
+    parents.length === expected.length && parents.every((p, i) => p.path === expected[i]);
+  if (!listed) return "its parents aren't exactly the directories above it";
+  if (!parents.every((p) => p.uid === 0 && safe(p.mode, DIRECTORY))) {
     return "a parent directory isn't root-owned, or is writable by group or others";
   }
-  if (attestation.onRootFs !== true) return "it isn't on the root file system";
-  if (attestation.users !== 'enforce') return "the kernel doesn't enforce users";
+  if (!attestation.onRootFs) return "it isn't on the root file system";
+  if (attestation.users !== 'enforce') return 'kernel users must be enforce';
   return null;
 }
 
-export async function verify(upload: Partial<Upload>): Promise<Verdict> {
-  const path = typeof upload?.path === 'string' ? upload.path : '';
+export async function verify(value: unknown): Promise<Verdict> {
+  const path =
+    typeof (value as Fields | null)?.path === 'string' ? ((value as Fields).path as string) : '';
   if (!FILES.includes(path as PolicyFile)) {
-    return {
-      trusted: false,
-      path,
-      sha256: null,
-      warning: `rules not trusted: ${path || 'a file'} isn't a policy file`,
-    };
+    const warning = `rules not trusted: ${path || 'a file'} isn't a policy file`;
+    return { trusted: false, path, sha256: null, warning };
   }
-  const bytes = bytesOf(upload.bytes);
-  if (!bytes)
-    return {
-      trusted: false,
-      path,
-      sha256: null,
-      warning: `rules not trusted: ${path} came without its bytes`,
-    };
+  if (!wellFormed(value)) {
+    const warning = `rules not trusted: ${path}: the attestation isn't in the kernel's format`;
+    return { trusted: false, path, sha256: null, warning };
+  }
+  const bytes = new Uint8Array(value.bytes);
   const sha256 = hex(new Uint8Array(await crypto.subtle.digest('SHA-256', bytes)));
-  const issue = problem(path, upload.attestation, sha256);
+  const issue = problem(value, sha256);
   if (issue)
     return { trusted: false, path, sha256, warning: `rules not trusted: ${path}: ${issue}` };
   try {

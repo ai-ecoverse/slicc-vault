@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { readdir, readFile } from 'node:fs/promises';
 import { test } from 'node:test';
 import { attest, CONFIG, config, POLICY } from './attest.mjs';
 import { setup } from './setup.mjs';
@@ -6,7 +7,7 @@ import { setup } from './setup.mjs';
 const { embedder } = await setup();
 
 const seal = (name, value) => window.harness.sealed({ v: 1, op: 'seal', name, value });
-const upload = (files) => window.harness.call('policy', { files });
+const upload = (files) => window.harness.policy(files);
 const sealedList = () => window.harness.sealed({ v: 1, op: 'list' });
 
 async function connected(t, name = 'seven', tab = null) {
@@ -102,13 +103,31 @@ test('files the kernel did not attest as root-owned are not trusted', async (t) 
   const cases = [
     [{ uid: 1000 }, "isn't root-owned"],
     [{ mode: 0o100666 }, 'writable by group or others'],
-    [{ parents: [{ path: '/etc/fnox', uid: 1000, mode: 0o40755 }] }, 'parent directory'],
-    [{ parents: [{ path: '/etc/fnox', uid: 0, mode: 0o40777 }] }, 'parent directory'],
-    [{ parents: [] }, 'parent directory'],
+    [
+      {
+        parents: [
+          { path: '/', uid: 0, gid: 0, mode: 0o40755 },
+          { path: '/etc', uid: 0, gid: 0, mode: 0o40755 },
+          { path: '/etc/fnox', uid: 1000, gid: 0, mode: 0o40755 },
+        ],
+      },
+      'parent directory',
+    ],
+    [
+      {
+        parents: [
+          { path: '/', uid: 0, gid: 0, mode: 0o40755 },
+          { path: '/etc', uid: 0, gid: 0, mode: 0o40777 },
+          { path: '/etc/fnox', uid: 0, gid: 0, mode: 0o40755 },
+        ],
+      },
+      'parent directory',
+    ],
+    [{ parents: [] }, "parents aren't exactly"],
     [{ onRootFs: false }, 'root file system'],
-    [{ users: 'report' }, "doesn't enforce users"],
-    [{ sha256: '00' }, "don't match the attestation"],
-    [{ path: '/tmp/config.toml' }, 'another path'],
+    [{ users: 'report' }, 'kernel users must be enforce'],
+    [{ sha256: '0'.repeat(64) }, "don't match the attestation"],
+    [{ sha256: '00' }, "isn't in the kernel's format"],
   ];
   for (const [overrides, reason] of cases) {
     const reply = await page.evaluate(upload, [attest(CONFIG, wider, overrides)]);
@@ -122,10 +141,14 @@ test('files the kernel did not attest as root-owned are not trusted', async (t) 
   assert.match(odd.warnings[0], /isn't a policy file/);
   const broken = await page.evaluate(upload, [attest(CONFIG, '[secrets\nX = 1')]);
   assert.match(broken.warnings[0], /line 1/);
-  const none = await page.evaluate(upload, [
-    { path: CONFIG, attestation: attest(CONFIG, wider).attestation },
-  ]);
-  assert.match(none.warnings[0], /without its bytes/);
+  const { bytes, ...none } = attest(CONFIG, wider);
+  const missing = await page.evaluate(upload, [none]);
+  assert.match(missing.warnings[0], /kernel's format/);
+  const status = await page.evaluate(
+    async () => (await window.harness.call('status')).status.policy
+  );
+  assert.equal(status[0].accepted, false);
+  assert.ok(bytes);
   const listed = await page.evaluate(sealedList);
   assert.deepEqual(
     listed.secrets[0].rules.map((rule) => rule.domain),
@@ -196,4 +219,18 @@ materialize_per_day = -1
     'exits',
     'limits',
   ]);
+});
+
+test('the KS-7 conformance fixtures', async (t) => {
+  const page = await connected(t);
+  const dir = new URL('./fixtures/attest/', import.meta.url);
+  const names = (await readdir(dir)).filter((name) => name.endsWith('.json')).sort();
+  assert.ok(names.length >= 20);
+  for (const name of names) {
+    const fixture = JSON.parse(await readFile(new URL(name, dir), 'utf8'));
+    const reply = await page.evaluate(upload, [fixture.attestation]);
+    assert.equal(reply.files[0].accepted, fixture.trusted, `${name}: ${reply.warnings.join(' ')}`);
+    if (!fixture.trusted)
+      assert.ok(reply.warnings[0].includes(fixture.reason), `${name}: ${reply.warnings[0]}`);
+  }
 });

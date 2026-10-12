@@ -1,0 +1,36 @@
+{
+  "description": "the root-owned secrets-policy.toml",
+  "trusted": true,
+  "attestation": {
+    "path": "/etc/slicc/secrets-policy.toml",
+    "bytes": "W2V4ZWNdCk5QTV9UT0tFTiA9IHRydWUKCltleGl0c10KTlBNX1RPS0VOID0gWyJwYWdlIl0K",
+    "uid": 0,
+    "gid": 0,
+    "mode": 33188,
+    "ino": 1024,
+    "mtimeMs": 1760300000000,
+    "sha256": "3746cc21411cdc3fc54bc66c7f79c8245f07871032872fe52e32140287ef0058",
+    "users": "enforce",
+    "onRootFs": true,
+    "parents": [
+      {
+        "path": "/",
+        "uid": 0,
+        "gid": 0,
+        "mode": 16877
+      },
+      {
+        "path": "/etc",
+        "uid": 0,
+        "gid": 0,
+        "mode": 16877
+      },
+      {
+        "path": "/etc/slicc",
+        "uid": 0,
+        "gid": 0,
+        "mode": 16877
+      }
+    ]
+  }
+}
