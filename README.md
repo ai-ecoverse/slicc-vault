@@ -2,8 +2,8 @@
 
 The separate-origin vault at `vault.sliccy.ai`. It holds the sealed secrets, OAuth tokens, and model and MCP credentials of SLICC seven, so that no value ever reaches the model provider. The design is `secrets-tokens-design.md` (revision 4) in slicc-agent-plan. This README is the spec of what is built.
 
-- **Built:** the key store, records, origin namespacing, auto-unlock with an optional passkey or passphrase lock, the embedding API with its `page` and `agent` roles, the page's `put`, `seal`, `remove`, `restore`, `cancel` and `lock`, the scrub state, the lock button and its popup, and the vault side of the `/dev/sealed` ops `seal`, `placeholder`, `list`, `test`, `request`, `status`, `cancel` and `materialize`.
-- **Not built yet:** policy (every record is `inert`, and `test` always refuses), `forward` and the scrubber, exec, `import` and `export`, and the agent's ops. They answer as described below.
+- **Built:** the key store, records, origin namespacing, auto-unlock with an optional passkey or passphrase lock, the embedding API with its `page` and `agent` roles, the page's `put`, `seal`, `remove`, `restore`, `cancel` and `lock`, the scrub state, the lock button and its popup, the attested policy (rules, `[exec]`, `[exits]`, `[limits]`), and the vault side of the `/dev/sealed` ops `seal`, `placeholder`, `list`, `test`, `request`, `status`, `cancel` and `materialize`.
+- **Not built yet:** `forward` and the scrubber (`test` always refuses), exec, `import` and `export`, and the agent's ops. They answer as described below.
 
 ## Documents and hosting
 
@@ -64,13 +64,59 @@ Everything lives in the vault origin's IndexedDB, database `slicc-vault`, versio
 - **A value** is at least 8 bytes of UTF-8, without CR, LF or NUL, and contains no placeholder. Anything shorter is refused with `EINVAL` "values shorter than 8 bytes can't be protected from the model", because the scrubber couldn't tell it apart from ordinary output.
 - **`placeholder`** is `fnox_proxy_` plus 24 lower-case hex characters from `crypto.getRandomValues`, unique across the whole vault and stable for the record's life. All placeholders have the same length, so none contains another.
 - **`source`** is `settings` (entered in spectrum), `process`, `jerk:<provider>@<device>`, `oauth:<provider>` or `import:<kind>`.
-- **`state`** is computed, never stored: `removed` when `removedAt` is set, `active` when the accepted policy has a rule naming the record, otherwise `inert`. With no policy yet, every record is `inert`.
+- **`state`** is computed, never stored: `removed` when `removedAt` is set, `active` when the accepted policy has a rule for the record (below), otherwise `inert`.
 - **Removing** sets `removedAt`. A removed record keeps its placeholder, can be restored with `restore`, and is deleted for good 30 days later. Sealing a removed name brings it back with a new value and the same placeholder.
 - **Times** are epoch milliseconds everywhere.
 
 ## Backup reminder
 
 `status.exportedAt` is the time of the namespace's last successful `export`, or `null` if it never exported. `status.backupReminder` is `due` once the namespace holds a `secret` record and has never exported, `dismissed` after `dismissBackupReminder`, and `null` otherwise (no secrets yet, or exported). `export` arrives with VAULT-1e; until then `exportedAt` stays `null`.
+
+## Policy
+
+The rules come only from two root-owned kernel files, which bios reads through the kernel's page-only `kernel.attest(path)` and hands over with the `policy` op, at boot and whenever either file changes:
+
+```js
+port.postMessage({ v: 1, id, op: 'policy', files: [{ path, bytes, attestation }] });
+```
+
+`attestation` is the kernel's `{ path, uid, gid, mode, ino, mtimeMs, sha256, users, onRootFs, parents: [{ path, uid, mode }] }`. The vault trusts a file only when:
+- `path` is `/etc/fnox/config.toml` or `/etc/slicc/secrets-policy.toml`, and the attestation is for that path;
+- the SHA-256 of `bytes` (a string or bytes, UTF-8) equals `attestation.sha256`;
+- `uid` is 0 and `mode & 0o022` is 0;
+- `parents` is not empty, and every parent has uid 0 and `mode & 0o022` of 0;
+- `onRootFs` is true, and `users` is `enforce`.
+
+Otherwise it keeps the policy it last accepted for that file and warns, e.g. `rules not trusted: /etc/fnox/config.toml: it isn't root-owned`. A file that doesn't parse is treated the same way. The reply is `{ accepted, files: [{ path, sha256, accepted, warnings }], rules: [{ secret, domain, header, methods, paths }], warnings }`, with `rules` the rules now in effect.
+
+**`/etc/fnox/config.toml`**, the injection policy, read the way fnox reads it:
+- `[secrets]`: entries whose `provider` (or the file's `default_provider`) is `seven`, and whose `value` is a placeholder.
+- `[[proxy.rules]]`: `secret` (a seven entry of `[secrets]`), `domain` (one exact host, lower-cased), `header` (lower-cased, default `authorization`), `methods` (upper-cased; empty means any) and `paths` (each starting with `/`; empty means any). A rule that breaks any of this is dropped with a warning; the rest of the file still counts.
+- A record of kind `secret` is `active` when the file's `[secrets]` entry of its name holds the record's own placeholder and at least one rule names it. A placeholder from another vault or an old record doesn't activate anything.
+- Nothing else in the file counts: no imports, profiles or other providers.
+
+**`/etc/slicc/secrets-policy.toml`**, read by the vault only:
+
+```toml
+[exec]
+NPM_TOKEN = true
+GITHUB_TOKEN = { argv = [["/usr/bin/gh", "release", "upload"]] }
+OPENAI_API_KEY = { shell = true }
+
+[exits]
+NPM_TOKEN = ["page", "device:lars-air"]
+
+[limits]
+materialize_per_minute = 10
+materialize_per_day = 200
+shell_per_day = 5000
+```
+
+- `[exec]`: `true` is `exec: 'any'`, `{ argv = [[…]] }` is `'argv'` (each prefix an absolute program path), and `{ shell = true }` is `'shell'`. Anything else is a warning, and `exec` stays `false`. VAULT-1d acts on them.
+- `[exits]` is **optional**: a secret without a line may use every exit; a line restricts it to the exits listed (`page`, `proxy`, `tailscale`, `device:<name>`). Unknown names are dropped from the line with a warning, which leaves the line narrower, never wider.
+- `[limits]` overrides the defaults above with positive integers.
+
+Accepted policy is kept per namespace in IndexedDB, and loaded when an embedder says hello. Each file the vault hasn't seen before (by SHA-256) is audited once as a `policy` entry, with `accepted`, any `warning`, and its `changes` against the previously accepted file: rules `added` or `removed`, `exec` modes, `exits` lines and `limits`. Accepting a change pushes `changed` with `secrets`, `exits` and `audit`.
 
 ## Scrub state
 
@@ -111,6 +157,7 @@ iframe.contentWindow.postMessage({ type: 'slicc-vault', v: 1, op: 'hello', role:
 | `cancel` | `request` | `{ state }`; the request's `/dev/sealed` `status` becomes `cancelled` |
 | `lock` | — | `{}`; drops the key everywhere when the lock is on |
 | `dismissBackupReminder` | — | `{ backupReminder }`; the reminder becomes `dismissed` for this namespace |
+| `policy` | `files` | the attested policy files, below (Policy) |
 | `import`, `export`, anything else | | `ENOTSUP` |
 
 `put` and `seal` need the vault unlocked. They answer `EACCES` with a message starting `vault is locked` otherwise.
@@ -130,7 +177,7 @@ bios relays each kernel request unchanged as the `sealed` op, with the kernel's 
 |---|---|---|
 | `seal` | `name`, `value` | `{ placeholder, state }`. A new name creates a `process` record. An existing one is rotated and keeps its placeholder, but only when its value came from a process; a value from Settings, jerk, OAuth or an import is replaced only by uid 0, and anyone else gets `EEXIST` |
 | `placeholder` | `name` | `{ placeholder, state }`, including `removed`; `ENOENT` when there's no record |
-| `list` | — | `{ secrets: [{ name, placeholder, state, exec, rules, expiresAt? }] }`, records of kind `secret` that aren't removed |
+| `list` | — | `{ secrets: [{ name, placeholder, state, exec, rules, expiresAt? }] }`, records of kind `secret` that aren't removed, with their rules and `[exec]` mode |
 | `test` | `name`, `url`, `method?`, `header?` | `{ verdict, reason }`. Without policy it's always `refuse`; `ENOENT` for an unknown name |
 | `request` | `kind: "value"`, `name`, `prompt?` (≤ 200 characters) | `{ state: "pending", id }` |
 | `request` | `kind: "oauth"`, `provider`, `oauth` (an object) | the same |
@@ -200,7 +247,7 @@ The npm package `@ai-ecoverse/slicc-vault` holds only TypeScript types, built fr
 - **`exits`** is present only when `/etc/slicc/secrets-policy.toml` restricts that secret; absent means every exit (`page`, `proxy`, `tailscale`, `device:<id>`).
 - **`kind`**: `secret` (a credential programs use through rules), **`grant`** (a sign-in's refresh token, never injected; show it as "Sign-in"), `model` (a model provider key), `mcp` (an MCP server credential). `provider` and `account` name the service and the signed-in account where one is known.
 - **`AuditEntry`**: `forward` is a use of a value in a request, with the exit that carried it; **`materialize` is shown as "Revealed to a program"**; `seal`, `remove`, `restore` and `policy` (with its `changes`) record changes. Every entry has a `seq` for paging.
-- **`VaultList.refused`** lists rules the vault dropped because they name a model or MCP endpoint.
+- **`VaultList.refused`** lists rules the vault dropped because they name a model or MCP endpoint (empty until VAULT-1b).
 - **`PendingRequest.prompt`** is untrusted, agent-written text of at most 200 characters.
 - **`ExitPolicyView`** is read-only: the secrets `/etc/slicc/secrets-policy.toml` restricts to certain exits.
 
