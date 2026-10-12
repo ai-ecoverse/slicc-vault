@@ -132,7 +132,7 @@ shell_per_day = 5000
 - `[exits]` is **optional**: a secret without a line may use every exit; a line restricts it to the exits listed (`page`, `proxy`, `tailscale`, `device:<name>`). Unknown names are dropped from the line with a warning, which leaves the line narrower, never wider.
 - `[limits]` overrides the defaults above with positive integers.
 
-Accepted policy is kept per namespace in IndexedDB, and loaded when an embedder says hello. Each file the vault hasn't seen before (by SHA-256) is audited once as a `policy` entry, with `accepted`, any `warning`, and its `changes` against the previously accepted file: rules `added` or `removed`, `exec` modes, `exits` lines and `limits`. Accepting a change pushes `changed` with `secrets`, `exits` and `audit`.
+Accepted policy is kept per namespace in IndexedDB, and loaded when an embedder says hello. Each file is audited once per SHA-256 and verdict (the vault remembers the last 64 per file) as a `policy` entry, with `accepted`, any `warning`, and its `changes` against the previously accepted file: rules `added` or `removed`, `exec` modes, `exits` lines and `limits`. Any change to the accepted policy, or a new audit entry, pushes `changed` with `secrets`, `exits` and `audit`, and other vault documents of the namespace reload the policy. Each `policy` call reads, merges and writes the stored policy in one transaction, so two pages can't undo each other's update.
 
 ## Scrub state
 

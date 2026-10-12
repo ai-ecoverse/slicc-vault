@@ -13,6 +13,11 @@ export class TomlError extends Error {
 }
 
 const BARE = /[A-Za-z0-9_-]/;
+const DATE = /^\d{4}-\d{2}-\d{2}([Tt]\d{2}:\d{2}(:\d{2}(\.\d+)?)?([Zz]|[+-]\d{2}:\d{2})?)?$/;
+const TIME = /^\d{2}:\d{2}:\d{2}(\.\d+)?$/;
+const SPECIAL = /^[+-]?(inf|nan)$/;
+const RADIX = /^0([xob])([0-9A-Fa-f](_?[0-9A-Fa-f])*)$/;
+const DECIMAL = /^[+-]?(0|[1-9](_?[0-9])*)(\.[0-9](_?[0-9])*)?([eE][+-]?[0-9](_?[0-9])*)?$/;
 const ESCAPES: Record<string, string> = {
   b: '\b',
   t: '\t',
@@ -197,10 +202,31 @@ class Parser {
     this.pos += token.length;
     if (token === 'true') return true;
     if (token === 'false') return false;
-    if (/^[+-]?(0|[1-9](_?[0-9])*)(\.[0-9](_?[0-9])*)?([eE][+-]?[0-9](_?[0-9])*)?$/.test(token)) {
-      return Number(token.replace(/_/g, ''));
-    }
+    if (DATE.test(token)) return token + this.time();
+    if (TIME.test(token)) return token;
+    if (SPECIAL.test(token))
+      return token.endsWith('nan') ? Number.NaN : Number(token.replace('inf', 'Infinity'));
+    const radix = RADIX.exec(token);
+    if (radix) return this.radix(token, radix[1], radix[2]);
+    if (DECIMAL.test(token)) return Number(token.replace(/_/g, ''));
     return this.fail(`unsupported value ${token}`);
+  }
+
+  time(): string {
+    const time = /^ \d{2}:\d{2}(:\d{2}(\.\d+)?)?([Zz]|[+-]\d{2}:\d{2})?/.exec(
+      this.text.slice(this.pos)
+    );
+    if (!time) return '';
+    this.pos += time[0].length;
+    return time[0];
+  }
+
+  radix(token: string, kind: string, raw: string): number {
+    const base = kind === 'x' ? 16 : kind === 'o' ? 8 : 2;
+    const digits = raw.replace(/_/g, '');
+    const valid = { 16: /^[0-9A-Fa-f]+$/, 8: /^[0-7]+$/, 2: /^[01]+$/ }[base] as RegExp;
+    if (!valid.test(digits)) this.fail(`bad number ${token}`);
+    return Number.parseInt(digits, base);
   }
 
   escape(): string {
