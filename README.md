@@ -222,6 +222,7 @@ port.postMessage({ v: 1, id, op: 'forward', head, body, owner, exit, rawTraits }
 - **The response** goes back over `channel.port1`, scrubbed: bios posts `{ op: 'response', status, statusText, url, redirected?, headers }`, then any number of `{ op: 'body', chunk: Uint8Array }`, then `{ op: 'end' }` or `{ op: 'error', message }`. The vault answers with the same messages, with `statusText`, `url`, every header name and value, the body and the error scrubbed over every value of the namespace. A value in its raw form comes back as its placeholder, anything else as `[redacted:NAME]`. The body is scrubbed as a stream; after 250 ms without input, a held tail shorter than 16 bytes is let through.
 
 **The injector**, fnox's proxy semantics:
+- **Hosts** are compared lower-cased, without a trailing dot, in rules, the refusal list and MCP servers alike.
 - **Refused before anything is sent:** a placeholder in the URL or in a header name; credentials in the URL; a scheme other than `https:` or a port other than 443 (except §3.16.3's kernel servers, below); an ambiguous path (`.`/`..` segments, `\`, `%2e`, `%2f`, `%5c`, `%25`, checked on the raw URL); an exit with encoded bodies; no placeholder of this vault at all; a record that is removed, expired ("NAME expired; refreshing") or not a `secret`; a locked vault; no rule (in `/etc/fnox/config.toml`) whose exact domain, header, method and path allow it; an exit the secret's `[exits]` line doesn't list; the same placeholder twice in one header value; a header other than `authorization` on an exit that follows redirects (`manualRedirects` false); CR, LF or NUL after substitution.
 - **Paths** in rules are globs: `*` stays within a segment, `**` crosses segments, `?` is one character.
 - **Injected:** each placeholder is replaced inside the rule's header value, so `Bearer …` and `token …` templates work. In `Authorization: Basic`, the credential is decoded, the user and password parts substituted (a substituted user may not contain `:`), and re-encoded. A Basic value that holds a placeholder but isn't valid base64 of UTF-8 is refused.
@@ -248,6 +249,8 @@ The vault never injects a secret into a model or MCP endpoint, whatever a rule s
 | `end` | `stream` | `{ chunk, hits }`: the rest, and the stream is gone |
 | `drop` | `stream` | `{}` |
 | `endpoints` | `model?`: https base URLs; `mcp?`: `{ server, url, names? }` or a URL string | `{ ok: true }`; new entries re-check the policy and push `changed` |
+
+A stream is compiled against the namespace's values when it opens. If a value is added, rotated or removed while it's open, its next `push`, `idle` or `end` answers `EAGAIN` and the stream is gone: open it again and push the output from its start.
 
 `redact` and `redactStream` need a compiled scrubber: with the lock on, before the first unlock since the frame loaded, they answer `EACCES` ("unlock the vault to continue"). They never return a value: matches are replaced, everything else passes through.
 

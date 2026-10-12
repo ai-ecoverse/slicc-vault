@@ -11,7 +11,7 @@ const LOCKED = 'vault is locked: unlock it in the vault window to continue';
 export class AgentPort {
   readonly vault: Vault;
   readonly ns: string;
-  readonly streams = new Map<string, Stream>();
+  readonly streams = new Map<string, { stream: Stream; version: number }>();
 
   constructor(vault: Vault, ns: string) {
     this.vault = vault;
@@ -59,25 +59,34 @@ export class AgentPort {
       throw new Refused('EAGAIN', `at most ${MAX_STREAMS} streams are open`);
     }
     return this.scrubber().then((scrubber) => {
-      this.streams.set(id, scrubber.stream());
+      this.streams.set(id, { stream: scrubber.stream(), version: scrubber.version });
       return { stream: id, idleMs: scrubber.idleMs, version: scrubber.version };
     });
   }
 
-  stream(fields: Fields): Stream {
-    const found = this.streams.get(this.id(fields));
+  async stream(fields: Fields): Promise<Stream> {
+    const id = this.id(fields);
+    const found = this.streams.get(id);
     if (!found) throw new Refused('ENOENT', 'no such stream');
-    return found;
+    const current = await this.scrubber();
+    if (current.version !== found.version) {
+      this.streams.delete(id);
+      throw new Refused(
+        'EAGAIN',
+        "the vault's values changed; open the stream again and push from its start"
+      );
+    }
+    return found.stream;
   }
 
-  push(fields: Fields): Fields {
+  async push(fields: Fields): Promise<Fields> {
     const chunk = fields.chunk;
     if (!(chunk instanceof Uint8Array)) throw new Refused('EINVAL', 'chunk must be bytes');
-    return { chunk: this.stream(fields).push(chunk) };
+    return { chunk: (await this.stream(fields)).push(chunk) };
   }
 
-  end(fields: Fields): Fields {
-    const stream = this.stream(fields);
+  async end(fields: Fields): Promise<Fields> {
+    const stream = await this.stream(fields);
     this.streams.delete(this.id(fields));
     return { chunk: stream.end(), hits: stream.hits };
   }
@@ -105,7 +114,7 @@ export class AgentPort {
       case 'push':
         return this.push(fields);
       case 'idle':
-        return { chunk: this.stream(fields).idle() };
+        return this.stream(fields).then((stream) => ({ chunk: stream.idle() }));
       case 'end':
         return this.end(fields);
       case 'drop':

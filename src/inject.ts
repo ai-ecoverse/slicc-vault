@@ -2,7 +2,7 @@ import type { ExitName, Rule, Stamp } from './contract.ts';
 import { decrypt } from './keys.ts';
 import type { Policy } from './policy.ts';
 import { aad, removed, rulesFor, type VaultRecord } from './records.ts';
-import { type McpServer, mcpServer, type Registered, refusedUrl } from './refusal.ts';
+import { hostOf, type McpServer, mcpServer, type Registered, refusedUrl } from './refusal.ts';
 
 export interface Head {
   method: string;
@@ -124,7 +124,7 @@ class Injector {
     const url = URL.parse(input.head.url);
     if (!url) throw new Refusal('the request has no valid URL');
     this.url = url;
-    this.host = url.hostname.toLowerCase().replace(/\.$/, '');
+    this.host = hostOf(url);
     this.path = url.pathname;
     this.method = input.head.method.toUpperCase();
     this.byPlaceholder = new Map(input.records.map((record) => [record.placeholder, record]));
@@ -230,7 +230,7 @@ class Injector {
     if (header !== 'authorization' || !match) return value;
     const decoded = unbase64(match[2]);
     if (decoded === null) {
-      if (this.known(loose(match[2])).length) {
+      if (this.known(`${match[2]} ${loose(match[2])}`).length) {
         throw new Refusal(
           'a Basic credential that holds a placeholder must be valid base64 of UTF-8'
         );
