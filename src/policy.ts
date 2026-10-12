@@ -73,6 +73,10 @@ export function parseRule(entry: TomlValue, index: number, warnings: string[]) {
     return null;
   }
   const domain = entry.domain.toLowerCase();
+  if (entry.header !== undefined && typeof entry.header !== 'string') {
+    warnings.push(`${where}: header must be a header name`);
+    return null;
+  }
   const header = typeof entry.header === 'string' ? entry.header.toLowerCase() : 'authorization';
   const methods = strings(entry.methods);
   const paths = strings(entry.paths);
