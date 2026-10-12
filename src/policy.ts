@@ -131,8 +131,10 @@ export function parseConfig(text: string, warnings: string[]): ConfigPolicy {
 function execEntry(name: string, value: TomlValue, warnings: string[]) {
   if (value === true) return { mode: 'any' as const };
   if (value === false) return null;
-  if (isTable(value) && value.shell === true) return { mode: 'shell' as const };
-  const argv = isTable(value) ? value.argv : undefined;
+  const keys = isTable(value) ? Object.keys(value) : [];
+  const only = (key: string) => keys.length === 1 && keys[0] === key;
+  if (isTable(value) && only('shell') && value.shell === true) return { mode: 'shell' as const };
+  const argv = isTable(value) && only('argv') ? value.argv : undefined;
   const lists = Array.isArray(argv) ? argv.map((item) => strings(item)) : [];
   if (
     lists.length > 0 &&
