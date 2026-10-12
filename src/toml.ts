@@ -264,30 +264,37 @@ class Parser {
     return out;
   }
 
+  closing(fence: string): boolean {
+    if (!this.text.startsWith(fence, this.pos)) return false;
+    let run = 3;
+    while (run < 5 && this.text[this.pos + run] === fence[0]) run++;
+    return this.text[this.pos + run] !== fence[0];
+  }
+
+  close(fence: string): string {
+    let extra = '';
+    while (this.text.slice(this.pos + extra.length + 1, this.pos + extra.length + 4) === fence)
+      extra += fence[0];
+    this.pos += extra.length + 3;
+    return extra;
+  }
+
   multiline(quote: string): string {
     const fence = quote.repeat(3);
     this.pos += 3;
     if (this.peek() === '\r') this.pos++;
     if (this.peek() === '\n') this.pos++;
-    const end = this.text.indexOf(fence, this.pos);
-    if (end < 0) this.fail('unterminated string');
-    if (quote === "'") {
-      const raw = this.text.slice(this.pos, end);
-      this.pos = end + 3;
-      return raw;
-    }
     let out = '';
-    while (!this.text.startsWith(fence, this.pos)) {
+    while (!this.closing(fence)) {
       const char = this.peek();
       if (char === '') this.fail('unterminated string');
       this.pos++;
-      if (char !== '\\') out += char;
+      if (quote === "'" || char !== '\\') out += char;
       else if (/[\s]/.test(this.peek())) {
         while (/[\s]/.test(this.peek())) this.pos++;
       } else out += this.escape();
     }
-    this.pos += 3;
-    return out;
+    return out + this.close(fence);
   }
 
   array(): TomlValue[] {
