@@ -95,6 +95,10 @@ function problem(attestation: Attestation, sha256: string): string | null {
   return null;
 }
 
+async function digest(bytes: Uint8Array): Promise<string> {
+  return hex(new Uint8Array(await crypto.subtle.digest('SHA-256', new Uint8Array(bytes))));
+}
+
 export async function verify(value: unknown): Promise<Verdict> {
   const path =
     typeof (value as Fields | null)?.path === 'string' ? ((value as Fields).path as string) : '';
@@ -104,10 +108,12 @@ export async function verify(value: unknown): Promise<Verdict> {
   }
   if (!wellFormed(value)) {
     const warning = `rules not trusted: ${path}: the attestation isn't in the kernel's format`;
-    return { trusted: false, path, sha256: null, warning };
+    const bytes = (value as Fields).bytes;
+    const sha256 = bytes instanceof Uint8Array ? await digest(bytes) : null;
+    return { trusted: false, path, sha256, warning };
   }
   const bytes = new Uint8Array(value.bytes);
-  const sha256 = hex(new Uint8Array(await crypto.subtle.digest('SHA-256', bytes)));
+  const sha256 = await digest(bytes);
   const issue = problem(value, sha256);
   if (issue)
     return { trusted: false, path, sha256, warning: `rules not trusted: ${path}: ${issue}` };
