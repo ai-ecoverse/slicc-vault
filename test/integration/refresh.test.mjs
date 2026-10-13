@@ -96,6 +96,38 @@ test('a route (b) sign-in is sealed against its request, with a grant that refre
     window.harness.call('refresh', { name: 'GITHUB_TOKEN' })
   );
   assert.equal(failed.error.message, 'refresh failed: invalid_grant');
+  await page.evaluate(() => {
+    window.harness.egress.answer = {
+      status: 200,
+      headers: [],
+      body: '{"access_token":"fake-access-token-0003","expires_in":-5}',
+    };
+  });
+  const invalid = await page.evaluate(() =>
+    window.harness.call('refresh', { name: 'GITHUB_TOKEN' })
+  );
+  assert.equal(invalid.error.code, 'EACCES');
+  assert.equal(invalid.error.message, 'refresh failed: the IdP returned an invalid expires_in');
+  const mismatched = await page.evaluate(async () => [
+    await window.harness.call('seal', {
+      name: 'WRONG_LEASE',
+      value: 'fake-access-token-0004',
+      source: 'oauth:github',
+      refresh: 'jerk-seal',
+      expiresAt: Date.now() + 60000,
+    }),
+    await window.harness.call('seal', {
+      name: 'WRONG_TOKEN',
+      value: 'fake-lease-value-0004',
+      source: 'jerk:npm@air',
+      refresh: 'GITHUB_GRANT',
+      expiresAt: Date.now() + 60000,
+    }),
+  ]);
+  assert.deepEqual(
+    mismatched.map((r) => r.error.code),
+    ['EINVAL', 'EINVAL']
+  );
   const audit = (await page.evaluate(() => window.harness.call('audit', { limit: 20 }))).audit;
   assert.ok(
     audit.some(
