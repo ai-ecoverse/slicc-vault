@@ -150,13 +150,16 @@ export class Refresher {
   }
 
   async locked(ns: string, name: string, seen: VaultRecord): Promise<Fields> {
-    const record = await this.token(ns, name);
-    if (record.refresh !== seen.refresh) throw new Refused('EAGAIN', `${name} changed meanwhile`);
-    if (record.updatedAt !== seen.updatedAt && !due(record, this.vault.now())) {
-      return { state: 'refreshed', expiresAt: record.expiresAt };
+    const held = await records(this.vault.db, ns);
+    const record = held.find((r) => r.kind === 'secret' && r.name === name && !removed(r));
+    if (!record) throw new Refused('ENOENT', `${name} has no refresh source`);
+    if (record.updatedAt !== seen.updatedAt) {
+      return {
+        state: 'refreshed',
+        ...(record.expiresAt === undefined ? {} : { expiresAt: record.expiresAt }),
+      };
     }
     if (record.refresh === JERK) return this.jerk(ns, record);
-    const held = await records(this.vault.db, ns);
     const grant = held.find((r) => r.kind === 'grant' && r.name === record.refresh && !removed(r));
     if (!grant?.oauth) throw new Refused('ENOENT', `${name}'s grant ${record.refresh} is missing`);
     return this.oauth(ns, record, grant);
