@@ -119,6 +119,33 @@ test('jerk list and status are answered by the page through the vault', async (t
     lease.placeholder
   );
   assert.match(otherProvider.error.message, /not one of this provider's records/);
+  const oauth = await page.evaluate(() =>
+    window.harness.call('seal', {
+      name: 'GITLAB_TOKEN',
+      value: 'fake-oauth-value-0001',
+      source: 'oauth:gitlab',
+    })
+  );
+  const wrongOauth = await page.evaluate(
+    (id, placeholder) =>
+      window.harness.call('answer', { request: id, state: 'done', exit: 0, placeholder }),
+    forged.id,
+    oauth.placeholder
+  );
+  assert.match(wrongOauth.error.message, /not one of this provider's records/);
+  const gitlab = await sealed(
+    page,
+    { op: 'request', kind: 'jerk', jop: 'status', provider: 'gitlab' },
+    SCOOP
+  );
+  await page.evaluate(
+    (id, placeholder) =>
+      window.harness.call('answer', { request: id, state: 'done', exit: 0, placeholder }),
+    gitlab.id,
+    oauth.placeholder
+  );
+  const gitlabStatus = await sealed(page, { op: 'status', id: gitlab.id }, SCOOP);
+  assert.equal(gitlabStatus.placeholder, oauth.placeholder);
   await page.evaluate(
     (id) =>
       window.harness.call('answer', {
