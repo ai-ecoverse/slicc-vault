@@ -207,6 +207,7 @@ test('an MCP sign-in is sealed by grant and refreshed in the vault through egres
       refresh_token: 'fake-mcp-refresh-0106',
       expires_in: 3600,
       token_type: 'Bearer',
+      id_token: 'fake-id-token-0108',
     }),
   });
   const shown = JSON.parse(granted.response);
@@ -216,6 +217,7 @@ test('an MCP sign-in is sealed by grant and refreshed in the vault through egres
   );
   assert.equal(shown.access_token, granted.records[0].placeholder);
   assert.equal(shown.refresh_token, granted.records[1].placeholder);
+  assert.equal(shown.id_token, undefined);
   const call = await ask('mcp', {
     server: 'docs',
     request: req('https://docs.example.com/mcp', [

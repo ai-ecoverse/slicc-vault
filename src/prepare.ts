@@ -30,6 +30,7 @@ export const MAX_BODY = 32 * 1024 * 1024;
 const FOUND = /fnox_proxy_[0-9a-f]{24}/g;
 const METHOD = /^[A-Z]{1,16}$/;
 const TOKEN = /^[!#$%&'*+.^_`|~0-9A-Za-z-]+$/;
+const SHOWN = ['token_type', 'expires_in', 'scope'];
 const LOCKED = 'vault is locked: unlock it in the vault window to continue';
 
 export function outgoing(value: unknown): Outgoing {
@@ -136,6 +137,7 @@ export class Preparer {
         throw new Refused('EACCES', `${found.name} is sent only to ${target.who}'s own endpoints`);
       }
       const record = await this.usable(found);
+      held.set(placeholder, record);
       const key = this.vault.keyring.key;
       if (!key) throw new Refused('EACCES', LOCKED);
       const value = await decrypt(key, record.sealed, aad(record.ns, record.kind, record.name));
@@ -267,7 +269,7 @@ export class Preparer {
       await this.vault.scrubbers.get(this.ns)
     );
     checkValue(got.access);
-    if (got.refresh) checkValue(got.refresh);
+    if (got.refresh !== null) checkValue(got.refresh);
     const now = this.vault.now();
     const source = `oauth:mcp:${server.replace(/\s/g, '_')}` as const;
     const dek = this.vault.keyring.use();
@@ -279,19 +281,25 @@ export class Preparer {
       value: got.access,
       server,
       ...(got.expires === null ? {} : { expiresAt: now + got.expires * 1000 }),
-      ...(got.refresh ? { refresh: grantName } : {}),
+      ...(got.refresh !== null ? { refresh: grantName } : {}),
     };
-    const grant: SealInput[] = got.refresh
-      ? [{ ...common, kind: 'grant', name: grantName, value: got.refresh, oauth }]
-      : [];
+    const grant: SealInput[] =
+      got.refresh !== null
+        ? [{ ...common, kind: 'grant', name: grantName, value: got.refresh, oauth }]
+        : [];
     const written = (await sealAll(this.vault.db, dek, [access, ...grant])).map((s) => s.record);
     const [sealedAccess, sealedGrant] = written;
     await this.vault.changed(this.ns, ['secrets', 'audit']);
     const raw = typeof response === 'string' ? response : text(response);
     const parsed = JSON.parse(raw) as Fields;
-    parsed.access_token = sealedAccess.placeholder;
-    if (sealedGrant) parsed.refresh_token = sealedGrant.placeholder;
-    const rewritten = JSON.stringify(parsed);
+    const kept = Object.fromEntries(
+      SHOWN.filter((field) => parsed[field] !== undefined).map((field) => [field, parsed[field]])
+    );
+    const rewritten = JSON.stringify({
+      ...kept,
+      access_token: sealedAccess.placeholder,
+      ...(sealedGrant ? { refresh_token: sealedGrant.placeholder } : {}),
+    });
     const shown = written.map((r) => ({
       kind: r.kind,
       name: r.name,
