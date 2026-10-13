@@ -125,7 +125,7 @@ export class Preparer {
     held: Map<string, VaultRecord>,
     target: Target,
     url: boolean,
-    seen: { refreshed: boolean }
+    seen: { refreshes: number }
   ) {
     let out = text;
     for (const placeholder of new Set(text.match(FOUND) ?? [])) {
@@ -143,7 +143,7 @@ export class Preparer {
       }
       const record = await this.usable(found);
       if (record !== found) {
-        seen.refreshed = true;
+        seen.refreshes += 1;
         if (!target.owns(record)) {
           throw new Refused('EACCES', `${record.name} changed while it was refreshed; try again`);
         }
@@ -168,14 +168,14 @@ export class Preparer {
     }
     const first = await this.scrubber();
     const held = new Map((await records(this.vault.db, this.ns)).map((r) => [r.placeholder, r]));
-    const seen = { refreshed: false };
+    const seen = { refreshes: 0 };
     const url = await this.fill(request.url, held, target, true, seen);
     const headers: [string, string][] = [];
     for (const [name, value] of request.headers) {
       headers.push([name, await this.fill(value, held, target, false, seen)]);
     }
     const scrubber = await this.scrubber();
-    if (!seen.refreshed && scrubber.version !== first.version) {
+    if (scrubber.version !== first.version + seen.refreshes) {
       throw new Refused(
         'EAGAIN',
         "the vault's values changed meanwhile; prepare the request again"
@@ -426,7 +426,12 @@ export class Preparer {
         `${byServer ? server : provider} has several; name the one to refresh`
       );
     }
-    return this.vault.refresher.refresh(this.ns, found.name, found.kind as TokenKind);
+    const before = await this.scrubber();
+    const reply = await this.vault.refresher.refresh(this.ns, found.name, found.kind as TokenKind);
+    const expiry = reply.expiresAt;
+    if (typeof expiry !== 'number' || before.text(String(expiry)).hits.length === 0) return reply;
+    const { expiresAt: _echo, ...rest } = reply;
+    return rest;
   }
 }
 
