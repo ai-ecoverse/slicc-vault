@@ -17,6 +17,7 @@ export const REFUSED_PROGRAMS = [
   /^(sh|bash|dash|zsh|fish|busybox|jsh)$/,
   /^python[0-9.]*$/,
   /^(node|deno|bun|perl|ruby|php|lua|wasmer)$/,
+  /^([gmn]?awk|sed|tclsh|expect|R|Rscript|irb)$/,
   /^(env|printenv|xargs|sudo|su|nohup|timeout|time|nice|strace)$/,
 ];
 
@@ -293,7 +294,7 @@ export class Exec {
     this.tickets.delete(id);
     if (!found || found.ns !== ns) return fail('unknown or already used');
     matching(found, req, this.vault.now());
-    granted(this.vault.policy(ns), found, chainOf(found, req));
+    granted(await this.vault.loadPolicy(ns), found, chainOf(found, req));
     const key = this.vault.keyring.key;
     if (!key) throw new Refused('EACCES', 'vault is locked: unlock it in the vault window');
     const held = await records(this.vault.db, ns);

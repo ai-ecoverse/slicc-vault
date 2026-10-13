@@ -251,15 +251,15 @@ test("the kernel's interpreter chain decides, not fnox's claim", async (t) => {
   });
   assert.equal(viaSh.error.code, 'EACCES');
   assert.match(viaSh.error.message, /fnox's interpreter isn't the one the kernel resolved/);
-  const chained = await materialize(page, { ...script, interpreter: '/usr/bin/awk' });
+  const chained = await materialize(page, { ...script, interpreter: '/usr/bin/jq' });
   const viaChain = await consume(page, {
     ...script,
     ticket: chained.ticket,
     stamp: CHILD,
-    interpreters: ['/usr/bin/awk', '/bin/sh'],
+    interpreters: ['/usr/bin/jq', '/bin/sh'],
   });
   assert.match(viaChain.error.message, /NPM_TOKEN isn't revealed to \/bin\/sh/);
-  const claimed = await materialize(page, { ...script, interpreter: '/usr/bin/awk' });
+  const claimed = await materialize(page, { ...script, interpreter: '/usr/bin/jq' });
   const mismatch = await consume(page, {
     ...script,
     ticket: claimed.ticket,
