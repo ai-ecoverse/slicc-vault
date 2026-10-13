@@ -1,0 +1,158 @@
+{
+  "source": "slicc-agent-plan/evidence/b4-oauth-refresh-cases.json",
+  "cases": [
+    {
+      "id": "dup-access-token",
+      "area": "token-response",
+      "setup": {
+        "response": {
+          "status": 200,
+          "headers": {
+            "content-type": "application/json"
+          },
+          "body": "{\"access_token\":\"first\",\"access_token\":\"second\",\"token_type\":\"Bearer\"}"
+        },
+        "tokenUrl": "https://auth.example/token",
+        "nowSecs": 1000
+      },
+      "jerkOauth": {
+        "result": "accept",
+        "fields": {
+          "accessToken": "second"
+        }
+      },
+      "vault": {
+        "result": "refuse",
+        "message": "refresh failed: the IdP returned access_token twice"
+      },
+      "note": "duplicate keys: record which wins. serde_json: the last duplicate wins (JS JSON.parse does the same)."
+    },
+    {
+      "id": "dup-token-type",
+      "area": "token-response",
+      "setup": {
+        "response": {
+          "status": 200,
+          "headers": {
+            "content-type": "application/json"
+          },
+          "body": "{\"access_token\":\"at\",\"token_type\":\"mac\",\"token_type\":\"Bearer\"}"
+        },
+        "tokenUrl": "https://auth.example/token",
+        "nowSecs": 1000
+      },
+      "jerkOauth": {
+        "result": "accept",
+        "fields": {
+          "accessToken": "at"
+        }
+      },
+      "vault": {
+        "result": "refuse",
+        "message": "refresh failed: the IdP returned token_type twice"
+      },
+      "note": "duplicate token_type (mac, then Bearer): record which wins. last duplicate wins, so mac-then-Bearer is accepted; a stricter vault may refuse duplicate keys outright."
+    },
+    {
+      "id": "dup-refresh-token",
+      "area": "token-response",
+      "setup": {
+        "response": {
+          "status": 200,
+          "headers": {
+            "content-type": "application/json"
+          },
+          "body": "{\"access_token\":\"at\",\"refresh_token\":\"rt-a\",\"refresh_token\":\"rt-b\",\"token_type\":\"Bearer\"}"
+        },
+        "tokenUrl": "https://auth.example/token",
+        "nowSecs": 1000
+      },
+      "jerkOauth": {
+        "result": "accept",
+        "fields": {
+          "accessToken": "at",
+          "refreshToken": "rt-b"
+        }
+      },
+      "vault": {
+        "result": "refuse",
+        "message": "refresh failed: the IdP returned refresh_token twice"
+      },
+      "note": "duplicate refresh_token: record which wins. last duplicate wins."
+    },
+    {
+      "id": "url-userinfo",
+      "area": "token-url",
+      "setup": {
+        "tokenUrl": "https://user:pw@auth.example/token"
+      },
+      "jerkOauth": {
+        "result": "refuse",
+        "kind": "config_invalid",
+        "message": "token_url: must not contain userinfo",
+        "note": "refreshRequest(config with this token_url, refreshToken) result"
+      },
+      "vault": {
+        "result": "refuse",
+        "code": "EINVAL"
+      },
+      "note": "userinfo"
+    },
+    {
+      "id": "url-userinfo-user",
+      "area": "token-url",
+      "setup": {
+        "tokenUrl": "https://user@auth.example/token"
+      },
+      "jerkOauth": {
+        "result": "refuse",
+        "kind": "config_invalid",
+        "message": "token_url: must not contain userinfo",
+        "note": "refreshRequest(config with this token_url, refreshToken) result"
+      },
+      "vault": {
+        "result": "refuse",
+        "code": "EINVAL"
+      },
+      "note": "username only"
+    },
+    {
+      "id": "url-userinfo-empty",
+      "area": "token-url",
+      "setup": {
+        "tokenUrl": "https://:@auth.example/token"
+      },
+      "jerkOauth": {
+        "result": "accept",
+        "fields": {
+          "url": "https://:@auth.example/token",
+          "body": "grant_type=refresh_token&refresh_token=rt-x&client_id=cid"
+        },
+        "note": "refreshRequest(config with this token_url, refreshToken) result"
+      },
+      "vault": {
+        "result": "refuse",
+        "code": "EINVAL"
+      },
+      "note": "empty userinfo: the URL parser drops it. accepted and returned verbatim (\"https://:@\u2026\"); fetch/URL drops the empty userinfo, so no credentials are sent."
+    },
+    {
+      "id": "url-userinfo-loopback",
+      "area": "token-url",
+      "setup": {
+        "tokenUrl": "http://a:b@127.0.0.1:9/token"
+      },
+      "jerkOauth": {
+        "result": "refuse",
+        "kind": "config_invalid",
+        "message": "token_url: must not contain userinfo",
+        "note": "refreshRequest(config with this token_url, refreshToken) result"
+      },
+      "vault": {
+        "result": "refuse",
+        "code": "EINVAL"
+      },
+      "note": "userinfo on loopback"
+    }
+  ]
+}
