@@ -176,6 +176,12 @@ export class Preparer {
       body = again.body;
       hits = [...hits, ...again.hits];
     }
+    if ((await this.scrubber()).version !== scrubber.version) {
+      throw new Refused(
+        'EAGAIN',
+        "the vault's values changed meanwhile; prepare the request again"
+      );
+    }
     return {
       request: {
         method: request.method,
@@ -340,7 +346,12 @@ export class Preparer {
     const parsed = JSON.parse(raw) as Fields;
     const scrubber = (await this.vault.scrubbers.get(this.ns)) as Scrubber;
     const rewritten = JSON.stringify({
-      ...plainFields(parsed, scrubber),
+      ...plainFields(parsed, scrubber, [
+        [got.access, sealedAccess.placeholder],
+        ...(sealedGrant
+          ? [[got.refresh as string, sealedGrant.placeholder] as [string, string]]
+          : []),
+      ]),
       access_token: sealedAccess.placeholder,
       ...(sealedGrant ? { refresh_token: sealedGrant.placeholder } : {}),
     });
@@ -385,14 +396,15 @@ export class Preparer {
   }
 }
 
-function plainFields(parsed: Fields, scrubber: Scrubber): Fields {
+function plainFields(parsed: Fields, scrubber: Scrubber, swaps: [string, string][]): Fields {
+  const swap = (text: string) =>
+    swaps.reduce((out, [token, placeholder]) => out.split(token).join(placeholder), text);
   const kept: Fields = {};
   if (typeof parsed.token_type === 'string') kept.token_type = parsed.token_type;
   const lifetime = parsed.expires_in;
-  if (typeof lifetime === 'number' && scrubber.text(String(lifetime)).hits.length === 0) {
-    kept.expires_in = lifetime;
-  }
-  if (typeof parsed.scope === 'string') kept.scope = scrubber.text(parsed.scope).text;
+  const echoes = (text: string) => scrubber.text(text).hits.length > 0 || swap(text) !== text;
+  if (typeof lifetime === 'number' && !echoes(String(lifetime))) kept.expires_in = lifetime;
+  if (typeof parsed.scope === 'string') kept.scope = scrubber.text(swap(parsed.scope)).text;
   return kept;
 }
 

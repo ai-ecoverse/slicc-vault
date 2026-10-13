@@ -287,9 +287,9 @@ function bound(existing: VaultRecord | undefined, input: SealInput): Partial<Vau
   const provider = input.provider ?? existing?.provider;
   const server = input.server ?? existing?.server;
   const settings = input.settings ?? existing?.settings;
-  const url = input.url ?? existing?.url;
-  if (url !== undefined) out.url = url;
-  if (input.source === 'process' && input.kind === 'mcp') out.sealedBy = input.uid as number;
+  const bridge = input.source === 'process' && input.kind === 'mcp';
+  if (input.url !== undefined) out.url = input.url;
+  if (bridge) out.sealedBy = input.uid as number;
   if (provider !== undefined) out.provider = provider;
   if (server !== undefined) out.server = server;
   if (settings !== undefined) out.settings = settings;

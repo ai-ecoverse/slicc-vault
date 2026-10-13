@@ -453,4 +453,19 @@ test('a kernel bridge seals its own loopback token, which only that server gets'
     ]),
   });
   assert.match(elsewhere.error.message, /isn't a credential of docs/);
+  await page.evaluate(() =>
+    window.harness.call('put', {
+      name: 'MCP_BRIDGE_TOKEN',
+      value: 'fake-rebound-0135',
+      kind: 'mcp',
+      server: 'docs',
+    })
+  );
+  const rebound = await ask('mcp', {
+    server: 'docs',
+    request: req('https://docs.example.com/mcp', [
+      ['authorization', `Bearer ${sealed.placeholder}`],
+    ]),
+  });
+  assert.deepEqual(rebound.request.headers, [['authorization', 'Bearer fake-rebound-0135']]);
 });
