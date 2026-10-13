@@ -61,8 +61,6 @@ export function binding(kind: RecordKind, request: Record<string, unknown>): Bin
     (kind !== 'model' || typeof provider !== 'string' || !PROVIDER.test(provider))
   )
     throw new Refused('EINVAL', 'provider is a pi-ai provider id, for a model record');
-  if (kind === 'model' && provider === undefined)
-    throw new Refused('EINVAL', 'a model record needs its provider');
   if (
     server !== undefined &&
     (kind !== 'mcp' ||
@@ -295,6 +293,9 @@ export async function seal(db: IDBDatabase, dek: Dek, input: SealInput): Promise
       ...(input.oauth === undefined ? {} : { oauth: input.oauth }),
       ...bound(existing, input),
     };
+    if (record.kind === 'model' && record.provider === undefined) {
+      throw new Refused('EINVAL', 'a model record needs its provider');
+    }
     await request(store.put(record));
     if (input.answers) await answered(tx, input.ns, input.answers, record.placeholder, input.now);
     await bump(tx, input.ns);

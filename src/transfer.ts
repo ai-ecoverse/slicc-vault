@@ -253,6 +253,10 @@ export function problem(
 ): string | null {
   if (!NAME.test(item.name) || item.name.length > 128) return 'not a valid name';
   if (item.invalid) return item.invalid;
+  const providedHere = held.some((r) => r.kind === 'model' && r.name === item.name && r.provider);
+  if (item.kind === 'model' && !item.bound?.provider && !providedHere) {
+    return 'a model record needs its provider';
+  }
   try {
     checkValue(item.value);
   } catch (error) {

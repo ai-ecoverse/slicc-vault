@@ -2,7 +2,7 @@ import type { Hit, Scrubber } from '@ai-ecoverse/slicc-scrub';
 import { text } from './bytes.ts';
 import { Refused } from './errors.ts';
 import { decrypt } from './keys.ts';
-import { aad, NAME, records, removed, seal, type VaultRecord } from './records.ts';
+import { aad, checkValue, NAME, records, removed, seal, type VaultRecord } from './records.ts';
 import { checkOAuth, type TokenKind, tokens } from './refresh.ts';
 import { kernelPort, modelFor, serverFor } from './refusal.ts';
 import { loadRegistered } from './rules.ts';
@@ -49,7 +49,12 @@ export function outgoing(value: unknown): Outgoing {
       'request must be { method, url, headers: [name, value][], body?: string | bytes }'
     );
   }
-  const size = typeof body === 'string' ? body.length * 3 : (body?.byteLength ?? 0);
+  const size =
+    typeof body === 'string'
+      ? body.length * 3 <= MAX_BODY
+        ? 0
+        : new TextEncoder().encode(body).byteLength
+      : (body?.byteLength ?? 0);
   if (size > MAX_BODY) throw new Refused('EINVAL', 'request bodies are at most 32 MiB');
   return {
     method: given.method as string,
@@ -137,6 +142,10 @@ export class Preparer {
       throw new Refused('EACCES', 'model and MCP requests go out over https only');
     }
     const scrubber = await this.scrubber();
+    const head = [request.url, ...request.headers.map(([, value]) => value)];
+    if (head.some((text) => scrubber.text(text).hits.length > 0)) {
+      throw new Refused('EACCES', 'the request head carries a value; send its placeholder instead');
+    }
     const held = new Map((await records(this.vault.db, this.ns)).map((r) => [r.placeholder, r]));
     const url = await this.fill(request.url, held, target, true);
     const headers: [string, string][] = [];
@@ -248,6 +257,8 @@ export class Preparer {
       { status: 200, headers: [], body: response },
       await this.vault.scrubbers.get(this.ns)
     );
+    checkValue(got.access);
+    if (got.refresh) checkValue(got.refresh);
     const now = this.vault.now();
     const source = `oauth:mcp:${server.replace(/\s/g, '_')}` as const;
     const dek = this.vault.keyring.use();

@@ -93,6 +93,10 @@ test('model prepares a request with its provider key and the body scrubbed', asy
   assert.match(leaked.error.message, /never sent to model or MCP endpoints/);
   const insecure = await ask('model', { request: req('http://localhost:11434/v1', []) });
   assert.match(insecure.error.message, /https only/);
+  const raw = await ask('model', {
+    request: req('https://elsewhere.example.com/v1', [['x-api-key', MODEL_KEY]]),
+  });
+  assert.match(raw.error.message, /head carries a value/);
 });
 
 test('mcp fills its server credential on the kernel loopback, and never sends one elsewhere', async (t) => {
@@ -135,7 +139,7 @@ test('mcp fills its server credential on the kernel loopback, and never sends on
 });
 
 test('records lists model and mcp records, never values or secrets', async (t) => {
-  const { ask } = await ready(t);
+  const { page, ask } = await ready(t);
   const listed = (await ask('records', {})).records;
   assert.ok(!JSON.stringify(listed).includes('fake-'));
   assert.deepEqual(listed.map((r) => r.name).sort(), [
@@ -148,6 +152,20 @@ test('records lists model and mcp records, never values or secrets', async (t) =
     [anthropic.kind, anthropic.provider, anthropic.state, anthropic.settings],
     ['model', 'anthropic', 'ready', { NOTE: 'n' }]
   );
+  const rotated = await page.evaluate(() =>
+    window.harness.call('put', {
+      name: 'ANTHROPIC_API_KEY',
+      value: 'fake-model-key-0199',
+      kind: 'model',
+    })
+  );
+  assert.equal(rotated.placeholder, anthropic.placeholder);
+  const fresh = await page.evaluate(() =>
+    window.harness.call('put', { name: 'NEW_MODEL', value: 'fake-model-key-0198', kind: 'model' })
+  );
+  assert.equal(fresh.error.message, 'a model record needs its provider');
+  const after = (await ask('records', {})).records.find((r) => r.name === 'ANTHROPIC_API_KEY');
+  assert.equal(after.provider, 'anthropic');
 });
 
 test('an MCP sign-in is sealed by grant and refreshed in the vault through egress', async (t) => {
@@ -211,6 +229,8 @@ test('an MCP sign-in is sealed by grant and refreshed in the vault through egres
   assert.deepEqual(again.request.headers, [['authorization', 'Bearer fake-mcp-access-0107']]);
   const none = await ask('refresh', { provider: 'anthropic' });
   assert.equal(none.error.code, 'ENOENT');
+  const short = await ask('grant', { server: 'docs', oauth, response: '{"access_token":"short"}' });
+  assert.equal(short.error.code, 'EINVAL');
   const badGrant = await ask('grant', {
     server: 'docs',
     oauth: { ...oauth, tokenUrl: 'https://other.example.com/token' },
