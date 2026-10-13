@@ -112,6 +112,13 @@ test('jerk list and status are answered by the page through the vault', async (t
     forged.id
   );
   assert.equal(refusedPlaceholder.error.code, 'EINVAL');
+  const otherProvider = await page.evaluate(
+    (id, placeholder) =>
+      window.harness.call('answer', { request: id, state: 'done', exit: 0, placeholder }),
+    forged.id,
+    lease.placeholder
+  );
+  assert.match(otherProvider.error.message, /not one of this provider's records/);
   await page.evaluate(
     (id) =>
       window.harness.call('answer', {

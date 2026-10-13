@@ -205,16 +205,18 @@ async function placeholderFor(
   provider: string | undefined,
   given: unknown
 ) {
-  const held = (await records(vault.db, ns)).filter((r) => r.kind === 'secret' && !r.removedAt);
+  const own = (await records(vault.db, ns)).filter(
+    (r) =>
+      r.kind === 'secret' &&
+      !r.removedAt &&
+      (r.source === `oauth:${provider}` || r.source.startsWith(`jerk:${provider}@`))
+  );
   if (given !== undefined) {
-    if (!held.some((r) => r.placeholder === given))
-      throw new Refused('EINVAL', 'placeholder is not one of this vault');
+    if (!own.some((r) => r.placeholder === given))
+      throw new Refused('EINVAL', "placeholder is not one of this provider's records");
     return given as string;
   }
-  const own = held.find(
-    (r) => r.source === `oauth:${provider}` || r.source.startsWith(`jerk:${provider}@`)
-  );
-  return own?.placeholder;
+  return own[0]?.placeholder;
 }
 
 async function answerRequest(vault: Vault, ns: string, request: Fields): Promise<Fields> {
@@ -255,7 +257,7 @@ async function answerRequest(vault: Vault, ns: string, request: Fields): Promise
     vault.db,
     ns,
     request.request,
-    vault.now(),
+    () => vault.now(),
     answer,
     request.state === 'done'
   );
