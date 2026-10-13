@@ -301,7 +301,7 @@ test('a grant removed and restored while its refresh is in flight refuses the st
       body: JSON.stringify({ access_token: 'fake-access-token-0402', expires_in: 3600 }),
     };
     const pending = h.call('refresh', { name: 'RACE_TOKEN' });
-    await new Promise((resolve) => setTimeout(resolve, 300));
+    while (h.egress.requests.length === 0) await new Promise((resolve) => setTimeout(resolve, 20));
     const other = h.twins[0];
     const removed = await h.call('remove', { name: 'RACE_GRANT', kind: 'grant' }, [], other);
     const restored = await h.call('restore', { name: 'RACE_GRANT', kind: 'grant' }, [], other);
