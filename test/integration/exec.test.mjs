@@ -49,7 +49,7 @@ const materialize = (page, fields, stamp = PARENT) =>
   );
 const consume = (page, fields) =>
   page.evaluate(
-    (f) => window.harness.call('materializeConsume', { interpreters: [], ...f }),
+    (f) => window.harness.call('materializeConsume', { interpreters: [], trusted: false, ...f }),
     fields
   );
 
@@ -250,15 +250,7 @@ test("the kernel's interpreter chain decides, not fnox's claim", async (t) => {
     interpreters: ['/bin/sh'],
   });
   assert.equal(viaSh.error.code, 'EACCES');
-  assert.match(viaSh.error.message, /fnox's interpreter isn't the one the kernel resolved/);
-  const chained = await materialize(page, { ...script, interpreter: '/usr/bin/jq' });
-  const viaChain = await consume(page, {
-    ...script,
-    ticket: chained.ticket,
-    stamp: CHILD,
-    interpreters: ['/usr/bin/jq', '/bin/sh'],
-  });
-  assert.match(viaChain.error.message, /NPM_TOKEN isn't revealed to \/bin\/sh/);
+  assert.match(viaSh.error.message, /NPM_TOKEN isn't revealed to \/bin\/sh/);
   const claimed = await materialize(page, { ...script, interpreter: '/usr/bin/jq' });
   const mismatch = await consume(page, {
     ...script,
@@ -275,28 +267,17 @@ test("the kernel's interpreter chain decides, not fnox's claim", async (t) => {
     interpreters: 'x',
   });
   assert.match(missing.error.message, /no interpreter chain/);
-  const run = { names: ['PLAIN_KEY'], path: '/opt/run.sh', argv: ['run.sh'], cwd: '/' };
-  const listedChain = await materialize(page, { ...run, interpreter: '/bin/sh' });
-  assert.deepEqual(listedChain.real, { PLAIN_KEY: true });
-  const ok = await consume(page, {
-    ...run,
-    ticket: listedChain.ticket,
+  const noTrust = await materialize(page, script);
+  const untold = await consume(page, {
+    ...script,
+    ticket: noTrust.ticket,
     stamp: CHILD,
-    interpreters: ['/bin/sh'],
+    trusted: 'yes',
   });
-  assert.deepEqual(ok.values, { PLAIN_KEY: VALUES.PLAIN_KEY });
-  const other = await materialize(page, { ...run, interpreter: '/bin/bash' });
-  const bash = await consume(page, {
-    ...run,
-    ticket: other.ticket,
-    stamp: CHILD,
-    interpreters: ['/bin/bash'],
-  });
-  assert.match(bash.error.message, /isn't revealed to \/bin\/bash/);
+  assert.match(untold.error.message, /no trusted flag/);
   const shell = await materialize(page, {
     shellGrants: true,
     path: '/home/cone/tool',
-    interpreter: '/bin/bash',
     argv: ['tool'],
     cwd: '/',
   });
@@ -309,6 +290,54 @@ test("the kernel's interpreter chain decides, not fnox's claim", async (t) => {
     interpreters: ['/bin/bash'],
   });
   assert.deepEqual(Object.keys(shellOk.values), ['SHELL_KEY']);
+});
+
+test('an npm-style env-node script: an argv rule allows it when trusted, nothing else does', async (t) => {
+  const { page } = await ready(t);
+  const gh = {
+    names: ['GH_TOKEN'],
+    path: '/usr/bin/gh',
+    argv: ['gh', 'release', 'upload', 'v1'],
+    cwd: '/',
+  };
+  const node = ['/usr/bin/node'];
+  const trusted = await materialize(page, gh);
+  const ok = await consume(page, {
+    ...gh,
+    ticket: trusted.ticket,
+    stamp: CHILD,
+    interpreters: node,
+    trusted: true,
+  });
+  assert.deepEqual(ok.values, { GH_TOKEN: VALUES.GH_TOKEN });
+  const loose = await materialize(page, gh);
+  const refused = await consume(page, {
+    ...gh,
+    ticket: loose.ticket,
+    stamp: CHILD,
+    interpreters: node,
+    trusted: false,
+  });
+  assert.match(refused.error.message, /can be changed by a non-root user/);
+  const npm = { names: ['NPM_TOKEN'], path: '/usr/bin/npm', argv: ['npm', 'publish'], cwd: '/' };
+  const any = await materialize(page, npm);
+  const viaAny = await consume(page, {
+    ...npm,
+    ticket: any.ticket,
+    stamp: CHILD,
+    interpreters: node,
+    trusted: true,
+  });
+  assert.match(viaAny.error.message, /NPM_TOKEN isn't revealed to \/usr\/bin\/node/);
+  const env = await materialize(page, gh);
+  const viaEnv = await consume(page, {
+    ...gh,
+    ticket: env.ticket,
+    stamp: CHILD,
+    interpreters: ['/usr/bin/env'],
+    trusted: true,
+  });
+  assert.match(viaEnv.error.message, /env and other wrappers stay refused/);
 });
 
 test('an expired record is never revealed', async (t) => {

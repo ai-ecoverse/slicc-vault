@@ -353,6 +353,7 @@ export type Op =
       argv: string[];
       cwd: string;
       interpreters: string[];
+      trusted: boolean;
     };
 
 export type AgentOp =
