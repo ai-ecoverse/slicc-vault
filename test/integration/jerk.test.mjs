@@ -198,6 +198,9 @@ test('create and drop are for root and cones, with progress, exit and cancel', a
     { ...SCOOP, uid: 0, tag: null }
   );
   assert.deepEqual([dropped.state, dropped.exit, dropped.message], ['done', 0, 'dropped']);
+  assert.equal((await page.evaluate(() => window.harness.twin(true, false, {}))).op, 'welcome');
+  const stale = await sealed(page, { op: 'request', kind: 'unseal', provider: 'github' }, CONE);
+  assert.equal(stale.exit, 2);
   const bad = await sealed(page, { op: 'request', kind: 'jerk', jop: 'drop' }, CONE);
   assert.equal(bad.error.code, 'EINVAL');
 });

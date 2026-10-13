@@ -41,7 +41,7 @@ function egressed(event) {
   setTimeout(() => event.ports[0].postMessage(answer), egress.delay);
 }
 
-async function twin(same = false, deaf = false) {
+async function twin(same = false, deaf = false, hello = { sudoGid: 27 }) {
   const iframe = same ? core : await frame('/', true);
   const channel = new MessageChannel();
   const other = channel.port1;
@@ -56,7 +56,7 @@ async function twin(same = false, deaf = false) {
     };
   });
   twins.push(other);
-  iframe.contentWindow.postMessage({ type: 'slicc-vault', v: 1, op: 'hello', sudoGid: 27 }, vault, [
+  iframe.contentWindow.postMessage({ type: 'slicc-vault', v: 1, op: 'hello', ...hello }, vault, [
     channel.port2,
   ]);
   return welcome;
