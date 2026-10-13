@@ -229,7 +229,9 @@ export class Preparer {
     return this.prepare(request, {
       who: server,
       owns: (record) =>
-        record.kind === 'mcp' && (record.server === server || names.has(record.name)),
+        record.kind === 'mcp' &&
+        (record.server === server || names.has(record.name)) &&
+        (record.url === undefined || (entry !== null && new URL(entry.url).href === record.url)),
       reaches: entry !== null,
       loopback: true,
     });

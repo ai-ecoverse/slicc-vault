@@ -36,6 +36,8 @@ export interface VaultRecord {
   provider?: string;
   server?: string;
   settings?: Record<string, string>;
+  url?: string;
+  sealedBy?: number;
   removedAt?: number;
 }
 
@@ -112,6 +114,7 @@ export interface SealInput {
   provider?: string;
   server?: string;
   settings?: Record<string, string>;
+  url?: string;
   exclusive?: boolean;
   placeholder?: string;
   answers?: Answers;
@@ -240,6 +243,15 @@ async function unused(store: IDBObjectStore): Promise<string> {
 
 function guard(existing: VaultRecord | undefined, input: SealInput): void {
   if (!existing || removed(existing)) return;
+  if (input.kind === 'mcp' && input.source === 'process') {
+    const mine =
+      existing.source === 'process' && (input.uid === 0 || existing.sealedBy === input.uid);
+    if (mine) return;
+    throw new Refused(
+      'EEXIST',
+      `${input.name} belongs to someone else; seal the bridge under another name`
+    );
+  }
   if (existing.source === 'process' || input.uid === 0 || input.source !== 'process') return;
   throw new Refused(
     'EEXIST',
@@ -274,6 +286,9 @@ function bound(existing: VaultRecord | undefined, input: SealInput): Partial<Vau
   const provider = input.provider ?? existing?.provider;
   const server = input.server ?? existing?.server;
   const settings = input.settings ?? existing?.settings;
+  const url = input.url ?? existing?.url;
+  if (url !== undefined) out.url = url;
+  if (input.source === 'process' && input.kind === 'mcp') out.sealedBy = input.uid as number;
   if (provider !== undefined) out.provider = provider;
   if (server !== undefined) out.server = server;
   if (settings !== undefined) out.settings = settings;

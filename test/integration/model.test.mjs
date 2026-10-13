@@ -369,3 +369,72 @@ test('an MCP sign-in is sealed by grant and refreshed in the vault through egres
   });
   assert.equal(badGrant.error.code, 'EACCES');
 });
+
+test('a kernel bridge seals its own loopback token, which only that server gets', async (t) => {
+  const { page, ask } = await ready(t);
+  const seal = (fields, uid = 1000) =>
+    page.evaluate(
+      (f, u) =>
+        window.harness.sealed(
+          { v: 1, op: 'seal', name: 'MCP_BRIDGE_TOKEN', ...f },
+          { pid: 77, ppid: 1, uid: u, gid: 1000, tag: null }
+        ),
+      fields,
+      uid
+    );
+  const remote = await seal({
+    value: 'fake-bridge-tok-0130',
+    kind: 'mcp',
+    server: 'bridge',
+    url: 'https://bridge.example.com/mcp',
+  });
+  assert.equal(remote.error.code, 'EACCES');
+  const sealed = await seal({
+    value: 'fake-bridge-tok-0131',
+    kind: 'mcp',
+    server: 'bridge',
+    url: 'http://8080.kernel.localhost/mcp',
+  });
+  const again = await seal({
+    value: 'fake-bridge-tok-0132',
+    kind: 'mcp',
+    server: 'bridge',
+    url: 'http://8080.kernel.localhost/mcp',
+  });
+  assert.equal(again.placeholder, sealed.placeholder);
+  const stranger = await seal(
+    {
+      value: 'fake-bridge-tok-0133',
+      kind: 'mcp',
+      server: 'bridge',
+      url: 'http://8080.kernel.localhost/mcp',
+    },
+    1001
+  );
+  assert.equal(stranger.error.code, 'EEXIST');
+  const user = await seal(
+    {
+      name: 'BRIDGE',
+      value: 'fake-bridge-tok-0134',
+      kind: 'mcp',
+      server: 'bridge',
+      url: 'http://8080.kernel.localhost/mcp',
+    },
+    0
+  );
+  assert.equal(user.error.code, 'EEXIST');
+  const filled = await ask('mcp', {
+    server: 'bridge',
+    request: req('http://8080.kernel.localhost/mcp', [
+      ['authorization', `Bearer ${sealed.placeholder}`],
+    ]),
+  });
+  assert.deepEqual(filled.request.headers, [['authorization', 'Bearer fake-bridge-tok-0132']]);
+  const elsewhere = await ask('mcp', {
+    server: 'docs',
+    request: req('https://docs.example.com/mcp', [
+      ['authorization', `Bearer ${sealed.placeholder}`],
+    ]),
+  });
+  assert.match(elsewhere.error.message, /isn't a credential of docs/);
+});
