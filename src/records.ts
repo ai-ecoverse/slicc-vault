@@ -39,6 +39,7 @@ export interface VaultRecord {
   url?: string;
   sealedBy?: number;
   removedAt?: number;
+  removedWith?: string;
 }
 
 export interface OAuthConfig {
@@ -515,8 +516,7 @@ async function linked(
   store: IDBObjectStore,
   record: VaultRecord,
   now: number,
-  removing: boolean,
-  was: number | undefined
+  removing: boolean
 ): Promise<string | null> {
   if (!record.refresh || record.kind === 'grant') return null;
   const grant = (await request(store.get([record.ns, 'grant', record.refresh]))) as
@@ -538,9 +538,15 @@ async function linked(
   }
   const gone = grant.removedAt !== undefined && now - grant.removedAt > RESTORABLE;
   if (gone || removed(grant) === removing) return null;
-  if (!removing && grant.removedAt !== was) return null;
-  if (removing) grant.removedAt = now;
-  else delete grant.removedAt;
+  const owner = `${record.kind}\u0000${record.name}`;
+  if (!removing && grant.removedWith !== owner) return null;
+  if (removing) {
+    grant.removedAt = now;
+    grant.removedWith = owner;
+  } else {
+    delete grant.removedAt;
+    delete grant.removedWith;
+  }
   grant.updatedAt = Math.max(now, grant.updatedAt + 1);
   await request(store.put(grant));
   return grant.name;
@@ -560,12 +566,12 @@ async function mark(
     const gone = record?.removedAt !== undefined && now - record.removedAt > RESTORABLE;
     if (!record || gone) throw new Refused('ENOENT', `no record named ${name}`);
     if (removing === removed(record)) return record;
-    const was = record.removedAt;
     if (removing) record.removedAt = now;
     else delete record.removedAt;
+    delete record.removedWith;
     record.updatedAt = Math.max(now, record.updatedAt + 1);
     await request(store.put(record));
-    const grant = await linked(store, record, now, removing, was);
+    const grant = await linked(store, record, now, removing);
     await bump(tx, ns);
     await audit(tx, ns, {
       type: removing ? 'remove' : 'restore',
