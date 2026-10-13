@@ -140,7 +140,7 @@ export class Preparer {
       const key = this.vault.keyring.key;
       if (!key) throw new Refused('EACCES', LOCKED);
       const value = await decrypt(key, record.sealed, aad(record.ns, record.kind, record.name));
-      if (await this.vault.scrubbers.holdsAnother(this.ns, value)) {
+      if (await this.vault.scrubbers.holdsAnother(this.ns, record, value)) {
         throw new Refused('EACCES', `${record.name}'s value contains another stored value`);
       }
       out = out.split(placeholder).join(url ? encodeURIComponent(value) : value);
@@ -240,7 +240,7 @@ export class Preparer {
         (record.url === undefined ||
           (entry !== null && new URL(entry.url).href === record.url && under(record.url, url))),
       reaches: entry !== null,
-      loopback: true,
+      loopback: entry !== null && new URL(entry.url).protocol === 'http:',
     });
   }
 

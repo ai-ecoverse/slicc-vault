@@ -119,7 +119,14 @@ export function register(
       ])
     );
     const byUrl = new Map(stored.mcp.map((server) => [`${server.server} ${server.url}`, server]));
-    for (const server of mcps) {
+    const firstToken = new Map<string, string>();
+    for (const entry of [...stored.mcp, ...mcps]) {
+      if (entry.tokenUrl && !firstToken.has(entry.server))
+        firstToken.set(entry.server, entry.tokenUrl);
+    }
+    for (const given of mcps) {
+      const token = firstToken.get(given.server);
+      const server = token ? { ...given, tokenUrl: token } : given;
       const key = `${server.server} ${server.url}`;
       const known = byUrl.get(key);
       byUrl.set(

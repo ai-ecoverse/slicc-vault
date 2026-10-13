@@ -7,6 +7,7 @@ import type { Vault } from './vault.ts';
 type Fields = Record<string, unknown>;
 
 export const MAX_STREAMS = 64;
+const SANITIZED = new Set(['model', 'mcp', 'records', 'grant', 'refresh']);
 const LOCKED = 'vault is locked: unlock it in the vault window to continue';
 
 export class AgentPort {
@@ -110,7 +111,28 @@ export class AgentPort {
 
   answer(fields: Fields): Promise<Fields> | Fields {
     const out = this.route(fields);
-    return out instanceof Promise ? out.catch((error) => this.cleaned(error)) : out;
+    if (!(out instanceof Promise)) return out;
+    const op = fields.op as string;
+    const checked = SANITIZED.has(op) ? out.then((reply) => this.sanitized(op, reply)) : out;
+    return checked.catch((error) => this.cleaned(error));
+  }
+
+  async sanitized(op: string, reply: Fields): Promise<Fields> {
+    const scrubber = await this.vault.scrubbers.get(this.ns);
+    if (!scrubber) return reply;
+    const walk = (value: unknown): unknown => {
+      if (typeof value === 'string') return scrubber.text(value).text;
+      if (typeof value === 'number')
+        return scrubber.text(String(value)).hits.length ? undefined : value;
+      if (Array.isArray(value)) return value.map(walk);
+      if (value && typeof value === 'object' && !(value instanceof Uint8Array)) {
+        const entries = Object.entries(value).map(([key, item]) => [key, walk(item)]);
+        return Object.fromEntries(entries.filter(([, item]) => item !== undefined));
+      }
+      return value;
+    };
+    if (op === 'model' || op === 'mcp') return { ...reply, hits: walk(reply.hits) };
+    return walk(reply) as Fields;
   }
 
   async cleaned(error: unknown): Promise<never> {

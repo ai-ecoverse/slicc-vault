@@ -6,7 +6,7 @@ import type { Vault } from './vault.ts';
 interface Compiled {
   version: number;
   scrubber: Scrubber;
-  values: string[];
+  values: { kind: string; name: string; value: string }[];
 }
 
 export class Scrubbers {
@@ -30,20 +30,21 @@ export class Scrubbers {
     const held = await records(this.vault.db, ns);
     const values = await Promise.all(
       held.map(async (record) => ({
+        kind: record.kind,
         name: record.name,
         placeholder: record.placeholder,
         value: await decrypt(key, record.sealed, aad(record.ns, record.kind, record.name)),
       }))
     );
     const scrubber = compile(values, { version });
-    this.cache.set(ns, { version, scrubber, values: values.map((v) => v.value) });
+    this.cache.set(ns, { version, scrubber, values });
     return scrubber;
   }
 
-  async holdsAnother(ns: string, value: string): Promise<boolean> {
+  async holdsAnother(ns: string, own: { kind: string; name: string }, value: string) {
     await this.get(ns);
     const known = (this.cache.get(ns) as Compiled).values;
-    const twins = known.filter((other) => other === value).length;
-    return twins > 1 || known.some((other) => other !== value && value.includes(other));
+    const others = known.filter((o) => o.kind !== own.kind || o.name !== own.name);
+    return others.some((o) => value.includes(o.value));
   }
 }

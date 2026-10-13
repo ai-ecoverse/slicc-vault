@@ -135,6 +135,11 @@ test('mcp fills its server credential on the kernel loopback, and never sends on
     request: req('http://9222.kernel.localhost/json', []),
   });
   assert.match(cdp.error.message, /https only/);
+  const foreignLoop = await ask('mcp', {
+    server: 'docs',
+    request: req('http://8080.kernel.localhost/mcp', []),
+  });
+  assert.match(foreignLoop.error.message, /https only/);
   const discovery = await ask('mcp', {
     server: 'docs',
     request: req('https://docs.example.com/.well-known/oauth-protected-resource'),
