@@ -177,9 +177,9 @@ async function answered(
   placeholder: string,
   sealedAt: number
 ): Promise<void> {
-  const now = answers.clock ? answers.clock() : sealedAt;
   const store = tx.objectStore('requests');
   const entry = (await request(store.get(answers.id))) as Record<string, unknown> | undefined;
+  const now = answers.clock ? answers.clock() : sealedAt;
   const live = entry?.ns === ns && entry.state === 'pending' && now < (entry.expiresAt as number);
   if (!entry || !live) throw new Refused('EINVAL', `request ${answers.id} is no longer pending`);
   const jerk = answers.jerk ? { jerk: answers.jerk } : {};

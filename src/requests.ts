@@ -121,7 +121,7 @@ export function respond(
   db: IDBDatabase,
   ns: string,
   id: unknown,
-  now: number,
+  clock: () => number,
   answer: Record<string, unknown>,
   done: boolean
 ): Promise<HumanRequest> {
@@ -133,7 +133,7 @@ export function respond(
         : undefined;
     if (!entry || entry.ns !== ns) throw new Refused('ENOENT', 'no such request');
     if (entry.kind === 'value') throw new Refused('EINVAL', 'a value request is answered with put');
-    const state = current(entry, now);
+    const state = current(entry, clock());
     if (state !== 'pending') throw new Refused('EINVAL', `request ${entry.id} is ${state}`);
     const next: HumanRequest = {
       ...entry,
