@@ -33,6 +33,8 @@ export interface Stamp {
   uid: number;
   gid: number;
   tag: string | null;
+  users?: string;
+  groups?: number[];
 }
 
 export interface VaultError {
@@ -495,6 +497,7 @@ export interface Hello {
   v: Protocol;
   op: 'hello';
   role?: Role;
+  sudoGid?: number;
 }
 
 export type Greeting =

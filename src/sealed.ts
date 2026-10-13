@@ -20,6 +20,7 @@ export interface Context {
   now(): number;
   changed(): Promise<void>;
   emit(event: VaultEvent): void;
+  sudoGid(): number | null;
 }
 
 type Fields = Record<string, unknown>;
@@ -37,7 +38,12 @@ export function checkStamp(stamp: unknown): Stamp {
     throw new Refused('EINVAL', 'the request carries no valid kernel stamp');
   }
   const [pid, ppid, uid, gid] = ids as number[];
-  return { pid, ppid, uid, gid, tag };
+  const users = typeof given.users === 'string' ? { users: given.users } : {};
+  const groups =
+    Array.isArray(given.groups) && given.groups.every(integer)
+      ? { groups: given.groups as number[] }
+      : {};
+  return { pid, ppid, uid, gid, tag, ...users, ...groups };
 }
 
 function string(req: Fields, field: string, max = 4096): string {
@@ -152,14 +158,10 @@ function jerkFields(req: Fields): Fields {
   };
 }
 
-export function mayManage(stamp: Stamp): boolean {
+export function mayManage(stamp: Stamp, sudoGid: number | null): boolean {
+  if (stamp.users !== 'enforce') return false;
   if (stamp.uid === 0) return true;
-  try {
-    const tag = JSON.parse(stamp.tag ?? 'null') as Fields | null;
-    return typeof tag?.agentId === 'string' && tag.agentId.startsWith('cone:');
-  } catch {
-    return false;
-  }
+  return sudoGid !== null && Array.isArray(stamp.groups) && stamp.groups.includes(sudoGid);
 }
 
 function requestFields(req: Fields): {
@@ -193,7 +195,7 @@ function requestFields(req: Fields): {
 const requestOp: Handler = async (ctx, req, stamp) => {
   const fields = requestFields(req);
   const managing = fields.kind === 'unseal' || (fields.kind === 'jerk' && fields.jop === 'create');
-  const refused = managing && !mayManage(stamp);
+  const refused = managing && !mayManage(stamp, ctx.sudoGid());
   const answer = {
     exit: 2,
     message: `${fields.provider} can be signed in or dropped only by root or a cone (J2)`,

@@ -50,7 +50,7 @@ async function connect(path = '/') {
       waiting.delete(data.id);
     };
   });
-  iframe.contentWindow.postMessage({ type: 'slicc-vault', v: 1, op: 'hello' }, vault, [
+  iframe.contentWindow.postMessage({ type: 'slicc-vault', v: 1, op: 'hello', sudoGid: 27 }, vault, [
     channel.port2,
   ]);
   return Promise.race([welcome, new Promise((resolve) => setTimeout(() => resolve(null), 3000))]);

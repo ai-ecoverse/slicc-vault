@@ -8,14 +8,18 @@ const CONE = {
   ppid: 1,
   uid: 1000,
   gid: 1000,
-  tag: JSON.stringify({ kind: 'agent', agentId: 'cone:cone' }),
+  tag: JSON.stringify({ kind: 'user', where: 'terminal:1' }),
+  users: 'enforce',
+  groups: [1000, 27],
 };
 const SCOOP = {
   pid: 8,
   ppid: 1,
   uid: 1001,
   gid: 1000,
-  tag: JSON.stringify({ kind: 'agent', agentId: 'scoop:docs' }),
+  tag: JSON.stringify({ kind: 'agent', agentId: 'cone:cone' }),
+  users: 'enforce',
+  groups: [1001, 1000],
 };
 
 async function connected(t) {
@@ -165,6 +169,18 @@ test('create and drop are for root and cones, with progress, exit and cancel', a
   assert.equal(cancel.state, 'cancelled');
   const event = await page.until(() => window.harness.events.find((e) => e.event === 'cancelled'));
   assert.deepEqual([event.request, event.kind], [create.id, 'jerk']);
+  const report = await sealed(
+    page,
+    { op: 'request', kind: 'unseal', provider: 'github' },
+    { ...CONE, users: 'report' }
+  );
+  assert.equal(report.exit, 2);
+  const noGroups = await sealed(
+    page,
+    { op: 'request', kind: 'unseal', provider: 'github' },
+    { ...CONE, groups: undefined }
+  );
+  assert.equal(noGroups.exit, 2);
   const root = await sealed(
     page,
     { op: 'request', kind: 'unseal', provider: 'github' },
