@@ -171,6 +171,46 @@ function shown(argv: string[], redact: (text: string) => string): string {
   return text.length > ARGV_SHOWN ? `${text.slice(0, ARGV_SHOWN - 1)}…` : text;
 }
 
+function fail(why: string): never {
+  throw new Refused('EACCES', `ticket refused: ${why}`);
+}
+
+function matching(found: Ticket, req: Fields, now: number): void {
+  const stamp = (req.stamp ?? {}) as Partial<Stamp>;
+  const argv = Array.isArray(req.argv) ? req.argv : null;
+  if (now >= found.expiresAt) fail('expired');
+  if (stamp.ppid !== found.pid) fail("the exec'ing process isn't a child of the one that asked");
+  if (req.path !== found.path) fail('another program');
+  if (!argv || argv.length !== found.argv.length || argv.some((a, i) => a !== found.argv[i])) {
+    fail('another argv');
+  }
+  if (req.cwd !== found.cwd) fail('another cwd');
+}
+
+function chainOf(found: Ticket, req: Fields): string[] {
+  const chain = req.interpreters;
+  if (!Array.isArray(chain) || !chain.every((p) => typeof p === 'string' && p.startsWith('/'))) {
+    fail('the kernel sent no interpreter chain');
+  }
+  const interpreters = chain as string[];
+  if (found.interpreter !== (interpreters[0] ?? null)) {
+    fail("fnox's interpreter isn't the one the kernel resolved");
+  }
+  return interpreters;
+}
+
+function granted(policy: Policy, found: Ticket, interpreters: string[]): void {
+  for (const name of found.names) {
+    const mode = policy.exec(name);
+    if (mode === false) fail(`${name} is no longer granted in [exec]`);
+    if (mode === 'argv' && !listed(policy.argv(name) as string[][], found.path, found.argv)) {
+      fail(`${name}'s [exec] grant no longer lists this command`);
+    }
+    const blocked = allowedChain(policy, name, found.path, interpreters);
+    if (blocked) fail(`${name} isn't revealed to ${blocked}`);
+  }
+}
+
 function expired(record: VaultRecord, now: number): boolean {
   return record.expiresAt !== undefined && record.expiresAt <= now;
 }
@@ -193,7 +233,7 @@ export class Exec {
     const held = new Map(
       (await records(this.vault.db, ns)).filter((r) => r.kind === 'secret').map((r) => [r.name, r])
     );
-    const answer: Record<string, boolean> = {};
+    const answer: Record<string, boolean> = Object.create(null);
     for (const name of names) {
       const record = held.get(name);
       if (!record) throw new Refused('ENOENT', `no record named ${name}`);
@@ -244,42 +284,20 @@ export class Exec {
       expiresAt,
     });
     if (revealed.length) await this.vault.changed(ns, ['audit']);
-    return { ticket, expiresAt, real: answer };
+    return { ticket, expiresAt, real: Object.fromEntries(Object.entries(answer)) };
   }
 
   async consume(ns: string, req: Fields): Promise<Fields> {
     const id = typeof req.ticket === 'string' ? req.ticket : '';
     const found = this.tickets.get(id);
     this.tickets.delete(id);
-    const fail = (why: string): never => {
-      throw new Refused('EACCES', `ticket refused: ${why}`);
-    };
     if (!found || found.ns !== ns) return fail('unknown or already used');
-    const stamp = (req.stamp ?? {}) as Partial<Stamp>;
-    const argv = Array.isArray(req.argv) ? req.argv : null;
-    if (this.vault.now() >= found.expiresAt) fail('expired');
-    if (stamp.ppid !== found.pid) fail("the exec'ing process isn't a child of the one that asked");
-    if (req.path !== found.path) fail('another program');
-    if (!argv || argv.length !== found.argv.length || argv.some((a, i) => a !== found.argv[i]))
-      fail('another argv');
-    if (req.cwd !== found.cwd) fail('another cwd');
-    const chain = req.interpreters;
-    if (!Array.isArray(chain) || !chain.every((p) => typeof p === 'string' && p.startsWith('/'))) {
-      fail('the kernel sent no interpreter chain');
-    }
-    const interpreters = chain as string[];
-    if (found.interpreter !== (interpreters[0] ?? null)) {
-      fail("fnox's interpreter isn't the one the kernel resolved");
-    }
-    const policy = this.vault.policy(ns);
-    for (const name of found.names) {
-      const blocked = allowedChain(policy, name, found.path, interpreters);
-      if (blocked) fail(`${name} isn't revealed to ${blocked}`);
-    }
+    matching(found, req, this.vault.now());
+    granted(this.vault.policy(ns), found, chainOf(found, req));
     const key = this.vault.keyring.key;
     if (!key) throw new Refused('EACCES', 'vault is locked: unlock it in the vault window');
     const held = await records(this.vault.db, ns);
-    const values: Record<string, string> = {};
+    const values: Record<string, string> = Object.create(null);
     for (const name of found.names) {
       const record = held.find((r) => r.kind === 'secret' && r.name === name) as
         | VaultRecord
@@ -290,7 +308,7 @@ export class Exec {
     }
     await this.mark(ns, found);
     return {
-      values,
+      values: Object.fromEntries(Object.entries(values)),
       placeholders: Object.fromEntries(
         held
           .filter((r) => r.name in values && r.kind === 'secret')
