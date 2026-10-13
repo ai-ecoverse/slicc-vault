@@ -609,3 +609,40 @@ test('removing an MCP sign-in removes its grant, and restoring brings both back'
     [['DOCS_ACCESS_TOKEN', 'DOCS_ACCESS_TOKEN_GRANT']]
   );
 });
+
+test("a grant shows its live tokens' agreed binding, and none when they disagree", async (t) => {
+  const { page, ask } = await ready(t);
+  const oauth = { tokenUrl: 'https://auth.example.com/token', clientId: 'fake-client' };
+  await ask('grant', {
+    server: 'docs',
+    oauth,
+    response: JSON.stringify({
+      access_token: 'fake-mcp-access-0160',
+      refresh_token: 'fake-mcp-refresh-0161',
+    }),
+  });
+  const shown = async () =>
+    (await page.evaluate(() => window.harness.call('list'))).list.secrets.find(
+      (s) => s.name === 'DOCS_ACCESS_TOKEN_GRANT'
+    ).server;
+  assert.equal(await shown(), 'docs');
+  await page.evaluate(() =>
+    window.harness.call('seal', {
+      name: 'OTHER_ACCESS',
+      value: 'fake-mcp-access-0162',
+      kind: 'mcp',
+      server: 'other',
+      source: 'oauth:mcp',
+      refresh: 'DOCS_ACCESS_TOKEN_GRANT',
+    })
+  );
+  assert.equal(await shown(), undefined);
+  await page.evaluate(() =>
+    window.harness.call('remove', { name: 'DOCS_ACCESS_TOKEN', kind: 'mcp' })
+  );
+  assert.equal(await shown(), 'other');
+  const grant = (await page.evaluate(() => window.harness.call('list'))).list.secrets.find(
+    (s) => s.name === 'DOCS_ACCESS_TOKEN_GRANT'
+  );
+  assert.notEqual(grant.state, 'removed');
+});

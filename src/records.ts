@@ -515,7 +515,8 @@ async function linked(
   store: IDBObjectStore,
   record: VaultRecord,
   now: number,
-  removing: boolean
+  removing: boolean,
+  was: number | undefined
 ): Promise<string | null> {
   if (!record.refresh || record.kind === 'grant') return null;
   const grant = (await request(store.get([record.ns, 'grant', record.refresh]))) as
@@ -537,6 +538,7 @@ async function linked(
   }
   const gone = grant.removedAt !== undefined && now - grant.removedAt > RESTORABLE;
   if (gone || removed(grant) === removing) return null;
+  if (!removing && grant.removedAt !== was) return null;
   if (removing) grant.removedAt = now;
   else delete grant.removedAt;
   grant.updatedAt = Math.max(now, grant.updatedAt + 1);
@@ -557,12 +559,13 @@ async function mark(
     const record = (await request(store.get([ns, kind, name]))) as VaultRecord | undefined;
     const gone = record?.removedAt !== undefined && now - record.removedAt > RESTORABLE;
     if (!record || gone) throw new Refused('ENOENT', `no record named ${name}`);
-    if (removing && removed(record)) return record;
+    if (removing === removed(record)) return record;
+    const was = record.removedAt;
     if (removing) record.removedAt = now;
     else delete record.removedAt;
     record.updatedAt = Math.max(now, record.updatedAt + 1);
     await request(store.put(record));
-    const grant = await linked(store, record, now, removing);
+    const grant = await linked(store, record, now, removing, was);
     await bump(tx, ns);
     await audit(tx, ns, {
       type: removing ? 'remove' : 'restore',
