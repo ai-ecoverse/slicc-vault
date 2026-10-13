@@ -168,6 +168,7 @@ export interface SealEntry extends AuditBase {
 
 export interface RemoveEntry extends AuditBase {
   type: 'remove' | 'restore';
+  grant?: string;
 }
 
 export interface PolicyEntry {

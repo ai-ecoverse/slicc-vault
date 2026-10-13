@@ -565,3 +565,47 @@ test('a value stored while a request refreshes its credential makes the vault pr
   const plain = await ask('refresh', { provider: 'anthropic' });
   assert.ok(plain.expiresAt > Date.now());
 });
+
+test('removing an MCP sign-in removes its grant, and restoring brings both back', async (t) => {
+  const { page, ask } = await ready(t);
+  const oauth = { tokenUrl: 'https://auth.example.com/token', clientId: 'fake-client' };
+  const granted = await ask('grant', {
+    server: 'docs',
+    oauth,
+    response: JSON.stringify({
+      access_token: 'fake-mcp-access-0150',
+      refresh_token: 'fake-mcp-refresh-0151',
+    }),
+  });
+  assert.deepEqual(
+    granted.records.map((r) => r.name),
+    ['DOCS_ACCESS_TOKEN', 'DOCS_ACCESS_TOKEN_GRANT']
+  );
+  const states = async () =>
+    Object.fromEntries(
+      (await page.evaluate(() => window.harness.call('list'))).list.secrets
+        .filter((s) => s.name.startsWith('DOCS_ACCESS_TOKEN'))
+        .map((s) => [s.name, [s.state, s.server]])
+    );
+  assert.deepEqual((await states()).DOCS_ACCESS_TOKEN_GRANT[1], 'docs');
+  await page.evaluate(() =>
+    window.harness.call('remove', { name: 'DOCS_ACCESS_TOKEN', kind: 'mcp' })
+  );
+  assert.deepEqual(
+    Object.values(await states()).map(([state]) => state),
+    ['removed', 'removed']
+  );
+  const again = await page.evaluate(() =>
+    window.harness.call('remove', { name: 'DOCS_ACCESS_TOKEN_GRANT', kind: 'grant' })
+  );
+  assert.equal(again.error, undefined);
+  await page.evaluate(() =>
+    window.harness.call('restore', { name: 'DOCS_ACCESS_TOKEN', kind: 'mcp' })
+  );
+  assert.ok(Object.values(await states()).every(([state]) => state !== 'removed'));
+  const audit = (await page.evaluate(() => window.harness.call('audit', { limit: 3 }))).audit;
+  assert.deepEqual(
+    audit.filter((e) => e.type === 'restore').map((e) => [e.name, e.grant]),
+    [['DOCS_ACCESS_TOKEN', 'DOCS_ACCESS_TOKEN_GRANT']]
+  );
+});

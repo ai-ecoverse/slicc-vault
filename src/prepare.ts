@@ -367,7 +367,7 @@ export class Preparer {
     };
     const grant: SealInput[] =
       got.refresh !== null
-        ? [{ ...common, kind: 'grant', name: grantName, value: got.refresh, oauth }]
+        ? [{ ...common, kind: 'grant', name: grantName, value: got.refresh, oauth, server }]
         : [];
     const written = (await sealAll(this.vault.db, dek, [access, ...grant])).map((s) => s.record);
     const [sealedAccess, sealedGrant] = written;
