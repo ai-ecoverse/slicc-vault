@@ -79,7 +79,10 @@ export async function audit(
     .sort((a, b) => b.seq - a.seq);
   const page = older.slice(0, limit);
   const more = older.length > page.length;
-  const entries = page.map(({ ns: _ns, ...entry }) => entry as AuditEntry);
+  const entries = page.map(({ ns: _ns, ...entry }) => {
+    const known = entry as AuditEntry & { uid?: number | null; tag?: string | null };
+    return { ...known, uid: known.uid ?? null, tag: known.tag ?? null } as AuditEntry;
+  });
   return { audit: entries, more, ...(more ? { next: page[page.length - 1].seq } : {}) };
 }
 

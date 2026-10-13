@@ -294,7 +294,20 @@ export interface ImportCandidate {
 
 export type ImportResult =
   | { stage: 'pick'; candidates: ImportCandidate[] }
-  | { stage: 'done'; imported: SealResult[]; skipped: string[]; reasons?: Record<string, string> };
+  | {
+      stage: 'done';
+      imported: SealResult[];
+      skipped: string[];
+      reasons?: Record<string, string>;
+      outcomes?: ImportOutcome[];
+    };
+
+export interface ImportOutcome {
+  name: string;
+  kind?: RecordKind;
+  imported: boolean;
+  reason?: string;
+}
 
 export type PopupIntent = { kind: 'unlock' } | { kind: 'protect' };
 

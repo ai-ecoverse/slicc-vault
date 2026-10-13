@@ -327,20 +327,22 @@ export async function importer(vault: Vault, ns: string, req: Fields): Promise<F
   const imported: SealResult[] = [];
   const skipped: string[] = [];
   const reasons: Record<string, string> = Object.create(null);
-  const skip = (name: string, reason: string) => {
+  const outcomes: Fields[] = [];
+  const skip = (name: string, reason: string, kind?: RecordKind) => {
     skipped.push(name);
     reasons[name] = reason;
+    outcomes.push({ name, ...(kind ? { kind } : {}), imported: false, reason });
   };
   for (const item of found) {
     if (!picked.has(identity(item.kind, item.name))) continue;
     const reason = problem(item, held, taken);
     if (reason) {
-      skip(item.name, reason);
+      skip(item.name, reason, item.kind);
       continue;
     }
     const record = await store(vault, ns, dek, item);
     if (!record) {
-      skip(item.name, "it couldn't be stored; try again");
+      skip(item.name, "it couldn't be stored; try again", item.kind);
       continue;
     }
     imported.push({
@@ -348,13 +350,20 @@ export async function importer(vault: Vault, ns: string, req: Fields): Promise<F
       placeholder: record.placeholder,
       state: state(record, vault.policy(ns), vault.now()),
     });
+    outcomes.push({ name: record.name, kind: record.kind, imported: true });
   }
   for (const [id, name] of picked) {
     if (!found.some((item) => identity(item.kind, item.name) === id))
       skip(name, "it isn't in the file");
   }
   if (imported.length) await vault.changed(ns, ['secrets', 'audit']);
-  return { stage: 'done', imported, skipped, reasons: Object.fromEntries(Object.entries(reasons)) };
+  return {
+    stage: 'done',
+    imported,
+    skipped,
+    reasons: Object.fromEntries(Object.entries(reasons)),
+    outcomes,
+  };
 }
 
 export async function exporter(vault: Vault, ns: string, req: Fields): Promise<Fields> {
