@@ -432,7 +432,8 @@ export class Preparer {
     if (typeof expiry !== 'number') return reply;
     const after = await this.scrubber();
     const alone = after.version <= before.version + 1;
-    if (alone && before.text(String(expiry)).hits.length === 0) return reply;
+    const echoes = [before, after].some((x) => x.text(String(expiry)).hits.length > 0);
+    if (alone && !echoes) return reply;
     const { expiresAt: _echo, ...rest } = reply;
     return rest;
   }
