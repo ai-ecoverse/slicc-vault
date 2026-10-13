@@ -354,7 +354,6 @@ async function write(tx: IDBTransaction, input: SealInput, sealed: Sealed): Prom
     throw new Refused('EINVAL', 'a model record needs its provider');
   }
   await request(store.put(record));
-  await tagGrant(store, record);
   if (input.answers) await answered(tx, input.ns, input.answers, record.placeholder, input.now);
   await bump(tx, input.ns);
   const rotated = existing !== undefined && !removed(existing);
@@ -490,7 +489,8 @@ export function records(db: IDBDatabase, ns: string): Promise<VaultRecord[]> {
 export function withGrantBindings(held: VaultRecord[]): VaultRecord[] {
   const owners = new Map<string, VaultRecord>();
   for (const r of held) {
-    if (r.kind !== 'grant' && r.refresh) owners.set(`${r.source}\u0000${r.refresh}`, r);
+    if (r.kind !== 'grant' && r.refresh && !removed(r))
+      owners.set(`${r.source}\u0000${r.refresh}`, r);
   }
   return held.map((r) => {
     const owner = r.kind === 'grant' ? owners.get(`${r.source}\u0000${r.name}`) : undefined;
@@ -505,18 +505,6 @@ export function withGrantBindings(held: VaultRecord[]): VaultRecord[] {
   });
 }
 
-async function tagGrant(store: IDBObjectStore, record: VaultRecord): Promise<void> {
-  if (!record.refresh || record.kind === 'grant') return;
-  if (record.server === undefined && record.provider === undefined) return;
-  const grant = (await request(store.get([record.ns, 'grant', record.refresh]))) as
-    | VaultRecord
-    | undefined;
-  if (!grant || grant.source !== record.source) return;
-  const server = record.server === undefined ? {} : { server: record.server };
-  const provider = record.provider === undefined ? {} : { provider: record.provider };
-  await request(store.put({ ...grant, ...server, ...provider }));
-}
-
 async function linked(
   store: IDBObjectStore,
   record: VaultRecord,
@@ -528,6 +516,19 @@ async function linked(
     | VaultRecord
     | undefined;
   if (!grant || grant.source !== record.source) return null;
+  if (removing) {
+    const all = (await request(store.getAll())) as VaultRecord[];
+    const shared = all.some(
+      (other) =>
+        other.ns === record.ns &&
+        other.kind !== 'grant' &&
+        !(other.kind === record.kind && other.name === record.name) &&
+        other.refresh === grant.name &&
+        other.source === grant.source &&
+        !removed(other)
+    );
+    if (shared) return null;
+  }
   const gone = grant.removedAt !== undefined && now - grant.removedAt > RESTORABLE;
   if (gone || removed(grant) === removing) return null;
   if (removing) grant.removedAt = now;
