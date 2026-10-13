@@ -153,6 +153,19 @@
         "code": "EINVAL"
       },
       "note": "userinfo on loopback"
+    },
+    {
+      "id": "url-userinfo-whitespace",
+      "area": "token-url",
+      "setup": {
+        "tokenUrl": " https:\n//user:pw@auth.example/token"
+      },
+      "jerkOauth": null,
+      "vault": {
+        "result": "refuse",
+        "code": "EINVAL"
+      },
+      "note": "Codex on slicc-vault#21: whitespace the URL parser removes must not hide userinfo"
     }
   ]
 }

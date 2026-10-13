@@ -42,7 +42,9 @@ export function checkOAuth(value: unknown): OAuth {
   const url = URL.parse(raw);
   const valid =
     url?.protocol === 'https:' &&
-    !USERINFO.test(raw) &&
+    !USERINFO.test(raw.replace(/^[\0-\x20]+|[\t\n\r]/g, '')) &&
+    !url.username &&
+    !url.password &&
     typeof given.clientId === 'string' &&
     given.clientId.length > 0 &&
     (given.scope === undefined || typeof given.scope === 'string') &&
