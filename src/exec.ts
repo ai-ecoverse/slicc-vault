@@ -227,7 +227,7 @@ export class Exec {
   async materialize(ns: string, req: Fields, stamp: Stamp): Promise<Fields> {
     this.sweep(this.vault.now());
     const ask = asked(req);
-    const policy = this.vault.policy(ns);
+    const policy = await this.vault.loadPolicy(ns);
     if (this.vault.keyring.locked)
       throw new Refused('EACCES', 'vault is locked: unlock it in the vault window');
     const names = [...new Set([...ask.names, ...(ask.shellGrants ? policy.shells() : [])])];
