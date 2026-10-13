@@ -275,6 +275,46 @@ test('a page port that stopped answering egress gets no more, and the next refre
   assert.ok(kept.events > 0);
 });
 
+test('a grant removed and restored while its refresh is in flight refuses the stale response', async (t) => {
+  const page = await connected(t);
+  assert.equal((await page.evaluate(() => window.harness.twin(true))).op, 'welcome');
+  const result = await page.evaluate(async () => {
+    const h = window.harness;
+    await h.call('seal', {
+      name: 'RACE_GRANT',
+      value: 'fake-refresh-token-0401',
+      kind: 'grant',
+      source: 'oauth:github',
+      oauth: { tokenUrl: 'https://auth.example.com/token', clientId: 'fake-client' },
+    });
+    await h.call('seal', {
+      name: 'RACE_TOKEN',
+      value: 'fake-access-token-0401',
+      source: 'oauth:github',
+      refresh: 'RACE_GRANT',
+      expiresAt: Date.now() + 60000,
+    });
+    h.egress.delay = 1500;
+    h.egress.answer = {
+      status: 200,
+      headers: [],
+      body: JSON.stringify({ access_token: 'fake-access-token-0402', expires_in: 3600 }),
+    };
+    const pending = h.call('refresh', { name: 'RACE_TOKEN' });
+    await new Promise((resolve) => setTimeout(resolve, 300));
+    const other = h.twins[0];
+    const removed = await h.call('remove', { name: 'RACE_GRANT', kind: 'grant' }, [], other);
+    const restored = await h.call('restore', { name: 'RACE_GRANT', kind: 'grant' }, [], other);
+    const reply = await pending;
+    h.egress.delay = 0;
+    return { removed: !removed.error, restored: !restored.error, reply };
+  });
+  assert.equal(result.removed, true);
+  assert.equal(result.restored, true);
+  assert.equal(result.reply.error.code, 'EAGAIN');
+  assert.match(result.reply.error.message, /RACE_GRANT changed meanwhile/);
+});
+
 test('the minute sweep refreshes a due token without being asked', async (t) => {
   const page = await connected(t);
   await page.evaluate(async () => {
