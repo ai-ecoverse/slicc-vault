@@ -117,6 +117,17 @@ test('a route (b) sign-in is sealed against its request, with a grant that refre
   });
   const empty = await page.evaluate(() => window.harness.call('refresh', { name: 'GITHUB_TOKEN' }));
   assert.match(empty.error.message, /shorter than 8 bytes/);
+  await page.evaluate(() => {
+    window.harness.egress.answer = {
+      status: 200,
+      headers: [],
+      body: '{"access_token":"fake-access-token-0006","refresh_token":null}',
+    };
+  });
+  const nulled = await page.evaluate(() =>
+    window.harness.call('refresh', { name: 'GITHUB_TOKEN' })
+  );
+  assert.equal(nulled.error.message, 'refresh failed: the IdP returned an invalid refresh_token');
   const mismatched = await page.evaluate(async () => [
     await window.harness.call('seal', {
       name: 'WRONG_LEASE',

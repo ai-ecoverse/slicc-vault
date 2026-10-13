@@ -108,7 +108,11 @@ export function tokens(response: EgressResponse, scrubber: Scrubber | null) {
     throw new Refused('EACCES', 'refresh failed: the IdP returned an invalid expires_in');
   }
   const expires = lifetime === undefined ? null : lifetime;
-  const refresh = typeof parsed.refresh_token === 'string' ? parsed.refresh_token : null;
+  const replacement = parsed.refresh_token;
+  if (replacement !== undefined && typeof replacement !== 'string') {
+    throw new Refused('EACCES', 'refresh failed: the IdP returned an invalid refresh_token');
+  }
+  const refresh = replacement ?? null;
   return { access, expires, refresh };
 }
 
