@@ -496,3 +496,72 @@ test('a kernel bridge seals its own loopback token, which only that server gets'
   });
   assert.deepEqual(rebound.request.headers, [['authorization', 'Bearer fake-rebound-0135']]);
 });
+
+test('a value stored while a request refreshes its credential makes the vault prepare again, and the refresh reply holds back its expiry', async (t) => {
+  const { page, ask } = await ready(t);
+  await page.evaluate(async () => {
+    const h = window.harness;
+    await h.call('seal', {
+      name: 'IMS_GRANT',
+      value: 'fake-ims-refresh-0140',
+      kind: 'grant',
+      source: 'oauth:ims',
+      oauth: { tokenUrl: 'https://ims.example.com/token', clientId: 'fake-client' },
+    });
+    await h.call('seal', {
+      name: 'IMS_TOKEN',
+      value: 'fake-ims-access-0141',
+      kind: 'model',
+      provider: 'anthropic',
+      source: 'oauth:ims',
+      refresh: 'IMS_GRANT',
+      expiresAt: Date.now() - 1,
+    });
+    h.egress.delay = 800;
+    h.egress.answer = {
+      status: 200,
+      headers: [],
+      body: JSON.stringify({ access_token: 'fake-ims-access-0142', expires_in: 3600 }),
+    };
+  });
+  const placeholder = (await ask('records', {})).records.find(
+    (r) => r.name === 'IMS_TOKEN'
+  ).placeholder;
+  const raced = await page.evaluate(async (ph) => {
+    const h = window.harness;
+    const pending = h.ask('model', {
+      provider: 'anthropic',
+      request: {
+        method: 'POST',
+        url: 'https://api.anthropic.com/v1/messages',
+        headers: [['x-api-key', ph]],
+      },
+    });
+    while (h.egress.requests.length === 0) await new Promise((resolve) => setTimeout(resolve, 20));
+    await h.call('put', { name: 'MEANWHILE', value: 'fake-meanwhile-0143' });
+    return pending;
+  }, placeholder);
+  assert.equal(raced.error.code, 'EAGAIN');
+  const again = await ask('model', {
+    provider: 'anthropic',
+    request: {
+      method: 'POST',
+      url: 'https://api.anthropic.com/v1/messages',
+      headers: [['x-api-key', placeholder]],
+    },
+  });
+  assert.deepEqual(again.request.headers, [['x-api-key', 'fake-ims-access-0142']]);
+  const reply = await page.evaluate(async () => {
+    const h = window.harness;
+    const before = h.egress.requests.length;
+    const pending = h.ask('refresh', { provider: 'anthropic' });
+    while (h.egress.requests.length === before)
+      await new Promise((resolve) => setTimeout(resolve, 20));
+    await h.call('put', { name: 'MEANWHILE_TWO', value: 'fake-meanwhile-0144' });
+    return pending;
+  });
+  assert.equal(reply.state, 'refreshed');
+  assert.equal(reply.expiresAt, undefined);
+  const plain = await ask('refresh', { provider: 'anthropic' });
+  assert.ok(plain.expiresAt > Date.now());
+});
