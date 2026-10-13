@@ -225,7 +225,11 @@ export class Preparer {
   async list(): Promise<Fields> {
     const scrubber = await this.scrubber();
     const clean = (settings: Record<string, string>) =>
-      Object.fromEntries(Object.entries(settings).map(([k, v]) => [k, scrubber.text(v).text]));
+      Object.fromEntries(
+        Object.entries(settings)
+          .filter(([key]) => scrubber.text(key).hits.length === 0)
+          .map(([key, value]) => [key, scrubber.text(value).text])
+      );
     return records(this.vault.db, this.ns).then((held) => {
       const now = this.vault.now();
       const shown = held.filter((r) => (r.kind === 'model' || r.kind === 'mcp') && !removed(r));

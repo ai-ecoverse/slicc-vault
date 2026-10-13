@@ -150,11 +150,15 @@ test('records lists model and mcp records, never values or secrets', async (t) =
       value: 'fake-echoed-0120',
       kind: 'mcp',
       server: 'bridge',
-      settings: { SAME: 'fake-echoed-0120' },
+      settings: { SAME: 'fake-echoed-0120', fake_key_name_0121: 'x' },
     })
+  );
+  await page.evaluate(() =>
+    window.harness.call('put', { name: 'KEYNAME', value: 'fake_key_name_0121' })
   );
   const listed = (await ask('records', {})).records;
   assert.ok(!JSON.stringify(listed).includes('fake-'));
+  assert.ok(!JSON.stringify(listed).includes('fake_key'));
   assert.deepEqual(listed.map((r) => r.name).sort(), [
     'ANTHROPIC_API_KEY',
     'BRIDGE',
