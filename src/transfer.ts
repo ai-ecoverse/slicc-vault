@@ -8,13 +8,14 @@ import type {
 } from './contract.ts';
 import { request, transact } from './db.ts';
 import { Refused } from './errors.ts';
-import { decrypt, ITERATIONS } from './keys.ts';
+import { type Dek, decrypt, ITERATIONS } from './keys.ts';
 import {
   aad,
   checkValue,
   NAME,
   PLACEHOLDER,
   records,
+  SOURCE,
   seal,
   state,
   type VaultRecord,
@@ -187,10 +188,17 @@ async function keepass(bytes: Uint8Array, password: unknown): Promise<Item[]> {
   } catch {
     throw new Refused('EACCES', "that password doesn't open this KeePass file");
   }
+  const seen = new Map<string, number>();
+  const unique = (title: string) => {
+    const base = nameOf(title);
+    const count = (seen.get(base) ?? 0) + 1;
+    seen.set(base, count);
+    return count === 1 ? base : `${base}_${count}`;
+  };
   return found
     .filter((entry) => entry.value)
     .map((entry) => ({
-      name: nameOf(entry.title),
+      name: unique(entry.title),
       value: entry.value,
       kind: 'secret' as const,
       source: 'import:keepass' as const,
@@ -212,7 +220,10 @@ async function items(kind: ImportKind, bytes: Uint8Array, password: unknown): Pr
       name: entry.name,
       value: entry.value,
       kind: entry.kind,
-      source: entry.source,
+      source:
+        typeof entry.source === 'string' && SOURCE.test(entry.source)
+          ? entry.source
+          : ('import:bundle' as const),
       placeholder: entry.placeholder,
       ...(typeof entry.expiresAt === 'number' ? { expiresAt: entry.expiresAt } : {}),
     }));
@@ -279,6 +290,26 @@ function picks(value: unknown): Map<string, string> {
   return out;
 }
 
+async function store(vault: Vault, ns: string, dek: Dek, item: Item): Promise<VaultRecord | null> {
+  try {
+    const { record } = await seal(vault.db, dek, {
+      ns,
+      kind: item.kind,
+      name: item.name,
+      value: item.value,
+      source: item.source,
+      uid: null,
+      tag: null,
+      now: vault.now(),
+      ...(item.expiresAt === undefined ? {} : { expiresAt: item.expiresAt }),
+      ...(item.placeholder === undefined ? {} : { placeholder: item.placeholder }),
+    });
+    return record;
+  } catch {
+    return null;
+  }
+}
+
 export async function importer(vault: Vault, ns: string, req: Fields): Promise<Fields> {
   const kind = req.kind as ImportKind;
   if (!['bundle', 'keepass', 'six'].includes(kind))
@@ -300,18 +331,11 @@ export async function importer(vault: Vault, ns: string, req: Fields): Promise<F
       skipped.push(item.name);
       continue;
     }
-    const { record } = await seal(vault.db, dek, {
-      ns,
-      kind: item.kind,
-      name: item.name,
-      value: item.value,
-      source: item.source,
-      uid: null,
-      tag: null,
-      now: vault.now(),
-      ...(item.expiresAt === undefined ? {} : { expiresAt: item.expiresAt }),
-      ...(item.placeholder === undefined ? {} : { placeholder: item.placeholder }),
-    });
+    const record = await store(vault, ns, dek, item);
+    if (!record) {
+      skipped.push(item.name);
+      continue;
+    }
     imported.push({
       name: record.name,
       placeholder: record.placeholder,

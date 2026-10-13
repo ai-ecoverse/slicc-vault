@@ -23,6 +23,7 @@ import {
   records,
   remove,
   restore,
+  SOURCE,
   seal,
   state,
   type VaultRecord,
@@ -50,7 +51,6 @@ export const AGENT_OPS = new Set([
   'refresh',
 ]);
 const KINDS = new Set<RecordKind>(['secret', 'grant', 'model', 'mcp']);
-const SOURCE = /^(?:settings|process|jerk:[^@\s]+@\S+|oauth:\S+|import:\S+)$/;
 
 type Fields = Record<string, unknown>;
 
