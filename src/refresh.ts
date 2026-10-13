@@ -93,12 +93,17 @@ export function tokens(response: EgressResponse, scrubber: Scrubber | null) {
     parsed = {};
   }
   const access = parsed.access_token;
-  if (response.status < 200 || response.status > 299 || typeof access !== 'string') {
+  const failed = response.status < 200 || response.status > 299 || parsed.error !== undefined;
+  if (failed || typeof access !== 'string') {
     const reason = typeof parsed.error === 'string' ? parsed.error : `status ${response.status}`;
     throw new Refused(
       'EACCES',
       `refresh failed: ${scrubber ? scrubber.text(reason).text : reason}`
     );
+  }
+  const type = parsed.token_type;
+  if (type !== undefined && (typeof type !== 'string' || type.toLowerCase() !== 'bearer')) {
+    throw new Refused('EACCES', 'refresh failed: the IdP returned a token_type other than Bearer');
   }
   const lifetime = parsed.expires_in;
   if (

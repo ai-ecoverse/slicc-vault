@@ -474,7 +474,6 @@ export class Server {
       ...(agent ? { agent } : {}),
     };
     this.sessions.add(session);
-    port.addEventListener('close', () => this.sessions.delete(session));
     port.onmessage = (message) => void this.handle(session, message.data, message.ports);
     port.start();
     session.queue = this.welcome(session);
