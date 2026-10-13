@@ -299,7 +299,7 @@ async function sealFromPage(vault: Vault, ns: string, request: Fields): Promise<
   const oauth = request.oauth === undefined ? undefined : checkOAuth(request.oauth);
   const jerk = request.jerk === undefined ? undefined : checkJerk(request.jerk);
   const pending = request.request === undefined ? null : await get(vault.db, ns, request.request);
-  if (pending && !signIn(pending, request.source as string, vault.now())) {
+  if (pending && (kind !== 'secret' || !signIn(pending, request.source as string, vault.now()))) {
     throw new Refused(
       'EINVAL',
       `request ${pending.id} isn't a pending sign-in or lease of this provider`
@@ -448,8 +448,10 @@ export class Server {
       return false;
     }
     const agent = role === 'agent' ? new AgentPort(this.vault, event.origin) : undefined;
-    if (role === 'page' && Number.isInteger(data.sudoGid)) {
-      this.vault.sudoGids.set(event.origin, data.sudoGid as number);
+    if (role === 'page') {
+      if (Number.isInteger(data.sudoGid))
+        this.vault.sudoGids.set(event.origin, data.sudoGid as number);
+      else this.vault.sudoGids.delete(event.origin);
     }
     const session: Session = {
       ns: event.origin,
