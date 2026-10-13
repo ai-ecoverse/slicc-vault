@@ -99,8 +99,7 @@ export function settle(
   id: string,
   now: number,
   to: 'done' | 'cancelled',
-  placeholder?: string,
-  jerk?: Record<string, unknown>
+  placeholder?: string
 ): Promise<HumanRequest> {
   return transact(db, ['requests'], 'readwrite', async (tx) => {
     const store = tx.objectStore('requests');
@@ -112,7 +111,6 @@ export function settle(
       ...entry,
       state: to,
       ...(placeholder ? { placeholder } : {}),
-      ...(jerk ? { jerk } : {}),
     };
     await request(store.put(settled));
     return settled;

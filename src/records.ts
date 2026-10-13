@@ -7,7 +7,7 @@ import type {
   Rule,
   SecretView,
 } from './contract.ts';
-import { all, request, transact } from './db.ts';
+import { all, request, type Store, transact } from './db.ts';
 import { Refused } from './errors.ts';
 import { type Dek, encrypt, type Keys, type Sealed } from './keys.ts';
 import type { Policy } from './policy.ts';
@@ -54,6 +54,7 @@ export interface SealInput {
   refresh?: string;
   oauth?: OAuthConfig;
   placeholder?: string;
+  answers?: { id: string; jerk?: Record<string, unknown> };
   now: number;
 }
 
@@ -163,6 +164,21 @@ function guard(existing: VaultRecord | undefined, input: SealInput): void {
   );
 }
 
+async function answered(
+  tx: IDBTransaction,
+  ns: string,
+  answers: { id: string; jerk?: Record<string, unknown> },
+  placeholder: string,
+  now: number
+): Promise<void> {
+  const store = tx.objectStore('requests');
+  const entry = (await request(store.get(answers.id))) as Record<string, unknown> | undefined;
+  const live = entry?.ns === ns && entry.state === 'pending' && now < (entry.expiresAt as number);
+  if (!entry || !live) throw new Refused('EINVAL', `request ${answers.id} is no longer pending`);
+  const jerk = answers.jerk ? { jerk: answers.jerk } : {};
+  await request(store.put({ ...entry, state: 'done', placeholder, ...jerk }));
+}
+
 async function keyed(tx: IDBTransaction, dek: Dek): Promise<void> {
   const keys = (await request(tx.objectStore('meta').get('keys'))) as Keys | undefined;
   if ((keys?.id ?? '') !== dek.id)
@@ -171,7 +187,10 @@ async function keyed(tx: IDBTransaction, dek: Dek): Promise<void> {
 
 export async function seal(db: IDBDatabase, dek: Dek, input: SealInput): Promise<Sealing> {
   const sealed = await encrypt(dek.key, input.value, aad(input.ns, input.kind, input.name));
-  return transact(db, ['records', 'audit', 'meta'], 'readwrite', async (tx) => {
+  const stores: Store[] = input.answers
+    ? ['records', 'audit', 'meta', 'requests']
+    : ['records', 'audit', 'meta'];
+  return transact(db, stores, 'readwrite', async (tx) => {
     await keyed(tx, dek);
     const store = tx.objectStore('records');
     const existing = (await request(store.get([input.ns, input.kind, input.name]))) as
@@ -194,6 +213,7 @@ export async function seal(db: IDBDatabase, dek: Dek, input: SealInput): Promise
       ...(input.oauth === undefined ? {} : { oauth: input.oauth }),
     };
     await request(store.put(record));
+    if (input.answers) await answered(tx, input.ns, input.answers, record.placeholder, input.now);
     await bump(tx, input.ns);
     const rotated = existing !== undefined && !removed(existing);
     await audit(tx, input.ns, {
@@ -211,8 +231,8 @@ export async function seal(db: IDBDatabase, dek: Dek, input: SealInput): Promise
 
 export interface Rotation {
   record: VaultRecord;
-  value: string;
-  expiresAt?: number;
+  value?: string;
+  expiresAt?: number | null;
 }
 
 export async function rotate(
@@ -225,7 +245,9 @@ export async function rotate(
 ): Promise<void> {
   const sealed = await Promise.all(
     rotations.map((r) =>
-      encrypt(dek.key, checkValue(r.value), aad(ns, r.record.kind, r.record.name))
+      r.value === undefined
+        ? null
+        : encrypt(dek.key, checkValue(r.value), aad(ns, r.record.kind, r.record.name))
     )
   );
   await transact(db, ['records', 'audit', 'meta'], 'readwrite', async (tx) => {
@@ -239,8 +261,12 @@ export async function rotate(
       if (current?.updatedAt !== record.updatedAt || current.placeholder !== record.placeholder) {
         throw new Refused('EAGAIN', `${record.name} changed meanwhile`);
       }
-      const expiry = rotation.expiresAt === undefined ? {} : { expiresAt: rotation.expiresAt };
-      await request(store.put({ ...current, sealed: sealed[i], updatedAt: now, ...expiry }));
+      const fresh = sealed[i];
+      if (!fresh) continue;
+      const { expiresAt: old, ...rest } = current;
+      const kept = rotation.expiresAt === undefined ? old : rotation.expiresAt;
+      const expiry = kept === null || kept === undefined ? {} : { expiresAt: kept };
+      await request(store.put({ ...rest, sealed: fresh, updatedAt: now, ...expiry }));
     }
     await bump(tx, ns);
     await audit(tx, ns, { ...entry, at: now });
