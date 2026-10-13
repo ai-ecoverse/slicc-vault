@@ -213,7 +213,7 @@ bios relays each kernel request unchanged as the `sealed` op, with the kernel's 
 
 ## Import and export
 
-Spectrum's Settings › Secrets reads the file and the password, and bios hands them over. Both need the vault unlocked.
+Spectrum's Settings › Secrets reads the file and the password, and bios hands them over. Both need the vault unlocked. Like every page op, `export` trusts the page: under rev 4 seven's page is trusted with values in transit (§8), and a compromised seven origin is out of scope.
 
 **`export { passphrase }`** returns `{ bundle: Uint8Array, count }`, a backup of the namespace's records of kind `secret`, `model` and `mcp` that aren't removed. Grants aren't included, because they need a fresh sign-in. The passphrase needs at least 12 characters. The bundle is UTF-8 JSON:
 
@@ -228,7 +228,7 @@ Spectrum's Settings › Secrets reads the file and the password, and bios hands 
 
 **`import { kind, bytes, password?, pick? }`** runs in two steps:
 - Without `pick` it answers `{ stage: 'pick', candidates: [{ name, kind, exists, suggestedRules?, refused? }] }`, for the human to choose from. `refused` says why a candidate can't be imported.
-- With `pick` it seals the candidates picked, each given as `{ name, kind }` or, for kind `secret`, as just its name, and answers `{ stage: 'done', imported: [{ name, placeholder, state }], skipped }`. `skipped` lists picked names that were refused or not in the file. Each record is stored in its own transaction, which also reserves a bundle's placeholder, so a record either lands whole or not at all; one that can't be stored (its placeholder was taken meanwhile, the vault was re-keyed) is listed in `skipped`, and the rest still import.
+- With `pick` it seals the candidates picked, each given as `{ name, kind }` or, for kind `secret`, as just its name, and answers `{ stage: 'done', imported: [{ name, placeholder, state }], skipped }`. `skipped` lists picked names that were refused or not in the file, and `reasons` maps each to a short reason ("not a valid name", "values shorter than 8 bytes can't be protected from the model", "it isn't in the file", …), never a value or part of one. Each record is stored in its own transaction, which also reserves a bundle's placeholder, so a record either lands whole or not at all; one that can't be stored (its placeholder was taken meanwhile, the vault was re-keyed) is listed in `skipped`, and the rest still import.
 
 | `kind` | `password` | what becomes a candidate |
 |---|---|---|
@@ -372,6 +372,7 @@ The npm package `@ai-ecoverse/slicc-vault` holds only TypeScript types, built fr
 - **`exec`**: `false` means the value is never revealed to a program; `any`, `argv` (with `execArgv`, the allowed argv prefixes) and `shell` are the `[exec]` modes under which `fnox exec` may hand it to a program.
 - **`exits`** is present only when `/etc/slicc/secrets-policy.toml` restricts that secret; absent means every exit (`page`, `proxy`, `tailscale`, `device:<id>`).
 - **`kind`**: `secret` (a credential programs use through rules), **`grant`** (a sign-in's refresh token, never injected; show it as "Sign-in"), `model` (a model provider key), `mcp` (an MCP server credential). `provider` and `account` name the service and the signed-in account where one is known.
+- **Who did it:** `uid` and `tag` are the kernel stamp for entries a program or the agent caused (`/dev/sealed` seals, `forward`, `mcp`, `materialize`). Every entry from a page-role op (`put`, `seal`, `remove`, `restore`, `import`, `policy`) and from the vault itself (`refresh`) has `uid: null, tag: null`, which spectrum shows as "by you".
 - **`AuditEntry`**: `forward` is a use of a value in a request, with the exit that carried it; `mcp` a kernel program's call to a registered MCP server; **`materialize` is shown as "Revealed to a program"**; `seal`, `remove`, `restore` and `policy` (with its `changes`) record changes. Every entry has a `seq` for paging.
 - **`VaultList.refused`** lists rules the vault dropped because they name a model or MCP endpoint.
 - **`PendingRequest.prompt`** is untrusted, agent-written text of at most 200 characters.
