@@ -227,9 +227,10 @@ const statusOp: Handler = async (ctx, req, stamp) => {
 
 const cancelOp: Handler = async (ctx, req, stamp) => {
   const entry = await get(ctx.db, ctx.ns, req.id, stamp.uid);
-  const settled = await settle(ctx.db, ctx.ns, entry.id, ctx.now(), 'cancelled');
+  const now = ctx.now();
+  const settled = await settle(ctx.db, ctx.ns, entry.id, now, 'cancelled');
   await ctx.changed();
-  if (current(entry, ctx.now()) === 'pending' && settled.state === 'cancelled')
+  if (current(entry, now) === 'pending' && settled.state === 'cancelled')
     ctx.emit({ v: 1, event: 'cancelled', request: entry.id, kind: entry.kind });
   return { state: settled.state };
 };

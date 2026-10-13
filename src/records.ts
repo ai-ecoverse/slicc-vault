@@ -54,7 +54,7 @@ export interface SealInput {
   refresh?: string;
   oauth?: OAuthConfig;
   placeholder?: string;
-  answers?: { id: string; jerk?: Record<string, unknown> };
+  answers?: Answers;
   now: number;
 }
 
@@ -164,13 +164,20 @@ function guard(existing: VaultRecord | undefined, input: SealInput): void {
   );
 }
 
+export interface Answers {
+  id: string;
+  jerk?: Record<string, unknown>;
+  clock?: () => number;
+}
+
 async function answered(
   tx: IDBTransaction,
   ns: string,
-  answers: { id: string; jerk?: Record<string, unknown> },
+  answers: Answers,
   placeholder: string,
-  now: number
+  sealedAt: number
 ): Promise<void> {
+  const now = answers.clock ? answers.clock() : sealedAt;
   const store = tx.objectStore('requests');
   const entry = (await request(store.get(answers.id))) as Record<string, unknown> | undefined;
   const live = entry?.ns === ns && entry.state === 'pending' && now < (entry.expiresAt as number);
