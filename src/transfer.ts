@@ -260,26 +260,23 @@ function elsewhere(db: IDBDatabase, ns: string): Promise<Set<string>> {
   });
 }
 
-async function place(vault: Vault, ns: string, item: Item): Promise<void> {
-  const placeholder = item.placeholder;
-  if (!placeholder) return;
-  await transact(vault.db, ['records'], 'readwrite', async (tx) => {
-    const store = tx.objectStore('records');
-    const existing = await request(store.get([ns, item.kind, item.name]));
-    if (existing) return;
-    const fresh: VaultRecord = {
-      ns,
-      kind: item.kind,
-      name: item.name,
-      placeholder,
-      sealed: { iv: random(12), data: new ArrayBuffer(0) },
-      source: item.source,
-      createdAt: vault.now(),
-      updatedAt: 0,
-      removedAt: 0,
-    };
-    await request(store.put(fresh));
-  });
+function identity(kind: string, name: string): string {
+  return `${kind}\0${name}`;
+}
+
+function picks(value: unknown): Map<string, string> {
+  if (!Array.isArray(value))
+    throw new Refused('EINVAL', 'pick must be a list of names or { name, kind }');
+  const out = new Map<string, string>();
+  for (const entry of value) {
+    const item =
+      typeof entry === 'string' ? { name: entry, kind: 'secret' } : (entry as Fields | null);
+    if (typeof item?.name !== 'string' || typeof item.kind !== 'string') {
+      throw new Refused('EINVAL', 'pick must be a list of names or { name, kind }');
+    }
+    out.set(identity(item.kind, item.name), item.name);
+  }
+  return out;
 }
 
 export async function importer(vault: Vault, ns: string, req: Fields): Promise<Fields> {
@@ -294,19 +291,15 @@ export async function importer(vault: Vault, ns: string, req: Fields): Promise<F
   if (req.pick === undefined) {
     return { stage: 'pick', candidates: found.map((item) => candidate(item, held, taken)) };
   }
-  if (!Array.isArray(req.pick) || !req.pick.every((name) => typeof name === 'string')) {
-    throw new Refused('EINVAL', 'pick must be a list of names');
-  }
-  const picked = new Set(req.pick as string[]);
+  const picked = picks(req.pick);
   const imported: SealResult[] = [];
   const skipped: string[] = [];
   for (const item of found) {
-    if (!picked.has(item.name)) continue;
+    if (!picked.has(identity(item.kind, item.name))) continue;
     if (problem(item, held, taken)) {
       skipped.push(item.name);
       continue;
     }
-    await place(vault, ns, item);
     const { record } = await seal(vault.db, dek, {
       ns,
       kind: item.kind,
@@ -317,6 +310,7 @@ export async function importer(vault: Vault, ns: string, req: Fields): Promise<F
       tag: null,
       now: vault.now(),
       ...(item.expiresAt === undefined ? {} : { expiresAt: item.expiresAt }),
+      ...(item.placeholder === undefined ? {} : { placeholder: item.placeholder }),
     });
     imported.push({
       name: record.name,
@@ -324,7 +318,9 @@ export async function importer(vault: Vault, ns: string, req: Fields): Promise<F
       state: state(record, vault.policy(ns), vault.now()),
     });
   }
-  for (const name of picked) if (!found.some((item) => item.name === name)) skipped.push(name);
+  for (const [id, name] of picked) {
+    if (!found.some((item) => identity(item.kind, item.name) === id)) skipped.push(name);
+  }
   if (imported.length) await vault.changed(ns, ['secrets', 'audit']);
   return { stage: 'done', imported, skipped };
 }

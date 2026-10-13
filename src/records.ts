@@ -43,6 +43,7 @@ export interface SealInput {
   tag: string | null;
   expiresAt?: number;
   refresh?: string;
+  placeholder?: string;
   now: number;
 }
 
@@ -121,6 +122,14 @@ export function view(record: VaultRecord, policy: Policy, now: number): SecretVi
   };
 }
 
+async function chosen(store: IDBObjectStore, wanted: string | undefined): Promise<string> {
+  if (wanted === undefined) return unused(store);
+  if ((await request(store.index('placeholder').count(wanted))) > 0) {
+    throw new Refused('EEXIST', 'that placeholder is already in use in this vault');
+  }
+  return wanted;
+}
+
 async function unused(store: IDBObjectStore): Promise<string> {
   for (;;) {
     const placeholder = mint();
@@ -153,7 +162,7 @@ export async function seal(db: IDBDatabase, dek: Dek, input: SealInput): Promise
       ns: input.ns,
       kind: input.kind,
       name: input.name,
-      placeholder: existing?.placeholder ?? (await unused(store)),
+      placeholder: existing?.placeholder ?? (await chosen(store, input.placeholder)),
       sealed,
       source: input.source,
       createdAt: existing && !removed(existing) ? existing.createdAt : input.now,

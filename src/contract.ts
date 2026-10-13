@@ -334,7 +334,13 @@ export type Op =
       expiresAt?: EpochMs;
       refresh?: string;
     }
-  | { op: 'import'; kind: ImportKind; bytes: Uint8Array; password?: string; pick?: string[] }
+  | {
+      op: 'import';
+      kind: ImportKind;
+      bytes: Uint8Array;
+      password?: string;
+      pick?: (string | { name: string; kind: RecordKind })[];
+    }
   | { op: 'export'; passphrase: string }
   | { op: 'lock' }
   | { op: 'dismissBackupReminder' }
