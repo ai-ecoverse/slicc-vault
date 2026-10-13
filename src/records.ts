@@ -207,7 +207,7 @@ export async function seal(db: IDBDatabase, dek: Dek, input: SealInput): Promise
       sealed,
       source: input.source,
       createdAt: existing && !removed(existing) ? existing.createdAt : input.now,
-      updatedAt: input.now,
+      updatedAt: existing ? Math.max(input.now, existing.updatedAt + 1) : input.now,
       ...(input.expiresAt === undefined ? {} : { expiresAt: input.expiresAt }),
       ...(input.refresh === undefined ? {} : { refresh: input.refresh }),
       ...(input.oauth === undefined ? {} : { oauth: input.oauth }),
@@ -271,7 +271,8 @@ export async function rotate(
       const { expiresAt: old, ...rest } = current;
       const kept = rotation.expiresAt === undefined ? old : rotation.expiresAt;
       const expiry = kept === null || kept === undefined ? {} : { expiresAt: kept };
-      await request(store.put({ ...rest, sealed: fresh, updatedAt: now, ...expiry }));
+      const updatedAt = Math.max(now, current.updatedAt + 1);
+      await request(store.put({ ...rest, sealed: fresh, updatedAt, ...expiry }));
     }
     await bump(tx, ns);
     await audit(tx, ns, { ...entry, at: now });
