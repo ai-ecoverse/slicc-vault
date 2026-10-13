@@ -210,6 +210,8 @@ export async function apply(
       moved = true;
       await audit(tx, ns, {
         type: 'policy',
+        uid: null,
+        tag: null,
         file: evaluation.path as PolicyFile,
         sha256: evaluation.sha256,
         accepted: evaluation.trusted,

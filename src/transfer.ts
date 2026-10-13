@@ -188,12 +188,13 @@ async function keepass(bytes: Uint8Array, password: unknown): Promise<Item[]> {
   } catch {
     throw new Refused('EACCES', "that password doesn't open this KeePass file");
   }
-  const seen = new Map<string, number>();
+  const used = new Set<string>();
   const unique = (title: string) => {
     const base = nameOf(title);
-    const count = (seen.get(base) ?? 0) + 1;
-    seen.set(base, count);
-    return count === 1 ? base : `${base}_${count}`;
+    let name = base;
+    for (let n = 2; used.has(name); n++) name = `${base}_${n}`;
+    used.add(name);
+    return name;
   };
   return found
     .filter((entry) => entry.value)
@@ -325,15 +326,21 @@ export async function importer(vault: Vault, ns: string, req: Fields): Promise<F
   const picked = picks(req.pick);
   const imported: SealResult[] = [];
   const skipped: string[] = [];
+  const reasons: Record<string, string> = Object.create(null);
+  const skip = (name: string, reason: string) => {
+    skipped.push(name);
+    reasons[name] = reason;
+  };
   for (const item of found) {
     if (!picked.has(identity(item.kind, item.name))) continue;
-    if (problem(item, held, taken)) {
-      skipped.push(item.name);
+    const reason = problem(item, held, taken);
+    if (reason) {
+      skip(item.name, reason);
       continue;
     }
     const record = await store(vault, ns, dek, item);
     if (!record) {
-      skipped.push(item.name);
+      skip(item.name, "it couldn't be stored; try again");
       continue;
     }
     imported.push({
@@ -343,10 +350,11 @@ export async function importer(vault: Vault, ns: string, req: Fields): Promise<F
     });
   }
   for (const [id, name] of picked) {
-    if (!found.some((item) => identity(item.kind, item.name) === id)) skipped.push(name);
+    if (!found.some((item) => identity(item.kind, item.name) === id))
+      skip(name, "it isn't in the file");
   }
   if (imported.length) await vault.changed(ns, ['secrets', 'audit']);
-  return { stage: 'done', imported, skipped };
+  return { stage: 'done', imported, skipped, reasons: Object.fromEntries(Object.entries(reasons)) };
 }
 
 export async function exporter(vault: Vault, ns: string, req: Fields): Promise<Fields> {

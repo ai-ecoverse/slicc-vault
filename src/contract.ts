@@ -171,6 +171,8 @@ export interface PolicyEntry {
   seq: number;
   id: string;
   at: EpochMs;
+  uid: null;
+  tag: null;
   file: PolicyFile;
   sha256: string;
   accepted: boolean;
@@ -292,7 +294,7 @@ export interface ImportCandidate {
 
 export type ImportResult =
   | { stage: 'pick'; candidates: ImportCandidate[] }
-  | { stage: 'done'; imported: SealResult[]; skipped: string[] };
+  | { stage: 'done'; imported: SealResult[]; skipped: string[]; reasons?: Record<string, string> };
 
 export type PopupIntent = { kind: 'unlock' } | { kind: 'protect' };
 
