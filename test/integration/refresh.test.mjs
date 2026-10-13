@@ -108,6 +108,15 @@ test('a route (b) sign-in is sealed against its request, with a grant that refre
   );
   assert.equal(invalid.error.code, 'EACCES');
   assert.equal(invalid.error.message, 'refresh failed: the IdP returned an invalid expires_in');
+  await page.evaluate(() => {
+    window.harness.egress.answer = {
+      status: 200,
+      headers: [],
+      body: '{"access_token":"fake-access-token-0005","refresh_token":""}',
+    };
+  });
+  const empty = await page.evaluate(() => window.harness.call('refresh', { name: 'GITHUB_TOKEN' }));
+  assert.match(empty.error.message, /shorter than 8 bytes/);
   const mismatched = await page.evaluate(async () => [
     await window.harness.call('seal', {
       name: 'WRONG_LEASE',
