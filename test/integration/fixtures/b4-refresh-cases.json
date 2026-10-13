@@ -179,6 +179,27 @@
         "code": "EINVAL"
       },
       "note": "Codex on slicc-vault#21: a backslash separator must not hide empty userinfo"
+    },
+    {
+      "id": "dup-expires-in",
+      "area": "token-response",
+      "setup": {
+        "response": {
+          "status": 200,
+          "headers": {
+            "content-type": "application/json"
+          },
+          "body": "{\"access_token\":\"fake-access-token-0502\",\"expires_in\":60,\"expires_in\":3600}"
+        },
+        "tokenUrl": "https://auth.example/token",
+        "nowSecs": 1000
+      },
+      "jerkOauth": null,
+      "vault": {
+        "result": "refuse",
+        "message": "refresh failed: the IdP returned expires_in twice"
+      },
+      "note": "Codex on slicc-vault#21: the vault also refuses a duplicate expires_in"
     }
   ]
 }
