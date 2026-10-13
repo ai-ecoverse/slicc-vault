@@ -144,11 +144,21 @@ test('mcp fills its server credential on the kernel loopback, and never sends on
 
 test('records lists model and mcp records, never values or secrets', async (t) => {
   const { page, ask } = await ready(t);
+  await page.evaluate(() =>
+    window.harness.call('put', {
+      name: 'ECHOED',
+      value: 'fake-echoed-0120',
+      kind: 'mcp',
+      server: 'bridge',
+      settings: { SAME: 'fake-echoed-0120' },
+    })
+  );
   const listed = (await ask('records', {})).records;
   assert.ok(!JSON.stringify(listed).includes('fake-'));
   assert.deepEqual(listed.map((r) => r.name).sort(), [
     'ANTHROPIC_API_KEY',
     'BRIDGE',
+    'ECHOED',
     'OPENAI_API_KEY',
   ]);
   const anthropic = listed.find((r) => r.name === 'ANTHROPIC_API_KEY');

@@ -222,7 +222,10 @@ export class Preparer {
     });
   }
 
-  list(): Promise<Fields> {
+  async list(): Promise<Fields> {
+    const scrubber = await this.scrubber();
+    const clean = (settings: Record<string, string>) =>
+      Object.fromEntries(Object.entries(settings).map(([k, v]) => [k, scrubber.text(v).text]));
     return records(this.vault.db, this.ns).then((held) => {
       const now = this.vault.now();
       const shown = held.filter((r) => (r.kind === 'model' || r.kind === 'mcp') && !removed(r));
@@ -237,7 +240,7 @@ export class Preparer {
             ...(r.provider === undefined ? {} : { provider: r.provider }),
             ...(r.server === undefined ? {} : { server: r.server }),
             ...(r.expiresAt === undefined ? {} : { expiresAt: r.expiresAt }),
-            ...(r.settings === undefined ? {} : { settings: r.settings }),
+            ...(r.settings === undefined ? {} : { settings: clean(r.settings) }),
           };
         }),
       };
@@ -258,7 +261,10 @@ export class Preparer {
     if (!registered.mcp.some((e) => e.server === server && e.tokenUrl === oauth.tokenUrl)) {
       throw new Refused('EACCES', `${oauth.tokenUrl} isn't the registered tokenUrl of ${server}`);
     }
-    const base = typeof fields.name === 'string' ? fields.name : defaultName(server);
+    if (fields.name !== undefined && typeof fields.name !== 'string') {
+      throw new Refused('EINVAL', 'name must be a record name');
+    }
+    const base = fields.name ?? defaultName(server);
     const grantName = `${base}_GRANT`;
     if (!NAME.test(base) || grantName.length > 128) {
       throw new Refused('EINVAL', 'name must be a record name');
