@@ -228,7 +228,7 @@ Spectrum's Settings › Secrets reads the file and the password, and bios hands 
 
 **`import { kind, bytes, password?, pick? }`** runs in two steps:
 - Without `pick` it answers `{ stage: 'pick', candidates: [{ name, kind, exists, suggestedRules?, refused? }] }`, for the human to choose from. `refused` says why a candidate can't be imported.
-- With `pick` (a list of names) it seals those and answers `{ stage: 'done', imported: [{ name, placeholder, state }], skipped }`. `skipped` lists picked names that were refused or not in the file.
+- With `pick` it seals the candidates picked, each given as `{ name, kind }` or, for kind `secret`, as just its name, and answers `{ stage: 'done', imported: [{ name, placeholder, state }], skipped }`. `skipped` lists picked names that were refused or not in the file. A bundle's placeholder is reserved in the same transaction that stores the value, so a refused or interrupted import leaves nothing behind.
 
 | `kind` | `password` | what becomes a candidate |
 |---|---|---|
