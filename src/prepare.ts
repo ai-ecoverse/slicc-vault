@@ -298,7 +298,7 @@ export class Preparer {
     );
     const tokensIn = (text: string) =>
       text.includes(got.access) || (got.refresh !== null && text.includes(got.refresh));
-    if (tokensIn(server) || tokensIn(base)) {
+    if (tokensIn(server) || tokensIn(base) || tokensIn(grantName)) {
       throw new Refused('EINVAL', 'the server or record name holds a value');
     }
     checkValue(got.access);
