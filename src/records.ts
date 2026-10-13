@@ -487,13 +487,31 @@ export function records(db: IDBDatabase, ns: string): Promise<VaultRecord[]> {
   return transact(db, ['records'], 'readonly', (tx) => all<VaultRecord>(tx, 'records', ns));
 }
 
+export function withGrantBindings(held: VaultRecord[]): VaultRecord[] {
+  const owners = new Map<string, VaultRecord>();
+  for (const r of held) {
+    if (r.kind !== 'grant' && r.refresh) owners.set(`${r.source}\u0000${r.refresh}`, r);
+  }
+  return held.map((r) => {
+    const owner = r.kind === 'grant' ? owners.get(`${r.source}\u0000${r.name}`) : undefined;
+    if (!owner) return r;
+    return {
+      ...r,
+      ...(r.server === undefined && owner.server !== undefined ? { server: owner.server } : {}),
+      ...(r.provider === undefined && owner.provider !== undefined
+        ? { provider: owner.provider }
+        : {}),
+    };
+  });
+}
+
 async function tagGrant(store: IDBObjectStore, record: VaultRecord): Promise<void> {
   if (!record.refresh || record.kind === 'grant') return;
   if (record.server === undefined && record.provider === undefined) return;
   const grant = (await request(store.get([record.ns, 'grant', record.refresh]))) as
     | VaultRecord
     | undefined;
-  if (!grant) return;
+  if (!grant || grant.source !== record.source) return;
   const server = record.server === undefined ? {} : { server: record.server };
   const provider = record.provider === undefined ? {} : { provider: record.provider };
   await request(store.put({ ...grant, ...server, ...provider }));
@@ -509,7 +527,7 @@ async function linked(
   const grant = (await request(store.get([record.ns, 'grant', record.refresh]))) as
     | VaultRecord
     | undefined;
-  if (!grant) return null;
+  if (!grant || grant.source !== record.source) return null;
   const gone = grant.removedAt !== undefined && now - grant.removedAt > RESTORABLE;
   if (gone || removed(grant) === removing) return null;
   if (removing) grant.removedAt = now;

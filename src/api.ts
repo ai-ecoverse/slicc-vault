@@ -30,6 +30,7 @@ import {
   state,
   type VaultRecord,
   view,
+  withGrantBindings,
 } from './records.ts';
 import {
   checkOAuth,
@@ -110,7 +111,7 @@ export async function list(vault: Vault, ns: string): Promise<VaultList> {
   const policy = vault.policy(ns);
   const { scrubber, held } = await consistent(vault, ns);
   const clean = scrubber ? (text: string) => scrubber.text(text).text : null;
-  const secrets = held
+  const secrets = withGrantBindings(held)
     .sort((a, b) => a.name.localeCompare(b.name) || a.kind.localeCompare(b.kind))
     .map((record) => view(record, policy, now, clean));
   const { audit: entries, more } = await audit(vault, ns);
