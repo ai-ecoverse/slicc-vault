@@ -258,7 +258,12 @@ export async function rotate(
       const current = (await request(store.get([ns, record.kind, record.name]))) as
         | VaultRecord
         | undefined;
-      if (current?.updatedAt !== record.updatedAt || current.placeholder !== record.placeholder) {
+      const same =
+        current?.updatedAt === record.updatedAt &&
+        current.placeholder === record.placeholder &&
+        current.removedAt === undefined &&
+        record.removedAt === undefined;
+      if (!same) {
         throw new Refused('EAGAIN', `${record.name} changed meanwhile`);
       }
       const fresh = sealed[i];

@@ -99,7 +99,7 @@ export function tokens(response: EgressResponse, scrubber: Scrubber | null) {
     );
   }
   const expires =
-    typeof parsed.expires_in === 'number' && parsed.expires_in > 0 ? parsed.expires_in : null;
+    typeof parsed.expires_in === 'number' && parsed.expires_in >= 0 ? parsed.expires_in : null;
   const refresh = typeof parsed.refresh_token === 'string' ? parsed.refresh_token : null;
   return { access, expires, refresh };
 }
