@@ -13,12 +13,18 @@ export const ARGV_SHOWN = 200;
 const MINUTE = 60 * 1000;
 const DAY = 24 * 60 * MINUTE;
 
+const WRAPPERS = /^(env|printenv|xargs|sudo|su|nohup|timeout|time|nice|strace)$/;
+
+function basename(path: string): string {
+  return path.slice(path.lastIndexOf('/') + 1);
+}
+
 export const REFUSED_PROGRAMS = [
   /^(sh|bash|dash|zsh|fish|busybox|jsh)$/,
   /^python[0-9.]*$/,
   /^(node|deno|bun|perl|ruby|php|lua|wasmer)$/,
   /^([gmn]?awk|sed|tclsh|expect|R|Rscript|irb)$/,
-  /^(env|printenv|xargs|sudo|su|nohup|timeout|time|nice|strace)$/,
+  WRAPPERS,
 ];
 
 type Fields = Record<string, unknown>;
@@ -89,8 +95,7 @@ export function asked(req: Fields): Asked {
 }
 
 export function refusedProgram(path: string): boolean {
-  const base = path.slice(path.lastIndexOf('/') + 1);
-  return REFUSED_PROGRAMS.some((pattern) => pattern.test(base));
+  return REFUSED_PROGRAMS.some((pattern) => pattern.test(basename(path)));
 }
 
 export function listed(prefixes: string[][], path: string, argv: string[]): boolean {
@@ -109,16 +114,19 @@ export function allowedChain(
   policy: Policy,
   name: string,
   path: string,
-  chain: string[]
+  chain: string[],
+  trusted: boolean
 ): string | null {
   const mode = policy.exec(name);
   if (mode === 'shell') return null;
-  const programs = [path, ...chain];
   if (mode === 'argv') {
-    const named = new Set((policy.argv(name) as string[][]).map((prefix) => prefix[0]));
-    return programs.find((program) => refusedProgram(program) && !named.has(program)) ?? null;
+    const wrapper = chain.find((program) => WRAPPERS.test(basename(program)));
+    if (wrapper) return `${name} isn't revealed to ${wrapper}: env and other wrappers stay refused`;
+    if (trusted || !chain.some(refusedProgram)) return null;
+    return `${name} isn't revealed: the script or its interpreter can be changed by a non-root user`;
   }
-  return programs.find(refusedProgram) ?? null;
+  const blocked = [path, ...chain].find(refusedProgram);
+  return blocked ? `${name} isn't revealed to ${blocked}` : null;
 }
 
 function real(policy: Policy, name: string, ask: Asked): boolean {
@@ -194,21 +202,22 @@ function chainOf(found: Ticket, req: Fields): string[] {
     fail('the kernel sent no interpreter chain');
   }
   const interpreters = chain as string[];
-  if (found.interpreter !== (interpreters[0] ?? null)) {
+  if (typeof req.trusted !== 'boolean') fail('the kernel sent no trusted flag');
+  if (found.interpreter !== null && found.interpreter !== interpreters[0]) {
     fail("fnox's interpreter isn't the one the kernel resolved");
   }
   return interpreters;
 }
 
-function granted(policy: Policy, found: Ticket, interpreters: string[]): void {
+function granted(policy: Policy, found: Ticket, interpreters: string[], trusted: boolean): void {
   for (const name of found.names) {
     const mode = policy.exec(name);
     if (mode === false) fail(`${name} is no longer granted in [exec]`);
     if (mode === 'argv' && !listed(policy.argv(name) as string[][], found.path, found.argv)) {
       fail(`${name}'s [exec] grant no longer lists this command`);
     }
-    const blocked = allowedChain(policy, name, found.path, interpreters);
-    if (blocked) fail(`${name} isn't revealed to ${blocked}`);
+    const blocked = allowedChain(policy, name, found.path, interpreters, trusted);
+    if (blocked) fail(blocked);
   }
 }
 
@@ -294,7 +303,8 @@ export class Exec {
     this.tickets.delete(id);
     if (!found || found.ns !== ns) return fail('unknown or already used');
     matching(found, req, this.vault.now());
-    granted(await this.vault.loadPolicy(ns), found, chainOf(found, req));
+    const chain = chainOf(found, req);
+    granted(await this.vault.loadPolicy(ns), found, chain, req.trusted as boolean);
     const key = this.vault.keyring.key;
     if (!key) throw new Refused('EACCES', 'vault is locked: unlock it in the vault window');
     const held = await records(this.vault.db, ns);

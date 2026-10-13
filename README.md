@@ -177,7 +177,7 @@ iframe.contentWindow.postMessage({ type: 'slicc-vault', v: 1, op: 'hello', role:
 | `dismissBackupReminder` | — | `{ backupReminder }`; the reminder becomes `dismissed` for this namespace |
 | `policy` | `files` | the attested policy files, below (Policy) |
 | `forward` | `head`, `body?`, `owner`, `exit`, `rawTraits`, with a `MessagePort` transferred alongside | the injected head, below (Forward) |
-| `materializeConsume` | `ticket`, `stamp`, `path`, `argv`, `cwd`, `interpreters` | the values for the child's environment, below (Exec) |
+| `materializeConsume` | `ticket`, `stamp`, `path`, `argv`, `cwd`, `interpreters`, `trusted` | the values for the child's environment, below (Exec) |
 | `import`, `export`, anything else | | `ENOTSUP` |
 
 `put` and `seal` need the vault unlocked. They answer `EACCES` with a message starting `vault is locked` otherwise.
@@ -223,11 +223,22 @@ bios relays each kernel request unchanged as the `sealed` op, with the kernel's 
 - Each real name is audited as `materialize { name, exec, path, argv, argvSha256, cwd, pid, ppid, uid, tag, ticket, consumed: false }`. `argv` is joined with spaces, scrubbed, and cut to 200 characters; `argvSha256` is the SHA-256 of each argument followed by a NUL byte.
 - The reply never carries a value. The ticket is 32 hex characters and expires after 30 s.
 
-**`materializeConsume`** (a page op, from bios for the kernel at exec) takes `{ ticket, stamp, path, argv, cwd, interpreters }`, with `stamp` the exec'ing process and `interpreters` the absolute, symlink-resolved shebang/binfmt chain the kernel actually resolved for `path` (empty for a native binary), relayed unchanged. The vault burns the ticket, then requires that:
+**`materializeConsume`** (a page op, from bios for the kernel at exec) takes `{ ticket, stamp, path, argv, cwd, interpreters, trusted }`, all from the kernel and relayed unchanged:
+- `stamp` is the exec'ing process.
+- `interpreters` is the absolute, symlink-resolved shebang/binfmt chain the kernel resolved for `path`, empty for a native binary. A plain `#!/usr/bin/env X` (or `env -S`) is reported as the resolved `X`; `env` with any other option or a `NAME=value` assignment is reported as `env` itself.
+- `trusted` is true when `path` and every chain entry are root-owned regular files, not group- or other-writable, under root-owned, non-writable parents (the attestation rule).
+
+The vault burns the ticket, then requires that:
 - it's unexpired and from this namespace, `stamp.ppid` is the pid that asked, and `path`, `argv` (element by element) and `cwd` are exactly the ones it was issued for;
-- `interpreters` is a list of absolute paths, and fnox's claim matches it: a claimed `interpreter` equals `interpreters[0]`, and no claim means `interpreters` is empty;
-- under each real name's `[exec]` mode, in the policy as stored now (reloaded at materialize and at consume), no program in `path` and `interpreters` is refused: for `true` none may be on the refusal list; for `{ argv }` a refused one must itself be the program of one of the grant's prefixes; `{ shell = true }` allows any;
-- each real name is still granted by the policy in force now (a removed grant, or an `{ argv }` grant that no longer lists the command, refuses), and no real record has expired meanwhile. Any mismatch is `EACCES: ticket refused: …`, and the ticket stays burned. It answers `{ values: { NAME: value }, placeholders: { NAME: placeholder } }` for the names that were real and still exist, and marks their audit entries `consumed`. The kernel swaps each env var whose value is exactly one of those placeholders, and compiles its own scrubber over these values for the child's output (S2).
+- `interpreters` is a list of absolute paths and `trusted` a boolean; a claimed `interpreter` from fnox equals `interpreters[0]` (without a claim, the kernel's chain is taken as it is);
+- each real name is still granted by the policy as stored now (reloaded at materialize and at consume): a removed grant, or an `{ argv }` grant that no longer lists the command, refuses;
+- under that name's mode, the chain passes:
+  - `true`: no entry of `path` and `interpreters` is on the refusal list, so a `#!/usr/bin/env node` script needs an `{ argv }` rule;
+  - `{ argv }`: the listed program is `path`, and whatever chain the kernel resolved for it is allowed, so a rule for `npm publish` allows `/usr/bin/npm`'s `node`. But when the chain holds a refused program and `trusted` is false, it refuses ("the script or its interpreter can be changed by a non-root user"), and `env` and the other wrappers in the chain always refuse;
+  - `{ shell = true }`: any chain;
+- no real record has expired meanwhile.
+
+Any failure is `EACCES: ticket refused: …`, and the ticket stays burned. It answers `{ values: { NAME: value }, placeholders: { NAME: placeholder } }` for the names that were real and still exist, and marks their audit entries `consumed`. The kernel swaps each env var whose value is exactly one of those placeholders, and compiles its own scrubber over these values for the child's output (S2).
 
 ## Forward
 
