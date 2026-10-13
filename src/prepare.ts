@@ -261,6 +261,7 @@ export class Preparer {
           .map(([key, value]) => [key, scrubber.text(value).text])
       );
     const now = this.vault.now();
+    const echoed = (t: string) => scrubber.text(t).hits.length > 0;
     const plain = (r: VaultRecord) =>
       [r.name, r.provider ?? '', r.server ?? ''].every((t) => scrubber.text(t).hits.length === 0);
     const shown = held.filter(
@@ -276,7 +277,9 @@ export class Preparer {
           state: expired ? (r.refresh ? 'refreshing' : 'expired') : 'ready',
           ...(r.provider === undefined ? {} : { provider: r.provider }),
           ...(r.server === undefined ? {} : { server: r.server }),
-          ...(r.expiresAt === undefined ? {} : { expiresAt: r.expiresAt }),
+          ...(r.expiresAt === undefined || echoed(String(r.expiresAt))
+            ? {}
+            : { expiresAt: r.expiresAt }),
           ...(r.settings === undefined ? {} : { settings: clean(r.settings) }),
         };
       }),
@@ -355,15 +358,19 @@ export class Preparer {
       access_token: sealedAccess.placeholder,
       ...(sealedGrant ? { refresh_token: sealedGrant.placeholder } : {}),
     });
+    const own = new Set(written.map((r) => r.name));
+    const foreign = (t: string) => scrubber.text(t).hits.some((h) => !own.has(h.name));
+    const named = (t: string) => (foreign(t) ? scrubber.text(t).text : t);
     const shown = written.map((r) => ({
       kind: r.kind,
-      name: r.name,
+      name: named(r.name),
       placeholder: r.placeholder,
     }));
+    const expiry = sealedAccess.expiresAt;
     return {
       response: typeof response === 'string' ? rewritten : new TextEncoder().encode(rewritten),
       records: shown,
-      ...(sealedAccess.expiresAt === undefined ? {} : { expiresAt: sealedAccess.expiresAt }),
+      ...(expiry === undefined || foreign(String(expiry)) ? {} : { expiresAt: expiry }),
     };
   }
 

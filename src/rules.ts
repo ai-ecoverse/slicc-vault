@@ -125,7 +125,7 @@ export function register(
       byUrl.set(
         key,
         known
-          ? { ...known, ...server, names: [...new Set([...known.names, ...server.names])] }
+          ? { ...server, ...known, names: [...new Set([...known.names, ...server.names])] }
           : server
       );
     }
