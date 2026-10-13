@@ -248,6 +248,33 @@ test('an MCP sign-in is sealed by grant and refreshed in the vault through egres
     ]),
   });
   assert.deepEqual(again.request.headers, [['authorization', 'Bearer fake-mcp-access-0107']]);
+  await ask('endpoints', {
+    mcp: [
+      {
+        server: 'DOCS',
+        url: 'https://docs2.example.com/mcp',
+        tokenUrl: 'https://auth.example.com/token',
+      },
+    ],
+  });
+  const clash = await ask('grant', {
+    server: 'DOCS',
+    oauth,
+    response: JSON.stringify({ access_token: 'fake-mcp-access-0109' }),
+  });
+  assert.equal(clash.error.code, 'EEXIST');
+  const second = await ask('grant', {
+    server: 'docs',
+    name: 'DOCS_SECOND',
+    oauth,
+    response: JSON.stringify({
+      access_token: 'fake-mcp-access-0110',
+      refresh_token: 'fake-mcp-refresh-0111',
+    }),
+  });
+  assert.equal(second.records[0].name, 'DOCS_SECOND');
+  const ambiguous = await ask('refresh', { server: 'docs' });
+  assert.match(ambiguous.error.message, /several; name the one/);
   const none = await ask('refresh', { provider: 'anthropic' });
   assert.equal(none.error.code, 'ENOENT');
   const short = await ask('grant', { server: 'docs', oauth, response: '{"access_token":"short"}' });

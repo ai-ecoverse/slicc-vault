@@ -264,6 +264,15 @@ export class Preparer {
     if (!NAME.test(base) || grantName.length > 128) {
       throw new Refused('EINVAL', 'name must be a record name');
     }
+    const taken = (await records(this.vault.db, this.ns)).find(
+      (r) => r.kind === 'mcp' && r.name === base && r.server !== server
+    );
+    if (taken) {
+      throw new Refused(
+        'EEXIST',
+        `${base} belongs to another MCP server; give this sign-in a name`
+      );
+    }
     const got = tokens(
       { status: 200, headers: [], body: response },
       await this.vault.scrubbers.get(this.ns)
@@ -318,16 +327,25 @@ export class Preparer {
     const byProvider = typeof provider === 'string' && provider;
     if (!byServer === !byProvider)
       throw new Refused('EINVAL', 'refresh takes a server or a provider');
-    const found = (await records(this.vault.db, this.ns)).find(
+    const named = fields.name;
+    const matching = (await records(this.vault.db, this.ns)).filter(
       (r) =>
         !removed(r) &&
         r.refresh !== undefined &&
+        (named === undefined || r.name === named) &&
         (byServer
           ? r.kind === 'mcp' && r.server === server
           : r.kind === 'model' && r.provider === provider)
     );
+    const found = matching[0];
     if (!found)
       throw new Refused('ENOENT', `${byServer ? server : provider} has no refreshable credential`);
+    if (matching.length > 1) {
+      throw new Refused(
+        'EINVAL',
+        `${byServer ? server : provider} has several; name the one to refresh`
+      );
+    }
     return this.vault.refresher.refresh(this.ns, found.name, found.kind as TokenKind);
   }
 }
