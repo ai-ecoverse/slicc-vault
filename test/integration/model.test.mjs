@@ -430,6 +430,22 @@ test('a kernel bridge seals its own loopback token, which only that server gets'
     ]),
   });
   assert.deepEqual(filled.request.headers, [['authorization', 'Bearer fake-bridge-tok-0132']]);
+  await ask('endpoints', {
+    mcp: [
+      {
+        server: 'bridge',
+        url: 'http://8080.kernel.localhost/mcp',
+        tokenUrl: 'https://auth.example.com/bridge-token',
+      },
+    ],
+  });
+  const exfil = await ask('mcp', {
+    server: 'bridge',
+    request: req('https://auth.example.com/bridge-token', [
+      ['authorization', `Bearer ${sealed.placeholder}`],
+    ]),
+  });
+  assert.match(exfil.error.message, /isn't a credential of bridge/);
   const elsewhere = await ask('mcp', {
     server: 'docs',
     request: req('https://docs.example.com/mcp', [

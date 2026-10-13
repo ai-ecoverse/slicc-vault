@@ -109,6 +109,17 @@ export class AgentPort {
   }
 
   answer(fields: Fields): Promise<Fields> | Fields {
+    const out = this.route(fields);
+    return out instanceof Promise ? out.catch((error) => this.cleaned(error)) : out;
+  }
+
+  async cleaned(error: unknown): Promise<never> {
+    const scrubber = error instanceof Refused ? await this.vault.scrubbers.get(this.ns) : null;
+    if (!scrubber) throw error;
+    throw new Refused((error as Refused).code, scrubber.text((error as Refused).message).text);
+  }
+
+  route(fields: Fields): Promise<Fields> | Fields {
     switch (fields.op) {
       case 'redact':
         return this.redact(fields);

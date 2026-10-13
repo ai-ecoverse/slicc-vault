@@ -43,6 +43,7 @@ export class Scrubbers {
   async holdsAnother(ns: string, value: string): Promise<boolean> {
     await this.get(ns);
     const known = (this.cache.get(ns) as Compiled).values;
-    return known.some((other) => other !== value && value.includes(other));
+    const twins = known.filter((other) => other === value).length;
+    return twins > 1 || known.some((other) => other !== value && value.includes(other));
   }
 }

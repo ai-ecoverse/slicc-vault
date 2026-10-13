@@ -112,6 +112,16 @@ export function modelFor(registered: Registered, provider: string, url: URL): bo
   return [...built, ...owned].some((pattern) => covers(pattern, host, url.pathname));
 }
 
+export function under(base: string, url: URL): boolean {
+  const own = new URL(base);
+  const pattern = endpoint(base, true) as Endpoint;
+  return (
+    own.protocol === url.protocol &&
+    plain(url, own.port) &&
+    covers(pattern, hostOf(url), url.pathname)
+  );
+}
+
 export function serverFor(registered: Registered, server: string, url: URL): McpServer | null {
   const host = hostOf(url);
   for (const entry of registered.mcp.filter((e) => e.server === server)) {

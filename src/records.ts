@@ -242,7 +242,7 @@ async function unused(store: IDBObjectStore): Promise<string> {
 }
 
 function guard(existing: VaultRecord | undefined, input: SealInput): void {
-  if (!existing || removed(existing)) return;
+  if (!existing) return;
   if (input.kind === 'mcp' && input.source === 'process') {
     const mine =
       existing.source === 'process' && (input.uid === 0 || existing.sealedBy === input.uid);
@@ -252,6 +252,7 @@ function guard(existing: VaultRecord | undefined, input: SealInput): void {
       `${input.name} belongs to someone else; seal the bridge under another name`
     );
   }
+  if (removed(existing)) return;
   if (existing.source === 'process' || input.uid === 0 || input.source !== 'process') return;
   throw new Refused(
     'EEXIST',

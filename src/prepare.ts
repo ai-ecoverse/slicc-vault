@@ -13,7 +13,7 @@ import {
   type VaultRecord,
 } from './records.ts';
 import { checkOAuth, type TokenKind, tokens } from './refresh.ts';
-import { kernelPort, modelFor, serverFor } from './refusal.ts';
+import { kernelPort, modelFor, serverFor, under } from './refusal.ts';
 import { loadRegistered } from './rules.ts';
 import type { Vault } from './vault.ts';
 
@@ -231,7 +231,8 @@ export class Preparer {
       owns: (record) =>
         record.kind === 'mcp' &&
         (record.server === server || names.has(record.name)) &&
-        (record.url === undefined || (entry !== null && new URL(entry.url).href === record.url)),
+        (record.url === undefined ||
+          (entry !== null && new URL(entry.url).href === record.url && under(record.url, url))),
       reaches: entry !== null,
       loopback: true,
     });
