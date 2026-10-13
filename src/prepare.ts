@@ -293,6 +293,7 @@ export class Preparer {
       name: base,
       value: got.access,
       server,
+      exclusive: true,
       ...(got.expires === null ? {} : { expiresAt: now + got.expires * 1000 }),
       ...(got.refresh !== null ? { refresh: grantName } : {}),
     };

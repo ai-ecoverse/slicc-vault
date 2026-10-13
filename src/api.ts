@@ -99,9 +99,11 @@ export async function audit(
 export async function list(vault: Vault, ns: string): Promise<VaultList> {
   const now = vault.now();
   const policy = vault.policy(ns);
+  const scrubber = await vault.scrubbers.get(ns);
+  const clean = scrubber ? (text: string) => scrubber.text(text).text : null;
   const secrets = (await records(vault.db, ns))
     .sort((a, b) => a.name.localeCompare(b.name) || a.kind.localeCompare(b.kind))
-    .map((record) => view(record, policy, now));
+    .map((record) => view(record, policy, now, clean));
   const { audit: entries, more } = await audit(vault, ns);
   return {
     secrets,

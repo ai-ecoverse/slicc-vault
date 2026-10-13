@@ -112,6 +112,7 @@ export interface SealInput {
   provider?: string;
   server?: string;
   settings?: Record<string, string>;
+  exclusive?: boolean;
   placeholder?: string;
   answers?: Answers;
   now: number;
@@ -168,7 +169,29 @@ export function device(source: RecordSource): string | null {
   return at < 0 ? null : source.slice(at + 1);
 }
 
-export function view(record: VaultRecord, policy: Policy, now: number): SecretView {
+export type Clean = ((text: string) => string) | null;
+
+function shownBinding(record: VaultRecord, clean: Clean): Partial<SecretView> {
+  if (!clean) return {};
+  const out: Partial<SecretView> = {};
+  if (record.provider !== undefined) out.provider = clean(record.provider);
+  if (record.server !== undefined) out.server = clean(record.server);
+  if (record.settings !== undefined) {
+    out.settings = Object.fromEntries(
+      Object.entries(record.settings)
+        .filter(([key]) => clean(key) === key)
+        .map(([key, value]) => [key, clean(value)])
+    );
+  }
+  return out;
+}
+
+export function view(
+  record: VaultRecord,
+  policy: Policy,
+  now: number,
+  clean: Clean = null
+): SecretView {
   const secret = record.kind === 'secret';
   const rules = rulesFor(record, policy);
   const exits = secret ? policy.exits(record.name) : null;
@@ -180,9 +203,7 @@ export function view(record: VaultRecord, policy: Policy, now: number): SecretVi
     state: state(record, policy, now),
     source: record.source,
     sourceDevice: device(record.source),
-    ...(record.provider === undefined ? {} : { provider: record.provider }),
-    ...(record.server === undefined ? {} : { server: record.server }),
-    ...(record.settings === undefined ? {} : { settings: record.settings }),
+    ...shownBinding(record, clean),
     domains: [...new Set(rules.map((rule) => rule.domain))],
     rules,
     ...(exits ? { exits } : {}),
@@ -291,11 +312,7 @@ async function write(tx: IDBTransaction, input: SealInput, sealed: Sealed): Prom
     | VaultRecord
     | undefined;
   guard(existing, input);
-  if (
-    input.server !== undefined &&
-    existing?.server !== undefined &&
-    existing.server !== input.server
-  ) {
+  if (input.exclusive && existing?.server !== undefined && existing.server !== input.server) {
     throw new Refused(
       'EEXIST',
       `${input.name} belongs to another MCP server; give this one another name`

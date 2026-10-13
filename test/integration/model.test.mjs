@@ -206,6 +206,19 @@ test('records lists model and mcp records, never values or secrets', async (t) =
   assert.match(answered.error.message, /asks for another value/);
   const after = (await ask('records', {})).records.find((r) => r.name === 'ANTHROPIC_API_KEY');
   assert.equal(after.provider, 'anthropic');
+  await page.evaluate(() =>
+    window.harness.call('put', {
+      name: 'BRIDGE',
+      value: 'fake-bridge-token-0105',
+      kind: 'mcp',
+      server: 'bridge-two',
+      settings: { HOST: 'fake-model-key-0102' },
+    })
+  );
+  const pageList = (await page.evaluate(() => window.harness.call('list'))).list.secrets;
+  const bridgeView = pageList.find((r) => r.name === 'BRIDGE');
+  assert.equal(bridgeView.server, 'bridge-two');
+  assert.ok(!bridgeView.settings.HOST.includes('fake-'));
 });
 
 test('an MCP sign-in is sealed by grant and refreshed in the vault through egress', async (t) => {
