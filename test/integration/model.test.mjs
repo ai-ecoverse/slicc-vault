@@ -322,6 +322,16 @@ test('an MCP sign-in is sealed by grant and refreshed in the vault through egres
   const none = await ask('refresh', { provider: 'anthropic' });
   assert.equal(none.error.code, 'ENOENT');
   const short = await ask('grant', { server: 'docs', oauth, response: '{"access_token":"short"}' });
+  await page.evaluate(() =>
+    window.harness.call('put', { name: 'NAMEVAL', value: 'fake_key_name_0124' })
+  );
+  const named = await ask('grant', {
+    server: 'docs',
+    name: 'fake_key_name_0124',
+    oauth,
+    response: '{"access_token":"fake-mcp-access-0123"}',
+  });
+  assert.equal(named.error.code, 'EINVAL');
   assert.equal(short.error.code, 'EINVAL');
   const badGrant = await ask('grant', {
     server: 'docs',

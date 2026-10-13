@@ -151,16 +151,17 @@ export class Preparer {
     if (parsed.protocol !== 'https:' && !loopback) {
       throw new Refused('EACCES', 'model and MCP requests go out over https only');
     }
-    const scrubber = await this.scrubber();
-    const head = [request.method, request.url, ...request.headers.flat()];
-    if (head.some((text) => scrubber.text(text).hits.length > 0)) {
-      throw new Refused('EACCES', 'the request head carries a value; send its placeholder instead');
-    }
+    await this.scrubber();
     const held = new Map((await records(this.vault.db, this.ns)).map((r) => [r.placeholder, r]));
     const url = await this.fill(request.url, held, target, true);
     const headers: [string, string][] = [];
     for (const [name, value] of request.headers) {
       headers.push([name, await this.fill(value, held, target, false)]);
+    }
+    const scrubber = await this.scrubber();
+    const head = [request.method, request.url, ...request.headers.flat()];
+    if (head.some((text) => scrubber.text(text).hits.length > 0)) {
+      throw new Refused('EACCES', 'the request head carries a value; send its placeholder instead');
     }
     const { body, hits } = await scrubbed(scrubber, request);
     return {
@@ -264,6 +265,11 @@ export class Preparer {
     if (typeof response !== 'string' && !(response instanceof Uint8Array)) {
       throw new Refused('EINVAL', 'response must be the token response body');
     }
+    const naming = [server, typeof fields.name === 'string' ? fields.name : ''];
+    const before = await this.scrubber();
+    if (naming.some((text) => before.text(text).hits.length > 0)) {
+      throw new Refused('EINVAL', 'the server or record name holds a value');
+    }
     const oauth = checkOAuth(fields.oauth);
     const registered = await loadRegistered(this.vault.db, this.ns);
     if (!registered.mcp.some((e) => e.server === server && e.tokenUrl === oauth.tokenUrl)) {
@@ -284,7 +290,7 @@ export class Preparer {
     checkValue(got.access);
     if (got.refresh !== null) checkValue(got.refresh);
     const now = this.vault.now();
-    const source = `oauth:mcp:${server.replace(/\s/g, '_')}` as const;
+    const source = 'oauth:mcp' as const;
     const dek = this.vault.keyring.use();
     const common = { ns: this.ns, source, uid: null, tag: null, now };
     const access: SealInput = {
