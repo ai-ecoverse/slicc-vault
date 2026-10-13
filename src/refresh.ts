@@ -99,8 +99,14 @@ export function tokens(response: EgressResponse, scrubber: Scrubber | null) {
       `refresh failed: ${scrubber ? scrubber.text(reason).text : reason}`
     );
   }
-  const expires =
-    typeof parsed.expires_in === 'number' && parsed.expires_in >= 0 ? parsed.expires_in : null;
+  const lifetime = parsed.expires_in;
+  if (
+    lifetime !== undefined &&
+    (typeof lifetime !== 'number' || !(lifetime >= 0) || !Number.isFinite(lifetime * 1000))
+  ) {
+    throw new Refused('EACCES', 'refresh failed: the IdP returned an invalid expires_in');
+  }
+  const expires = lifetime === undefined ? null : lifetime;
   const refresh = typeof parsed.refresh_token === 'string' ? parsed.refresh_token : null;
   return { access, expires, refresh };
 }
@@ -161,7 +167,8 @@ export class Refresher {
     }
     if (record.refresh === JERK) return this.jerk(ns, record);
     const grant = held.find((r) => r.kind === 'grant' && r.name === record.refresh && !removed(r));
-    if (!grant?.oauth) throw new Refused('ENOENT', `${name}'s grant ${record.refresh} is missing`);
+    if (!grant?.oauth || grant.source !== record.source)
+      throw new Refused('ENOENT', `${name}'s grant ${record.refresh} is missing`);
     return this.oauth(ns, record, grant);
   }
 

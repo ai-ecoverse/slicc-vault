@@ -297,6 +297,9 @@ async function sealFromPage(vault: Vault, ns: string, request: Fields): Promise<
   ) {
     throw new Refused('EINVAL', 'refresh must be jerk-seal or the name of a grant');
   }
+  const mode = refresh === JERK ? 'jerk:' : 'oauth:';
+  if (refresh !== undefined && !(request.source as string).startsWith(mode))
+    throw new Refused('EINVAL', `refresh ${refresh} needs a ${mode} source`);
   if (request.oauth !== undefined && kind !== 'grant')
     throw new Refused('EINVAL', 'only a grant carries oauth');
   const oauth = request.oauth === undefined ? undefined : checkOAuth(request.oauth);
