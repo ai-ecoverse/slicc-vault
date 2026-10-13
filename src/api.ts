@@ -241,9 +241,12 @@ async function answerRequest(vault: Vault, ns: string, request: Fields): Promise
   if (request.rows !== undefined) answer.rows = (request.rows as unknown[]).map(row);
   const entry = await get(vault.db, ns, request.request);
   const status = entry.kind === 'jerk' && entry.jop === 'status';
+  const success = request.state === 'done' && (request.exit ?? 0) === 0;
+  if (success && (entry.kind === 'oauth' || entry.kind === 'jerk-seal'))
+    throw new Refused('EINVAL', 'a sign-in completes with seal, not answer');
   if (request.placeholder !== undefined && !status)
     throw new Refused('EINVAL', 'only jop status answers carry a placeholder');
-  if (status && request.state === 'done' && (request.exit ?? 0) === 0) {
+  if (status && success) {
     const placeholder = await placeholderFor(vault, ns, entry.provider, request.placeholder);
     if (placeholder) answer.placeholder = placeholder;
   }

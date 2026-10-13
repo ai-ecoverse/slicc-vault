@@ -360,6 +360,7 @@ async function mark(
     if (!record || gone) throw new Refused('ENOENT', `no record named ${name}`);
     if (removing) record.removedAt = now;
     else delete record.removedAt;
+    record.updatedAt = Math.max(now, record.updatedAt + 1);
     await request(store.put(record));
     await bump(tx, ns);
     await audit(tx, ns, {
