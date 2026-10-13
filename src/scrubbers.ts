@@ -6,6 +6,7 @@ import type { Vault } from './vault.ts';
 interface Compiled {
   version: number;
   scrubber: Scrubber;
+  values: string[];
 }
 
 export class Scrubbers {
@@ -35,7 +36,13 @@ export class Scrubbers {
       }))
     );
     const scrubber = compile(values, { version });
-    this.cache.set(ns, { version, scrubber });
+    this.cache.set(ns, { version, scrubber, values: values.map((v) => v.value) });
     return scrubber;
+  }
+
+  async holdsAnother(ns: string, value: string): Promise<boolean> {
+    await this.get(ns);
+    const known = (this.cache.get(ns) as Compiled).values;
+    return known.some((other) => other !== value && value.includes(other));
   }
 }

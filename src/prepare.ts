@@ -140,6 +140,9 @@ export class Preparer {
       const key = this.vault.keyring.key;
       if (!key) throw new Refused('EACCES', LOCKED);
       const value = await decrypt(key, record.sealed, aad(record.ns, record.kind, record.name));
+      if (await this.vault.scrubbers.holdsAnother(this.ns, value)) {
+        throw new Refused('EACCES', `${record.name}'s value contains another stored value`);
+      }
       out = out.split(placeholder).join(url ? encodeURIComponent(value) : value);
     }
     return out;
@@ -333,12 +336,8 @@ export class Preparer {
     const raw = typeof response === 'string' ? response : text(response);
     const parsed = JSON.parse(raw) as Fields;
     const scrubber = (await this.vault.scrubbers.get(this.ns)) as Scrubber;
-    const kept: Fields = {};
-    if (typeof parsed.token_type === 'string') kept.token_type = parsed.token_type;
-    if (typeof parsed.expires_in === 'number') kept.expires_in = parsed.expires_in;
-    if (typeof parsed.scope === 'string') kept.scope = scrubber.text(parsed.scope).text;
     const rewritten = JSON.stringify({
-      ...kept,
+      ...plainFields(parsed, scrubber),
       access_token: sealedAccess.placeholder,
       ...(sealedGrant ? { refresh_token: sealedGrant.placeholder } : {}),
     });
@@ -381,6 +380,17 @@ export class Preparer {
     }
     return this.vault.refresher.refresh(this.ns, found.name, found.kind as TokenKind);
   }
+}
+
+function plainFields(parsed: Fields, scrubber: Scrubber): Fields {
+  const kept: Fields = {};
+  if (typeof parsed.token_type === 'string') kept.token_type = parsed.token_type;
+  const lifetime = parsed.expires_in;
+  if (typeof lifetime === 'number' && scrubber.text(String(lifetime)).hits.length === 0) {
+    kept.expires_in = lifetime;
+  }
+  if (typeof parsed.scope === 'string') kept.scope = scrubber.text(parsed.scope).text;
+  return kept;
 }
 
 function defaultName(server: string): string {

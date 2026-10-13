@@ -96,12 +96,21 @@ export async function audit(
   return { audit: entries, more, ...(more ? { next: page[page.length - 1].seq } : {}) };
 }
 
+async function consistent(vault: Vault, ns: string) {
+  for (let tries = 0; tries < 3; tries++) {
+    const scrubber = await vault.scrubbers.get(ns);
+    const held = await records(vault.db, ns);
+    if ((await vault.scrubbers.get(ns))?.version === scrubber?.version) return { scrubber, held };
+  }
+  throw new Refused('EAGAIN', "the vault's values keep changing; try again");
+}
+
 export async function list(vault: Vault, ns: string): Promise<VaultList> {
   const now = vault.now();
   const policy = vault.policy(ns);
-  const scrubber = await vault.scrubbers.get(ns);
+  const { scrubber, held } = await consistent(vault, ns);
   const clean = scrubber ? (text: string) => scrubber.text(text).text : null;
-  const secrets = (await records(vault.db, ns))
+  const secrets = held
     .sort((a, b) => a.name.localeCompare(b.name) || a.kind.localeCompare(b.kind))
     .map((record) => view(record, policy, now, clean));
   const { audit: entries, more } = await audit(vault, ns);
