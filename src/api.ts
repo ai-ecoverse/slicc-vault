@@ -501,6 +501,11 @@ export class Server {
     port.onmessage = (message) => void this.handle(session, message.data, message.ports);
     port.start();
     session.queue = this.welcome(session);
+    if (role === 'page') {
+      session.queue = session.queue.then(() => {
+        void this.vault.refresher.sweep(session.ns);
+      });
+    }
     return true;
   }
 

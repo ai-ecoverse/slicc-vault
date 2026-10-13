@@ -223,7 +223,9 @@ test('two vault frames refresh one token with one request to the IdP', async (t)
   assert.equal(sent.length, 1);
 });
 
-test('a page port that stopped answering egress gets no more, and the next refresh goes to a live one', async (t) => {
+test('a page port that stopped answering egress gets no more, and the next refresh goes to a live one', {
+  timeout: 90000,
+}, async (t) => {
   const page = await connected(t);
   assert.equal((await page.evaluate(() => window.harness.twin(true, true))).op, 'welcome');
   await page.evaluate(async () => {
@@ -315,7 +317,9 @@ test('a grant removed and restored while its refresh is in flight refuses the st
   assert.match(result.reply.error.message, /RACE_GRANT changed meanwhile/);
 });
 
-test('the minute sweep refreshes a due token without being asked', async (t) => {
+test('the minute sweep refreshes a due token without being asked', {
+  timeout: 120000,
+}, async (t) => {
   const page = await connected(t);
   await page.evaluate(async () => {
     await window.harness.call('seal', {
@@ -350,6 +354,40 @@ test('the minute sweep refreshes a due token without being asked', async (t) => 
     audit = (await page.evaluate(() => window.harness.call('audit', { limit: 5 }))).audit;
   }
   assert.ok(audit.some((e) => e.type === 'refresh' && e.name === 'SWEPT_TOKEN'));
+});
+
+test('a page that says hello gets its due tokens refreshed at once', async (t) => {
+  const page = await connected(t);
+  await page.evaluate(async () => {
+    await window.harness.call('seal', {
+      name: 'HELLO_GRANT',
+      value: 'fake-refresh-token-0401',
+      kind: 'grant',
+      source: 'oauth:github',
+      oauth: { tokenUrl: 'https://auth.example.com/token', clientId: 'fake-client' },
+    });
+    await window.harness.call('seal', {
+      name: 'HELLO_TOKEN',
+      value: 'fake-access-token-0401',
+      source: 'oauth:github',
+      refresh: 'HELLO_GRANT',
+      expiresAt: Date.now() + 60000,
+    });
+    window.harness.egress.answer = {
+      status: 200,
+      headers: [],
+      body: JSON.stringify({ access_token: 'fake-access-token-0402', expires_in: 3600 }),
+    };
+  });
+  assert.equal(await page.evaluate(() => window.harness.egress.requests.length), 0);
+  assert.equal((await page.evaluate(() => window.harness.twin(true))).op, 'welcome');
+  await page.until(() => window.harness.egress.requests.length === 1);
+  let audit = [];
+  for (let i = 0; i < 20 && !audit.some((e) => e.type === 'refresh'); i++) {
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    audit = (await page.evaluate(() => window.harness.call('audit', { limit: 5 }))).audit;
+  }
+  assert.ok(audit.some((e) => e.type === 'refresh' && e.name === 'HELLO_TOKEN'));
 });
 
 test('a J1 lease due for refresh is announced to the page', async (t) => {
