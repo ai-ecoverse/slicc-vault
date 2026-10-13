@@ -194,6 +194,46 @@ test('two vault frames refresh one token with one request to the IdP', async (t)
   assert.equal(sent.length, 1);
 });
 
+test('a page port that stopped answering egress is dropped, and the next refresh goes to a live one', async (t) => {
+  const page = await connected(t);
+  assert.equal((await page.evaluate(() => window.harness.twin(true))).op, 'welcome');
+  await page.evaluate(async () => {
+    await window.harness.call('seal', {
+      name: 'CLOSED_GRANT',
+      value: 'fake-refresh-token-0201',
+      kind: 'grant',
+      source: 'oauth:github',
+      oauth: { tokenUrl: 'https://auth.example.com/token', clientId: 'fake-client' },
+    });
+    await window.harness.call('seal', {
+      name: 'CLOSED_TOKEN',
+      value: 'fake-access-token-0201',
+      source: 'oauth:github',
+      refresh: 'CLOSED_GRANT',
+      expiresAt: Date.now() + 60000,
+    });
+    window.harness.egress.answer = {
+      status: 200,
+      headers: [],
+      body: JSON.stringify({ access_token: 'fake-access-token-0202', expires_in: 3600 }),
+    };
+    window.harness.twins[0].close();
+    window.harness.call('refresh', { name: 'CLOSED_TOKEN' }).then((reply) => {
+      window.first = reply;
+    });
+  });
+  let first = null;
+  while (!first) {
+    await new Promise((resolve) => setTimeout(resolve, 1000));
+    first = await page.evaluate(() => window.first ?? null);
+  }
+  assert.equal(first.error.code, 'ETIMEDOUT');
+  const refreshed = await page.evaluate(() =>
+    window.harness.call('refresh', { name: 'CLOSED_TOKEN' })
+  );
+  assert.equal(refreshed.state, 'refreshed');
+});
+
 test('a J1 lease due for refresh is announced to the page', async (t) => {
   const page = await connected(t);
   await page.evaluate(() =>
