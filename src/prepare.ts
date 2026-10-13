@@ -151,7 +151,7 @@ export class Preparer {
     if (parsed.protocol !== 'https:' && !loopback) {
       throw new Refused('EACCES', 'model and MCP requests go out over https only');
     }
-    await this.scrubber();
+    const first = await this.scrubber();
     const held = new Map((await records(this.vault.db, this.ns)).map((r) => [r.placeholder, r]));
     const url = await this.fill(request.url, held, target, true);
     const headers: [string, string][] = [];
@@ -159,11 +159,20 @@ export class Preparer {
       headers.push([name, await this.fill(value, held, target, false)]);
     }
     const scrubber = await this.scrubber();
+    const all = scrubber.version === first.version ? [scrubber] : [first, scrubber];
     const head = [request.method, request.url, ...request.headers.flat()];
-    if (head.some((text) => scrubber.text(text).hits.length > 0)) {
+    if (head.some((text) => all.some((s) => s.text(text).hits.length > 0))) {
       throw new Refused('EACCES', 'the request head carries a value; send its placeholder instead');
     }
-    const { body, hits } = await scrubbed(scrubber, request);
+    let { body, hits } = await scrubbed(first, request);
+    if (all.length > 1) {
+      const again = await scrubbed(scrubber, {
+        ...request,
+        ...(body === undefined ? {} : { body }),
+      });
+      body = again.body;
+      hits = [...hits, ...again.hits];
+    }
     return {
       request: {
         method: request.method,
@@ -287,6 +296,11 @@ export class Preparer {
       { status: 200, headers: [], body: response },
       await this.vault.scrubbers.get(this.ns)
     );
+    const tokensIn = (text: string) =>
+      text.includes(got.access) || (got.refresh !== null && text.includes(got.refresh));
+    if (tokensIn(server) || tokensIn(base)) {
+      throw new Refused('EINVAL', 'the server or record name holds a value');
+    }
     checkValue(got.access);
     if (got.refresh !== null) checkValue(got.refresh);
     const now = this.vault.now();
