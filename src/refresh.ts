@@ -87,7 +87,8 @@ export function tokens(response: EgressResponse, scrubber: Scrubber | null) {
   const raw = typeof response.body === 'string' ? response.body : text(response.body);
   let parsed: Fields;
   try {
-    parsed = JSON.parse(raw);
+    const json = JSON.parse(raw);
+    parsed = json !== null && typeof json === 'object' ? json : {};
   } catch {
     parsed = {};
   }
