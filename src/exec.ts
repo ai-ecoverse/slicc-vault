@@ -221,8 +221,13 @@ function granted(policy: Policy, found: Ticket, ran: Ran): void {
   for (const name of found.names) {
     const mode = policy.exec(name);
     if (mode === false) fail(`${name} is no longer granted in [exec]`);
-    if (mode === 'argv' && !listed(policy.argv(name) as string[][], ran.resolved, found.argv)) {
-      fail(`${name}'s [exec] grant doesn't list this command as the kernel resolved it`);
+    const prefixes = (mode === 'argv' ? policy.argv(name) : []) as string[][];
+    if (mode === 'argv' && !listed(prefixes, found.path, found.argv)) {
+      fail(`${name}'s [exec] grant no longer lists this command`);
+    }
+    const linked = ran.resolved !== found.path && refusedProgram(ran.resolved);
+    if (mode === 'argv' && linked && !listed(prefixes, ran.resolved, found.argv)) {
+      fail(`${name} isn't revealed to ${ran.resolved}: list it in [exec] by its real path`);
     }
     const blocked = allowedChain(policy, name, found.path, ran);
     if (blocked) fail(blocked);

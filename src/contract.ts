@@ -386,6 +386,7 @@ export type Op =
       ticket: string;
       stamp: Stamp;
       path: string;
+      resolved: string;
       argv: string[];
       cwd: string;
       interpreters: string[];

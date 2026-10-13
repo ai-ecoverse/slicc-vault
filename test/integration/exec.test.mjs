@@ -363,7 +363,17 @@ test('the refusal list applies to the program the kernel resolved, and exec true
     resolved: '/bin/bash',
     trusted: true,
   });
-  assert.match(listedLink.error.message, /doesn't list this command as the kernel resolved it/);
+  assert.match(listedLink.error.message, /list it in \[exec\] by its real path/);
+  const realShell = await run(['PLAIN_KEY'], '/opt/run.sh', ['run.sh'], {
+    resolved: '/bin/sh',
+    trusted: true,
+  });
+  assert.deepEqual(realShell.values, { PLAIN_KEY: VALUES.PLAIN_KEY });
+  const linkedGh = await run(['GH_TOKEN'], '/usr/bin/gh', ['gh', 'release', 'upload'], {
+    resolved: '/usr/lib/gh/bin/gh',
+    trusted: true,
+  });
+  assert.deepEqual(linkedGh.values, { GH_TOKEN: VALUES.GH_TOKEN });
   const shell = await materialize(page, {
     shellGrants: true,
     path: '/tmp/l',
