@@ -6,6 +6,7 @@ const egress = { requests: [], answer: null, delay: 0 };
 const twins = [];
 const buttonEvents = [];
 let port = null;
+let core = null;
 let next = 1;
 const waiting = new Map();
 
@@ -39,8 +40,8 @@ function egressed(event) {
   setTimeout(() => event.ports[0].postMessage(answer), egress.delay);
 }
 
-async function twin() {
-  const iframe = await frame('/', true);
+async function twin(same = false) {
+  const iframe = same ? core : await frame('/', true);
   const channel = new MessageChannel();
   const other = channel.port1;
   const welcome = new Promise((resolve) => {
@@ -62,6 +63,7 @@ async function twin() {
 
 async function connect(path = '/') {
   const iframe = await frame(path, true);
+  core = iframe;
   const channel = new MessageChannel();
   port = channel.port1;
   const welcome = new Promise((resolve) => {

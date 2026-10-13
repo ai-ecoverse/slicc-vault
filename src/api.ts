@@ -432,6 +432,9 @@ export class Server {
     const channel = new MessageChannel();
     const answer = egressOver(channel.port1);
     session.port.postMessage({ v: 1, event: 'egress', request: req }, [channel.port2]);
+    answer.catch((error: Refused) => {
+      if (error.code === 'ETIMEDOUT') this.sessions.delete(session);
+    });
     return answer;
   }
 
@@ -468,6 +471,7 @@ export class Server {
       ...(agent ? { agent } : {}),
     };
     this.sessions.add(session);
+    port.addEventListener('close', () => this.sessions.delete(session));
     port.onmessage = (message) => void this.handle(session, message.data, message.ports);
     port.start();
     session.queue = this.welcome(session);
