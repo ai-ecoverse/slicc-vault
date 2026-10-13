@@ -166,6 +166,19 @@
         "code": "EINVAL"
       },
       "note": "Codex on slicc-vault#21: whitespace the URL parser removes must not hide userinfo"
+    },
+    {
+      "id": "url-userinfo-backslash",
+      "area": "token-url",
+      "setup": {
+        "tokenUrl": "https:\\/:@auth.example/token"
+      },
+      "jerkOauth": null,
+      "vault": {
+        "result": "refuse",
+        "code": "EINVAL"
+      },
+      "note": "Codex on slicc-vault#21: a backslash separator must not hide empty userinfo"
     }
   ]
 }

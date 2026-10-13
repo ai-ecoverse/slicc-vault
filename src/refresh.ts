@@ -42,7 +42,7 @@ export function checkOAuth(value: unknown): OAuth {
   const url = URL.parse(raw);
   const valid =
     url?.protocol === 'https:' &&
-    !USERINFO.test(raw.replace(/^[\0-\x20]+|[\t\n\r]/g, '')) &&
+    !userinfo(raw) &&
     !url.username &&
     !url.password &&
     typeof given.clientId === 'string' &&
@@ -94,7 +94,15 @@ export function tokenRequest(oauth: OAuth, refreshToken: string): EgressRequest 
   };
 }
 
-const USERINFO = /^[a-z][a-z0-9+.-]*:\/*[^/?#]*@/i;
+const AUTHORITY = /^[a-z][a-z0-9+.-]*:\/*([^/?#]*)/i;
+
+export function userinfo(raw: string): boolean {
+  const cleaned = raw
+    .replace(/^[\0-\x20]+|[\0-\x20]+$/g, '')
+    .replace(/[\t\n\r]/g, '')
+    .replace(/\\/g, '/');
+  return (AUTHORITY.exec(cleaned)?.[1] ?? '').includes('@');
+}
 const SINGLE = ['access_token', 'refresh_token', 'token_type', 'expires_in'];
 
 export function topKeys(raw: string): string[] {
