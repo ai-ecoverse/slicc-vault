@@ -7,6 +7,7 @@ import { aad, type Rotation, records, removed, rotate, type VaultRecord } from '
 import type { Vault } from './vault.ts';
 
 export const DUE = 5 * 60 * 1000;
+export const REANNOUNCE = 10 * 60 * 1000;
 export const EGRESS_TIMEOUT = 30 * 1000;
 export const JERK = 'jerk-seal';
 
@@ -184,10 +185,12 @@ export class Refresher {
 
   async jerk(ns: string, record: VaultRecord): Promise<Fields> {
     const key = `announced:${ns}\u0000${record.name}`;
+    const now = this.vault.now();
     const fresh = await transact(this.vault.db, ['meta'], 'readwrite', async (tx) => {
       const meta = tx.objectStore('meta');
-      if ((await request(meta.get(key))) === record.expiresAt) return false;
-      await request(meta.put(record.expiresAt, key));
+      const last = (await request(meta.get(key))) as { expiresAt: number; at: number } | undefined;
+      if (last && last.expiresAt === record.expiresAt && now - last.at < REANNOUNCE) return false;
+      await request(meta.put({ expiresAt: record.expiresAt, at: now }, key));
       return true;
     });
     if (fresh) this.announce?.(ns, record.name, record.source, record.expiresAt as number);
