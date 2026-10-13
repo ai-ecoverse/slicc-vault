@@ -1,9 +1,8 @@
 import type { Scrubber } from '@ai-ecoverse/slicc-scrub';
 import { text } from './bytes.ts';
-import { transact } from './db.ts';
 import { Refused } from './errors.ts';
 import { decrypt } from './keys.ts';
-import { aad, audit, records, removed, seal, type VaultRecord } from './records.ts';
+import { aad, type Rotation, records, removed, rotate, type VaultRecord } from './records.ts';
 import type { Vault } from './vault.ts';
 
 export const DUE = 5 * 60 * 1000;
@@ -164,35 +163,15 @@ export class Refresher {
     const now = this.vault.now();
     const expiresAt =
       got.expires === null ? (record.expiresAt as number) : now + got.expires * 1000;
-    const common = { ns, uid: null, tag: null, now };
-    await seal(this.vault.db, dek, {
-      ...common,
-      kind: 'secret',
-      name: record.name,
-      value: got.access,
-      source: record.source,
-      refresh: record.refresh,
-      expiresAt,
-    });
-    if (got.refresh && got.refresh !== token) {
-      await seal(this.vault.db, dek, {
-        ...common,
-        kind: 'grant',
-        name: grant.name,
-        value: got.refresh,
-        source: grant.source,
-        oauth: grant.oauth,
-      });
-    }
-    await transact(this.vault.db, ['audit'], 'readwrite', (tx) =>
-      audit(tx, ns, {
-        type: 'refresh',
-        name: record.name,
-        grant: grant.name,
-        uid: null,
-        tag: null,
-        at: now,
-      })
+    const rotations: Rotation[] = [{ record, value: got.access, expiresAt }];
+    if (got.refresh && got.refresh !== token) rotations.push({ record: grant, value: got.refresh });
+    await rotate(
+      this.vault.db,
+      dek,
+      ns,
+      rotations,
+      { type: 'refresh', name: record.name, grant: grant.name, uid: null, tag: null },
+      now
     );
     await this.vault.changed(ns, ['secrets', 'audit']);
     return { state: 'refreshed', expiresAt };

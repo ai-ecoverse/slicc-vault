@@ -153,7 +153,7 @@ Every record, request, audit entry and scrub version belongs to the origin that 
 The embedder (bios) loads `https://vault.sliccy.ai/` in an iframe and, after `load`, posts a hello carrying a port:
 
 ```js
-iframe.contentWindow.postMessage({ type: 'slicc-vault', v: 1, op: 'hello', role: 'page' }, 'https://vault.sliccy.ai', [port2]);
+iframe.contentWindow.postMessage({ type: 'slicc-vault', v: 1, op: 'hello', role: 'page', sudoGid }, 'https://vault.sliccy.ai', [port2]);
 ```
 
 - The frame answers only when the message comes from its own parent window, from an allowed origin, matching `location.ancestorOrigins[0]` when the browser exposes it. Anything else gets no answer at all.
@@ -216,7 +216,7 @@ bios relays each kernel request unchanged as the `sealed` op, with the kernel's 
 
 - **Requests** expire 300 s after they're made. Each uid has at most one pending request per namespace that waits for a human (`value`, `oauth`, `jerk-seal`, and `jerk` with `jop: "create"`); a second one is `EAGAIN`. `status` and `cancel` see only the caller's own requests (uid 0 sees all), and others get `ENOENT`. Only requests that wait for a human show in `status.waiting`.
 - A value request is answered by the page's `put` with its `request` id. A sign-in or lease (`oauth`, `jerk-seal`) is answered by `seal` with `request` (Tokens and refresh). Every other kind is answered by the page's `answer`. `cancel` ends any of them and pushes `{ v: 1, event: 'cancelled', request, kind }` to the page, which passes it on to J1 where it can.
-- **J-8's jerk requests** (§3.7.1): the vault only keeps their state; bios learns of them from the relay and answers. `jop: "create"` and `unseal` are for root and cones only (J2): the stamp must have uid 0, or a tag whose `agentId` starts with `cone:`. Anyone else gets `done` with `exit: 2` at once, before bios sees anything.
+- **J-8's jerk requests** (§3.7.1): the vault only keeps their state; bios learns of them from the relay and answers. `jop: "create"` and `unseal` are for root and cones only (J2): the kernel stamp must have `users: 'enforce'`, and either uid 0 or the `sudo` group among its `groups`. bios names that group's gid as `sudoGid` in its hello. A stamp without `groups`, a vault without `sudoGid`, or any other mode refuses: the request is `done` with `exit: 2` at once, before bios sees anything. The tag is kept for audit and display only.
 
 ## Tokens and refresh
 
@@ -224,11 +224,11 @@ The vault has no network stack, so sign-ins run in seven's page (route (b), §3.
 - **A sign-in's tokens:** bios runs the sign-in, does the code exchange, and hands the results to `seal`, keeping no copy:
   - the refresh token as `{ kind: 'grant', name, value, source: 'oauth:<provider>', oauth: { tokenUrl, clientId, scope?, resource? } }`. A grant is never injected and never exported; `tokenUrl` must be `https:`;
   - the access token as `{ name, value, source: 'oauth:<provider>', expiresAt, refresh: '<grant name>' }`.
-  - With `request` (the id of a pending `oauth` or `jerk-seal` request) and `jerk` (`{ exit, user?, scopes?, expires_at? }`), `seal` also answers that request: its `/dev/sealed` `status` becomes `done`, with `jerk`, the record's `placeholder` and `record` state.
+  - With `request` (the id of a pending `oauth` request for the same provider as `oauth:<provider>`, or a `jerk-seal` request for the provider of `jerk:<provider>@…`) and `jerk` (`{ exit, user?, scopes?, expires_at? }`), `seal` also answers that request: its `/dev/sealed` `status` becomes `done`, with `jerk`, the record's `placeholder` and `record` state.
 - **A J1 lease:** `{ name, value, source: 'jerk:<provider>@<device>', expiresAt, refresh: 'jerk-seal' }`.
 - **When a token is due** (5 minutes before `expiresAt`): the core frame checks once a minute, for every connected namespace, and `refresh { name }` asks for it at once.
   - A `jerk-seal` token is announced once per `expiresAt` with the `refresh` event, and bios runs J1 `seal` again (`{ state: 'requested' }`).
-  - An OAuth token is refreshed in the vault: it builds `POST tokenUrl` with `grant_type=refresh_token`, the refresh token, `client_id` and any `scope` and `resource` (form-encoded), and sends it through bios with the `egress` event. bios sends the request through its exits and posts `{ status, headers, body }` (or `{ error }`) on the event's port within 30 s. The vault reads `access_token`, `expires_in` and any new `refresh_token`, rotates the records (their placeholders stay), audits a `refresh` entry, and answers `{ state: 'refreshed', expiresAt }`. A failed refresh is `EACCES: refresh failed: <the IdP's error code>`, scrubbed. Without a connected page it's `ENOTCONN`.
+  - An OAuth token is refreshed in the vault: it builds `POST tokenUrl` with `grant_type=refresh_token`, the refresh token, `client_id` and any `scope` and `resource` (form-encoded), and sends it through bios with the `egress` event. bios sends the request through its exits and posts `{ status, headers, body }` (or `{ error }`) on the event's port within 30 s. The vault reads `access_token`, `expires_in` and any new `refresh_token`, checks them as values, and rotates the records in one transaction with the `refresh` audit entry (their placeholders stay; if either record changed during the round trip, nothing is written and it answers `EAGAIN`), and answers `{ state: 'refreshed', expiresAt }`. A failed refresh is `EACCES: refresh failed: <the IdP's error code>`, scrubbed. Without a connected page it's `ENOTCONN`.
 - `egress` carries the refresh token to the page, in transit only; the response goes back to the vault, never to the kernel.
 
 ## Import and export

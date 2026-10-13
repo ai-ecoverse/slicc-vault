@@ -37,7 +37,7 @@ import {
   egressOver,
   JERK,
 } from './refresh.ts';
-import { current, get, respond, settle } from './requests.ts';
+import { current, get, type HumanRequest, respond, settle } from './requests.ts';
 import { apply } from './rules.ts';
 import { sealed } from './sealed.ts';
 import { exporter, importer } from './transfer.ts';
@@ -259,6 +259,13 @@ async function answerRequest(vault: Vault, ns: string, request: Fields): Promise
   return { state: updated.state };
 }
 
+function signIn(pending: HumanRequest, source: string, now: number): boolean {
+  if (current(pending, now) !== 'pending') return false;
+  if (pending.kind === 'oauth') return source === `oauth:${pending.provider}`;
+  if (pending.kind === 'jerk-seal') return source.startsWith(`jerk:${pending.provider}@`);
+  return false;
+}
+
 function checkJerk(value: unknown): Fields {
   const given = (value ?? {}) as Fields;
   if (typeof given !== 'object' || Array.isArray(given) || typeof given.exit !== 'number') {
@@ -292,8 +299,11 @@ async function sealFromPage(vault: Vault, ns: string, request: Fields): Promise<
   const oauth = request.oauth === undefined ? undefined : checkOAuth(request.oauth);
   const jerk = request.jerk === undefined ? undefined : checkJerk(request.jerk);
   const pending = request.request === undefined ? null : await get(vault.db, ns, request.request);
-  if (pending && (pending.kind === 'value' || current(pending, vault.now()) !== 'pending')) {
-    throw new Refused('EINVAL', `request ${pending.id} isn't a pending sign-in or lease`);
+  if (pending && !signIn(pending, request.source as string, vault.now())) {
+    throw new Refused(
+      'EINVAL',
+      `request ${pending.id} isn't a pending sign-in or lease of this provider`
+    );
   }
   const expiresAt = optionalNumber(request.expiresAt, 'expiresAt');
   const { record } = await seal(vault.db, vault.keyring.use(), {
@@ -439,6 +449,9 @@ export class Server {
       return false;
     }
     const agent = role === 'agent' ? new AgentPort(this.vault, event.origin) : undefined;
+    if (role === 'page' && Number.isInteger(data.sudoGid)) {
+      this.vault.sudoGids.set(event.origin, data.sudoGid as number);
+    }
     const session: Session = {
       ns: event.origin,
       role,

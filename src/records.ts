@@ -163,13 +163,16 @@ function guard(existing: VaultRecord | undefined, input: SealInput): void {
   );
 }
 
+async function keyed(tx: IDBTransaction, dek: Dek): Promise<void> {
+  const keys = (await request(tx.objectStore('meta').get('keys'))) as Keys | undefined;
+  if ((keys?.id ?? '') !== dek.id)
+    throw new Refused('EAGAIN', 'the vault was re-keyed meanwhile; try again');
+}
+
 export async function seal(db: IDBDatabase, dek: Dek, input: SealInput): Promise<Sealing> {
   const sealed = await encrypt(dek.key, input.value, aad(input.ns, input.kind, input.name));
   return transact(db, ['records', 'audit', 'meta'], 'readwrite', async (tx) => {
-    const keys = (await request(tx.objectStore('meta').get('keys'))) as Keys | undefined;
-    if ((keys?.id ?? '') !== dek.id) {
-      throw new Refused('EAGAIN', 'the vault was re-keyed meanwhile; try again');
-    }
+    await keyed(tx, dek);
     const store = tx.objectStore('records');
     const existing = (await request(store.get([input.ns, input.kind, input.name]))) as
       | VaultRecord
@@ -203,6 +206,44 @@ export async function seal(db: IDBDatabase, dek: Dek, input: SealInput): Promise
       at: input.now,
     });
     return { record, rotated };
+  });
+}
+
+export interface Rotation {
+  record: VaultRecord;
+  value: string;
+  expiresAt?: number;
+}
+
+export async function rotate(
+  db: IDBDatabase,
+  dek: Dek,
+  ns: string,
+  rotations: Rotation[],
+  entry: Record<string, unknown>,
+  now: number
+): Promise<void> {
+  const sealed = await Promise.all(
+    rotations.map((r) =>
+      encrypt(dek.key, checkValue(r.value), aad(ns, r.record.kind, r.record.name))
+    )
+  );
+  await transact(db, ['records', 'audit', 'meta'], 'readwrite', async (tx) => {
+    await keyed(tx, dek);
+    const store = tx.objectStore('records');
+    for (const [i, rotation] of rotations.entries()) {
+      const { record } = rotation;
+      const current = (await request(store.get([ns, record.kind, record.name]))) as
+        | VaultRecord
+        | undefined;
+      if (current?.updatedAt !== record.updatedAt || current.placeholder !== record.placeholder) {
+        throw new Refused('EAGAIN', `${record.name} changed meanwhile`);
+      }
+      const expiry = rotation.expiresAt === undefined ? {} : { expiresAt: rotation.expiresAt };
+      await request(store.put({ ...current, sealed: sealed[i], updatedAt: now, ...expiry }));
+    }
+    await bump(tx, ns);
+    await audit(tx, ns, { ...entry, at: now });
   });
 }
 

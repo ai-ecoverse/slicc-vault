@@ -25,6 +25,7 @@ export interface Vault {
   changed(ns: string, parts: Part[]): Promise<void>;
   onChange(listener: Listener): () => void;
   emit(ns: string, event: VaultEvent): void;
+  sudoGids: Map<string, number>;
   onEvent(listener: (ns: string, event: VaultEvent) => void): void;
   context(ns: string): Context;
   scrub(ns: string): Promise<ScrubState>;
@@ -76,6 +77,7 @@ export async function start(options: Options = {}): Promise<Vault> {
       listeners.add(listener);
       return () => listeners.delete(listener);
     },
+    sudoGids: new Map(),
     emit(ns, event) {
       for (const listener of eventListeners) listener(ns, event);
     },
@@ -92,6 +94,7 @@ export async function start(options: Options = {}): Promise<Vault> {
         now,
         changed: () => vault.changed(ns, ['secrets', 'requests', 'audit']),
         emit: (event) => vault.emit(ns, event),
+        sudoGid: () => vault.sudoGids.get(ns) ?? null,
       };
     },
     async scrub(ns) {
