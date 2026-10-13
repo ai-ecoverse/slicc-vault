@@ -266,51 +266,64 @@ async function keyed(tx: IDBTransaction, dek: Dek): Promise<void> {
 }
 
 export async function seal(db: IDBDatabase, dek: Dek, input: SealInput): Promise<Sealing> {
-  const sealed = await encrypt(dek.key, input.value, aad(input.ns, input.kind, input.name));
-  const stores: Store[] = input.answers
+  const [sealing] = await sealAll(db, dek, [input]);
+  return sealing;
+}
+
+export async function sealAll(db: IDBDatabase, dek: Dek, inputs: SealInput[]): Promise<Sealing[]> {
+  const sealed = await Promise.all(
+    inputs.map((input) => encrypt(dek.key, input.value, aad(input.ns, input.kind, input.name)))
+  );
+  const stores: Store[] = inputs.some((input) => input.answers)
     ? ['records', 'audit', 'meta', 'requests']
     : ['records', 'audit', 'meta'];
   return transact(db, stores, 'readwrite', async (tx) => {
     await keyed(tx, dek);
-    const store = tx.objectStore('records');
-    const existing = (await request(store.get([input.ns, input.kind, input.name]))) as
-      | VaultRecord
-      | undefined;
-    guard(existing, input);
-    const record: VaultRecord = {
-      ns: input.ns,
-      kind: input.kind,
-      name: input.name,
-      placeholder: existing
-        ? kept(existing, input.placeholder)
-        : await chosen(store, input.placeholder),
-      sealed,
-      source: input.source,
-      createdAt: existing && !removed(existing) ? existing.createdAt : input.now,
-      updatedAt: existing ? Math.max(input.now, existing.updatedAt + 1) : input.now,
-      ...(input.expiresAt === undefined ? {} : { expiresAt: input.expiresAt }),
-      ...(input.refresh === undefined ? {} : { refresh: input.refresh }),
-      ...(input.oauth === undefined ? {} : { oauth: input.oauth }),
-      ...bound(existing, input),
-    };
-    if (record.kind === 'model' && record.provider === undefined) {
-      throw new Refused('EINVAL', 'a model record needs its provider');
-    }
-    await request(store.put(record));
-    if (input.answers) await answered(tx, input.ns, input.answers, record.placeholder, input.now);
-    await bump(tx, input.ns);
-    const rotated = existing !== undefined && !removed(existing);
-    await audit(tx, input.ns, {
-      type: 'seal',
-      name: input.name,
-      uid: input.uid,
-      tag: input.tag,
-      source: input.source,
-      rotated,
-      at: input.now,
-    });
-    return { record, rotated };
+    const out: Sealing[] = [];
+    for (const [i, input] of inputs.entries()) out.push(await write(tx, input, sealed[i]));
+    return out;
   });
+}
+
+async function write(tx: IDBTransaction, input: SealInput, sealed: Sealed): Promise<Sealing> {
+  const store = tx.objectStore('records');
+  const existing = (await request(store.get([input.ns, input.kind, input.name]))) as
+    | VaultRecord
+    | undefined;
+  guard(existing, input);
+  const record: VaultRecord = {
+    ns: input.ns,
+    kind: input.kind,
+    name: input.name,
+    placeholder: existing
+      ? kept(existing, input.placeholder)
+      : await chosen(store, input.placeholder),
+    sealed,
+    source: input.source,
+    createdAt: existing && !removed(existing) ? existing.createdAt : input.now,
+    updatedAt: existing ? Math.max(input.now, existing.updatedAt + 1) : input.now,
+    ...(input.expiresAt === undefined ? {} : { expiresAt: input.expiresAt }),
+    ...(input.refresh === undefined ? {} : { refresh: input.refresh }),
+    ...(input.oauth === undefined ? {} : { oauth: input.oauth }),
+    ...bound(existing, input),
+  };
+  if (record.kind === 'model' && record.provider === undefined) {
+    throw new Refused('EINVAL', 'a model record needs its provider');
+  }
+  await request(store.put(record));
+  if (input.answers) await answered(tx, input.ns, input.answers, record.placeholder, input.now);
+  await bump(tx, input.ns);
+  const rotated = existing !== undefined && !removed(existing);
+  await audit(tx, input.ns, {
+    type: 'seal',
+    name: input.name,
+    uid: input.uid,
+    tag: input.tag,
+    source: input.source,
+    rotated,
+    at: input.now,
+  });
+  return { record, rotated };
 }
 
 export interface Rotation {

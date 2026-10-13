@@ -97,6 +97,10 @@ test('model prepares a request with its provider key and the body scrubbed', asy
     request: req('https://elsewhere.example.com/v1', [['x-api-key', MODEL_KEY]]),
   });
   assert.match(raw.error.message, /head carries a value/);
+  const named = await ask('model', {
+    request: req('https://elsewhere.example.com/v1', [[MODEL_KEY, 'x']]),
+  });
+  assert.match(named.error.message, /head carries a value/);
 });
 
 test('mcp fills its server credential on the kernel loopback, and never sends one elsewhere', async (t) => {
@@ -164,6 +168,21 @@ test('records lists model and mcp records, never values or secrets', async (t) =
     window.harness.call('put', { name: 'NEW_MODEL', value: 'fake-model-key-0198', kind: 'model' })
   );
   assert.equal(fresh.error.message, 'a model record needs its provider');
+  const asked = await page.evaluate(() =>
+    window.harness.sealed({ v: 1, op: 'request', kind: 'value', name: 'NEW_MODEL' })
+  );
+  const answered = await page.evaluate(
+    (id) =>
+      window.harness.call('put', {
+        name: 'NEW_MODEL',
+        value: 'fake-model-key-0197',
+        kind: 'model',
+        provider: 'openai',
+        request: id,
+      }),
+    asked.id
+  );
+  assert.match(answered.error.message, /asks for another value/);
   const after = (await ask('records', {})).records.find((r) => r.name === 'ANTHROPIC_API_KEY');
   assert.equal(after.provider, 'anthropic');
 });

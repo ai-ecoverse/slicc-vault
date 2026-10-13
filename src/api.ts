@@ -141,7 +141,7 @@ async function put(vault: Vault, ns: string, request: Fields): Promise<Fields> {
   if (!PUTTABLE.has(kind)) throw new Refused('EINVAL', 'put stores a secret, model or mcp record');
   const bound = binding(kind, request);
   const pending = request.request === undefined ? null : await get(vault.db, ns, request.request);
-  if (pending && (pending.kind !== 'value' || pending.name !== name)) {
+  if (pending && (kind !== 'secret' || pending.kind !== 'value' || pending.name !== name)) {
     throw new Refused('EINVAL', `request ${pending.id} asks for another value`);
   }
   const ended = pending ? current(pending, vault.now()) : 'pending';

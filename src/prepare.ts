@@ -2,7 +2,16 @@ import type { Hit, Scrubber } from '@ai-ecoverse/slicc-scrub';
 import { text } from './bytes.ts';
 import { Refused } from './errors.ts';
 import { decrypt } from './keys.ts';
-import { aad, checkValue, NAME, records, removed, seal, type VaultRecord } from './records.ts';
+import {
+  aad,
+  checkValue,
+  NAME,
+  records,
+  removed,
+  type SealInput,
+  sealAll,
+  type VaultRecord,
+} from './records.ts';
 import { checkOAuth, type TokenKind, tokens } from './refresh.ts';
 import { kernelPort, modelFor, serverFor } from './refusal.ts';
 import { loadRegistered } from './rules.ts';
@@ -142,7 +151,7 @@ export class Preparer {
       throw new Refused('EACCES', 'model and MCP requests go out over https only');
     }
     const scrubber = await this.scrubber();
-    const head = [request.url, ...request.headers.map(([, value]) => value)];
+    const head = [request.method, request.url, ...request.headers.flat()];
     if (head.some((text) => scrubber.text(text).hits.length > 0)) {
       throw new Refused('EACCES', 'the request head carries a value; send its placeholder instead');
     }
@@ -263,35 +272,27 @@ export class Preparer {
     const source = `oauth:mcp:${server.replace(/\s/g, '_')}` as const;
     const dek = this.vault.keyring.use();
     const common = { ns: this.ns, source, uid: null, tag: null, now };
-    const sealedGrant = got.refresh
-      ? (
-          await seal(this.vault.db, dek, {
-            ...common,
-            kind: 'grant',
-            name: grantName,
-            value: got.refresh,
-            oauth,
-          })
-        ).record
-      : null;
-    const access = (
-      await seal(this.vault.db, dek, {
-        ...common,
-        kind: 'mcp',
-        name: base,
-        value: got.access,
-        server,
-        ...(got.expires === null ? {} : { expiresAt: now + got.expires * 1000 }),
-        ...(sealedGrant ? { refresh: grantName } : {}),
-      })
-    ).record;
+    const access: SealInput = {
+      ...common,
+      kind: 'mcp',
+      name: base,
+      value: got.access,
+      server,
+      ...(got.expires === null ? {} : { expiresAt: now + got.expires * 1000 }),
+      ...(got.refresh ? { refresh: grantName } : {}),
+    };
+    const grant: SealInput[] = got.refresh
+      ? [{ ...common, kind: 'grant', name: grantName, value: got.refresh, oauth }]
+      : [];
+    const written = (await sealAll(this.vault.db, dek, [access, ...grant])).map((s) => s.record);
+    const [sealedAccess, sealedGrant] = written;
     await this.vault.changed(this.ns, ['secrets', 'audit']);
     const raw = typeof response === 'string' ? response : text(response);
     const parsed = JSON.parse(raw) as Fields;
-    parsed.access_token = access.placeholder;
+    parsed.access_token = sealedAccess.placeholder;
     if (sealedGrant) parsed.refresh_token = sealedGrant.placeholder;
     const rewritten = JSON.stringify(parsed);
-    const shown = [access, ...(sealedGrant ? [sealedGrant] : [])].map((r) => ({
+    const shown = written.map((r) => ({
       kind: r.kind,
       name: r.name,
       placeholder: r.placeholder,
@@ -299,7 +300,7 @@ export class Preparer {
     return {
       response: typeof response === 'string' ? rewritten : new TextEncoder().encode(rewritten),
       records: shown,
-      ...(access.expiresAt === undefined ? {} : { expiresAt: access.expiresAt }),
+      ...(sealedAccess.expiresAt === undefined ? {} : { expiresAt: sealedAccess.expiresAt }),
     };
   }
 
