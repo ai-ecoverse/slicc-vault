@@ -354,6 +354,7 @@ async function write(tx: IDBTransaction, input: SealInput, sealed: Sealed): Prom
     throw new Refused('EINVAL', 'a model record needs its provider');
   }
   await request(store.put(record));
+  await tagGrant(store, record);
   if (input.answers) await answered(tx, input.ns, input.answers, record.placeholder, input.now);
   await bump(tx, input.ns);
   const rotated = existing !== undefined && !removed(existing);
@@ -486,6 +487,38 @@ export function records(db: IDBDatabase, ns: string): Promise<VaultRecord[]> {
   return transact(db, ['records'], 'readonly', (tx) => all<VaultRecord>(tx, 'records', ns));
 }
 
+async function tagGrant(store: IDBObjectStore, record: VaultRecord): Promise<void> {
+  if (!record.refresh || record.kind === 'grant') return;
+  if (record.server === undefined && record.provider === undefined) return;
+  const grant = (await request(store.get([record.ns, 'grant', record.refresh]))) as
+    | VaultRecord
+    | undefined;
+  if (!grant) return;
+  const server = record.server === undefined ? {} : { server: record.server };
+  const provider = record.provider === undefined ? {} : { provider: record.provider };
+  await request(store.put({ ...grant, ...server, ...provider }));
+}
+
+async function linked(
+  store: IDBObjectStore,
+  record: VaultRecord,
+  now: number,
+  removing: boolean
+): Promise<string | null> {
+  if (!record.refresh || record.kind === 'grant') return null;
+  const grant = (await request(store.get([record.ns, 'grant', record.refresh]))) as
+    | VaultRecord
+    | undefined;
+  if (!grant) return null;
+  const gone = grant.removedAt !== undefined && now - grant.removedAt > RESTORABLE;
+  if (gone || removed(grant) === removing) return null;
+  if (removing) grant.removedAt = now;
+  else delete grant.removedAt;
+  grant.updatedAt = Math.max(now, grant.updatedAt + 1);
+  await request(store.put(grant));
+  return grant.name;
+}
+
 async function mark(
   db: IDBDatabase,
   ns: string,
@@ -499,10 +532,12 @@ async function mark(
     const record = (await request(store.get([ns, kind, name]))) as VaultRecord | undefined;
     const gone = record?.removedAt !== undefined && now - record.removedAt > RESTORABLE;
     if (!record || gone) throw new Refused('ENOENT', `no record named ${name}`);
+    if (removing && removed(record)) return record;
     if (removing) record.removedAt = now;
     else delete record.removedAt;
     record.updatedAt = Math.max(now, record.updatedAt + 1);
     await request(store.put(record));
+    const grant = await linked(store, record, now, removing);
     await bump(tx, ns);
     await audit(tx, ns, {
       type: removing ? 'remove' : 'restore',
@@ -510,6 +545,7 @@ async function mark(
       uid: null,
       tag: null,
       at: now,
+      ...(grant ? { grant } : {}),
     });
     return record;
   });
