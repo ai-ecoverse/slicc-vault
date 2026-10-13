@@ -18,10 +18,25 @@ export interface HumanRequest {
   createdAt: number;
   expiresAt: number;
   placeholder?: string;
+  jerk?: Record<string, unknown>;
+  jop?: string;
+  scope?: string;
+  params?: Record<string, unknown>;
+  answer?: Record<string, unknown>;
+}
+
+export function human(entry: Pick<HumanRequest, 'kind' | 'jop'>): boolean {
+  if (entry.kind === 'unseal') return false;
+  return entry.kind !== 'jerk' || entry.jop === 'create';
 }
 
 export type NewRequest = Pick<HumanRequest, 'ns' | 'kind' | 'stamp'> &
-  Partial<Pick<HumanRequest, 'name' | 'provider' | 'prompt' | 'oauth'>>;
+  Partial<
+    Pick<
+      HumanRequest,
+      'name' | 'provider' | 'prompt' | 'oauth' | 'jop' | 'scope' | 'params' | 'state' | 'answer'
+    >
+  >;
 
 export function current(entry: HumanRequest, now: number): RequestState {
   return entry.state === 'pending' && now >= entry.expiresAt ? 'expired' : entry.state;
@@ -44,9 +59,10 @@ export function pending(entry: HumanRequest): PendingRequest {
 export function create(db: IDBDatabase, fields: NewRequest, now: number): Promise<HumanRequest> {
   return transact(db, ['requests'], 'readwrite', async (tx) => {
     const open = (await all<HumanRequest>(tx, 'requests', fields.ns)).filter(
-      (entry) => entry.stamp.uid === fields.stamp.uid && current(entry, now) === 'pending'
+      (entry) =>
+        entry.stamp.uid === fields.stamp.uid && human(entry) && current(entry, now) === 'pending'
     );
-    if (open.length > 0) {
+    if (human(fields) && fields.state !== 'done' && open.length > 0) {
       throw new Refused(
         'EAGAIN',
         `uid ${fields.stamp.uid} already has a request waiting for a human`
@@ -55,7 +71,7 @@ export function create(db: IDBDatabase, fields: NewRequest, now: number): Promis
     const entry: HumanRequest = {
       ...fields,
       id: `req_${hex(random(12))}`,
-      state: 'pending',
+      state: fields.state ?? 'pending',
       createdAt: now,
       expiresAt: now + LIFETIME,
     };
@@ -83,7 +99,8 @@ export function settle(
   id: string,
   now: number,
   to: 'done' | 'cancelled',
-  placeholder?: string
+  placeholder?: string,
+  jerk?: Record<string, unknown>
 ): Promise<HumanRequest> {
   return transact(db, ['requests'], 'readwrite', async (tx) => {
     const store = tx.objectStore('requests');
@@ -91,9 +108,42 @@ export function settle(
     if (!entry || entry.ns !== ns) throw new Refused('ENOENT', 'no such request');
     const state = current(entry, now);
     if (state !== 'pending') return { ...entry, state };
-    const settled: HumanRequest = { ...entry, state: to, ...(placeholder ? { placeholder } : {}) };
+    const settled: HumanRequest = {
+      ...entry,
+      state: to,
+      ...(placeholder ? { placeholder } : {}),
+      ...(jerk ? { jerk } : {}),
+    };
     await request(store.put(settled));
     return settled;
+  });
+}
+
+export function respond(
+  db: IDBDatabase,
+  ns: string,
+  id: unknown,
+  now: number,
+  answer: Record<string, unknown>,
+  done: boolean
+): Promise<HumanRequest> {
+  return transact(db, ['requests'], 'readwrite', async (tx) => {
+    const store = tx.objectStore('requests');
+    const entry =
+      typeof id === 'string'
+        ? ((await request(store.get(id))) as HumanRequest | undefined)
+        : undefined;
+    if (!entry || entry.ns !== ns) throw new Refused('ENOENT', 'no such request');
+    if (entry.kind === 'value') throw new Refused('EINVAL', 'a value request is answered with put');
+    const state = current(entry, now);
+    if (state !== 'pending') throw new Refused('EINVAL', `request ${entry.id} is ${state}`);
+    const next: HumanRequest = {
+      ...entry,
+      answer: { ...entry.answer, ...answer },
+      ...(done ? { state: 'done' } : {}),
+    };
+    await request(store.put(next));
+    return next;
   });
 }
 
@@ -102,7 +152,7 @@ export async function waiting(db: IDBDatabase, ns: string, now: number): Promise
     all<HumanRequest>(tx, 'requests', ns)
   );
   return entries
-    .filter((entry) => current(entry, now) === 'pending')
+    .filter((entry) => human(entry) && current(entry, now) === 'pending')
     .sort((a, b) => a.createdAt - b.createdAt);
 }
 

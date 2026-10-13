@@ -1,4 +1,4 @@
-import type { ExitName, SealedReply, Stamp } from './contract.ts';
+import type { ExitName, SealedReply, Stamp, VaultEvent } from './contract.ts';
 import { Refused, refusal } from './errors.ts';
 import type { Exec } from './exec.ts';
 import { prepare } from './inject.ts';
@@ -19,6 +19,7 @@ export interface Context {
   policy(): Policy;
   now(): number;
   changed(): Promise<void>;
+  emit(event: VaultEvent): void;
 }
 
 type Fields = Record<string, unknown>;
@@ -128,13 +129,51 @@ const testOp: Handler = async (ctx, req, stamp) => {
   };
 };
 
+const JOPS = new Set(['list', 'status', 'create']);
+
+function jerkFields(req: Fields): Fields {
+  if (typeof req.jop !== 'string' || !JOPS.has(req.jop)) {
+    throw new Refused('EINVAL', 'jop must be list, status or create');
+  }
+  const provider = optional(req, 'provider', 128);
+  const scope = optional(req, 'scope', 1024);
+  if (req.jop !== 'list' && !provider)
+    throw new Refused('EINVAL', `jop ${req.jop} needs a provider`);
+  const params = req.params;
+  if (params !== undefined && (!params || typeof params !== 'object' || Array.isArray(params))) {
+    throw new Refused('EINVAL', 'params must be an object');
+  }
+  return {
+    kind: 'jerk',
+    jop: req.jop,
+    ...(provider ? { provider } : {}),
+    ...(scope ? { scope } : {}),
+    ...(params ? { params } : {}),
+  };
+}
+
+export function mayManage(stamp: Stamp): boolean {
+  if (stamp.uid === 0) return true;
+  try {
+    const tag = JSON.parse(stamp.tag ?? 'null') as Fields | null;
+    return typeof tag?.agentId === 'string' && tag.agentId.startsWith('cone:');
+  } catch {
+    return false;
+  }
+}
+
 function requestFields(req: Fields): {
-  kind: 'value' | 'oauth' | 'jerk-seal';
+  kind: 'value' | 'oauth' | 'jerk-seal' | 'jerk' | 'unseal';
   name?: string;
   provider?: string;
   prompt?: string;
   oauth?: Fields;
+  jop?: string;
+  scope?: string;
+  params?: Fields;
 } {
+  if (req.kind === 'jerk') return jerkFields(req) as ReturnType<typeof requestFields>;
+  if (req.kind === 'unseal') return { kind: 'unseal', provider: string(req, 'provider', 128) };
   if (req.kind === 'value') {
     const prompt = optional(req, 'prompt', PROMPT);
     return { kind: 'value', name: checkName(req.name), ...(prompt ? { prompt } : {}) };
@@ -148,21 +187,37 @@ function requestFields(req: Fields): {
   }
   if (req.kind === 'jerk-seal')
     return { kind: 'jerk-seal', provider: string(req, 'provider', 128) };
-  throw new Refused('EINVAL', 'kind must be value, oauth or jerk-seal');
+  throw new Refused('EINVAL', 'kind must be value, oauth, jerk-seal, jerk or unseal');
 }
 
 const requestOp: Handler = async (ctx, req, stamp) => {
-  const entry = await create(ctx.db, { ns: ctx.ns, stamp, ...requestFields(req) }, ctx.now());
+  const fields = requestFields(req);
+  const managing = fields.kind === 'unseal' || (fields.kind === 'jerk' && fields.jop === 'create');
+  const refused = managing && !mayManage(stamp);
+  const answer = {
+    exit: 2,
+    message: `${fields.provider} can be signed in or dropped only by root or a cone (J2)`,
+  };
+  const entry = await create(
+    ctx.db,
+    { ns: ctx.ns, stamp, ...fields, ...(refused ? { state: 'done', answer } : {}) },
+    ctx.now()
+  );
   await ctx.changed();
-  return { state: 'pending', id: entry.id };
+  return refused ? { state: 'done', id: entry.id, ...answer } : { state: 'pending', id: entry.id };
 };
 
 const statusOp: Handler = async (ctx, req, stamp) => {
   const entry = await get(ctx.db, ctx.ns, req.id, stamp.uid);
   const now = ctx.now();
-  const reply: Fields = { state: current(entry, now) };
-  if (reply.state !== 'done' || entry.kind !== 'value' || !entry.name) return reply;
-  const found = await find(ctx.db, ctx.ns, 'secret', entry.name);
+  const reply: Fields = {
+    state: current(entry, now),
+    ...(entry.jerk ? { jerk: entry.jerk } : {}),
+    ...entry.answer,
+  };
+  if (reply.state !== 'done') return reply;
+  const held = await records(ctx.db, ctx.ns);
+  const found = held.find((r) => r.kind === 'secret' && r.placeholder === entry.placeholder);
   if (!found) return reply;
   const recordState = state(found, ctx.policy(), now);
   return { ...reply, placeholder: found.placeholder, record: recordState };
@@ -172,6 +227,8 @@ const cancelOp: Handler = async (ctx, req, stamp) => {
   const entry = await get(ctx.db, ctx.ns, req.id, stamp.uid);
   const settled = await settle(ctx.db, ctx.ns, entry.id, ctx.now(), 'cancelled');
   await ctx.changed();
+  if (current(entry, ctx.now()) === 'pending' && settled.state === 'cancelled')
+    ctx.emit({ v: 1, event: 'cancelled', request: entry.id, kind: entry.kind });
   return { state: settled.state };
 };
 

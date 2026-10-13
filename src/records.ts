@@ -31,7 +31,15 @@ export interface VaultRecord {
   usedAt?: number;
   expiresAt?: number;
   refresh?: string;
+  oauth?: OAuthConfig;
   removedAt?: number;
+}
+
+export interface OAuthConfig {
+  tokenUrl: string;
+  clientId: string;
+  scope?: string;
+  resource?: string;
 }
 
 export interface SealInput {
@@ -44,6 +52,7 @@ export interface SealInput {
   tag: string | null;
   expiresAt?: number;
   refresh?: string;
+  oauth?: OAuthConfig;
   placeholder?: string;
   now: number;
 }
@@ -179,6 +188,7 @@ export async function seal(db: IDBDatabase, dek: Dek, input: SealInput): Promise
       updatedAt: input.now,
       ...(input.expiresAt === undefined ? {} : { expiresAt: input.expiresAt }),
       ...(input.refresh === undefined ? {} : { refresh: input.refresh }),
+      ...(input.oauth === undefined ? {} : { oauth: input.oauth }),
     };
     await request(store.put(record));
     await bump(tx, input.ns);

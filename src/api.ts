@@ -19,6 +19,7 @@ import {
   checkName,
   checkValue,
   dismissBackup,
+  NAME,
   placeholders,
   records,
   remove,
@@ -29,7 +30,14 @@ import {
   type VaultRecord,
   view,
 } from './records.ts';
-import { current, get, settle } from './requests.ts';
+import {
+  checkOAuth,
+  type EgressRequest,
+  type EgressResponse,
+  egressOver,
+  JERK,
+} from './refresh.ts';
+import { current, get, respond, settle } from './requests.ts';
 import { apply } from './rules.ts';
 import { sealed } from './sealed.ts';
 import { exporter, importer } from './transfer.ts';
@@ -155,6 +163,115 @@ function optionalNumber(value: unknown, field: string): number | undefined {
   return value;
 }
 
+function text(value: unknown, field: string, max: number): string | undefined {
+  if (value === undefined) return undefined;
+  if (typeof value !== 'string' || value.length > max) {
+    throw new Refused('EINVAL', `${field} must be a string of at most ${max} characters`);
+  }
+  return value;
+}
+
+function strings(value: unknown, field: string): string[] | undefined {
+  if (value === undefined) return undefined;
+  if (!Array.isArray(value) || !value.every((item) => typeof item === 'string')) {
+    throw new Refused('EINVAL', `${field} must be a list of strings`);
+  }
+  return value as string[];
+}
+
+function row(value: unknown): Fields {
+  const given = (value ?? {}) as Fields;
+  if (typeof given.provider !== 'string') {
+    throw new Refused(
+      'EINVAL',
+      'rows are { provider, name?, env, device?, signedIn?, user?, scopes? }'
+    );
+  }
+  const out: Fields = { provider: given.provider, env: strings(given.env, 'env') ?? [] };
+  for (const field of ['name', 'device', 'user']) {
+    const value = text(given[field], field, 256);
+    if (value !== undefined) out[field] = value;
+  }
+  if (typeof given.signedIn === 'boolean') out.signedIn = given.signedIn;
+  const scopes = strings(given.scopes, 'scopes');
+  if (scopes !== undefined) out.scopes = scopes;
+  return out;
+}
+
+async function placeholderFor(
+  vault: Vault,
+  ns: string,
+  provider: string | undefined,
+  given: unknown
+) {
+  const held = (await records(vault.db, ns)).filter((r) => r.kind === 'secret' && !r.removedAt);
+  if (given !== undefined) {
+    if (!held.some((r) => r.placeholder === given))
+      throw new Refused('EINVAL', 'placeholder is not one of this vault');
+    return given as string;
+  }
+  const own = held.find(
+    (r) => r.source === `oauth:${provider}` || r.source.startsWith(`jerk:${provider}@`)
+  );
+  return own?.placeholder;
+}
+
+async function answerRequest(vault: Vault, ns: string, request: Fields): Promise<Fields> {
+  if (request.state !== 'progress' && request.state !== 'done') {
+    throw new Refused('EINVAL', 'state must be progress or done');
+  }
+  if (
+    request.exit !== undefined &&
+    (!Number.isInteger(request.exit) || (request.exit as number) < 0)
+  ) {
+    throw new Refused('EINVAL', 'exit must be a non-negative integer');
+  }
+  if (request.rows !== undefined && !Array.isArray(request.rows))
+    throw new Refused('EINVAL', 'rows must be a list');
+  const answer: Fields = {};
+  const progress = text(request.progress, 'progress', 200);
+  const message = text(request.message, 'message', 500);
+  const user = text(request.user, 'user', 256);
+  const scopes = strings(request.scopes, 'scopes');
+  if (progress !== undefined) answer.progress = progress;
+  if (request.exit !== undefined) answer.exit = request.exit;
+  if (user !== undefined) answer.user = user;
+  if (scopes !== undefined) answer.scopes = scopes;
+  if (message !== undefined) answer.message = message;
+  if (request.rows !== undefined) answer.rows = (request.rows as unknown[]).map(row);
+  const entry = await get(vault.db, ns, request.request);
+  const status = entry.kind === 'jerk' && entry.jop === 'status';
+  if (request.placeholder !== undefined && !status)
+    throw new Refused('EINVAL', 'only jop status answers carry a placeholder');
+  if (status && request.state === 'done' && (request.exit ?? 0) === 0) {
+    const placeholder = await placeholderFor(vault, ns, entry.provider, request.placeholder);
+    if (placeholder) answer.placeholder = placeholder;
+  }
+  const updated = await respond(
+    vault.db,
+    ns,
+    request.request,
+    vault.now(),
+    answer,
+    request.state === 'done'
+  );
+  await vault.changed(ns, ['requests']);
+  return { state: updated.state };
+}
+
+function checkJerk(value: unknown): Fields {
+  const given = (value ?? {}) as Fields;
+  if (typeof given !== 'object' || Array.isArray(given) || typeof given.exit !== 'number') {
+    throw new Refused('EINVAL', 'jerk must be { exit, user?, scopes?, expires_at? }');
+  }
+  const out: Fields = { exit: given.exit };
+  if (typeof given.user === 'string') out.user = given.user;
+  if (Array.isArray(given.scopes) && given.scopes.every((s) => typeof s === 'string'))
+    out.scopes = given.scopes;
+  if (typeof given.expires_at === 'string') out.expires_at = given.expires_at;
+  return out;
+}
+
 async function sealFromPage(vault: Vault, ns: string, request: Fields): Promise<Fields> {
   const name = checkName(request.name);
   const value = checkValue(request.value);
@@ -163,8 +280,20 @@ async function sealFromPage(vault: Vault, ns: string, request: Fields): Promise<
   if (typeof request.source !== 'string' || !SOURCE.test(request.source)) {
     throw new Refused('EINVAL', 'source must be settings, process, jerk:, oauth: or import:');
   }
-  if (request.refresh !== undefined && typeof request.refresh !== 'string') {
-    throw new Refused('EINVAL', 'refresh must be a string');
+  const refresh = request.refresh;
+  if (
+    refresh !== undefined &&
+    (typeof refresh !== 'string' || (refresh !== JERK && !NAME.test(refresh)))
+  ) {
+    throw new Refused('EINVAL', 'refresh must be jerk-seal or the name of a grant');
+  }
+  if (request.oauth !== undefined && kind !== 'grant')
+    throw new Refused('EINVAL', 'only a grant carries oauth');
+  const oauth = request.oauth === undefined ? undefined : checkOAuth(request.oauth);
+  const jerk = request.jerk === undefined ? undefined : checkJerk(request.jerk);
+  const pending = request.request === undefined ? null : await get(vault.db, ns, request.request);
+  if (pending && (pending.kind === 'value' || current(pending, vault.now()) !== 'pending')) {
+    throw new Refused('EINVAL', `request ${pending.id} isn't a pending sign-in or lease`);
   }
   const expiresAt = optionalNumber(request.expiresAt, 'expiresAt');
   const { record } = await seal(vault.db, vault.keyring.use(), {
@@ -177,9 +306,12 @@ async function sealFromPage(vault: Vault, ns: string, request: Fields): Promise<
     tag: null,
     now: vault.now(),
     ...(expiresAt === undefined ? {} : { expiresAt }),
-    ...(request.refresh === undefined ? {} : { refresh: request.refresh as string }),
+    ...(refresh === undefined ? {} : { refresh: refresh as string }),
+    ...(oauth === undefined ? {} : { oauth }),
   });
-  await vault.changed(ns, ['secrets', 'audit']);
+  if (pending)
+    await settle(vault.db, ns, pending.id, vault.now(), 'done', record.placeholder, jerk);
+  await vault.changed(ns, ['secrets', 'audit', 'requests']);
   return { ...result(vault, ns, record) };
 }
 
@@ -235,6 +367,10 @@ export async function answer(
       return importer(vault, ns, request);
     case 'export':
       return exporter(vault, ns, request);
+    case 'answer':
+      return answerRequest(vault, ns, request);
+    case 'refresh':
+      return vault.refresher.refresh(ns, checkName(request.name));
     case 'lock':
       vault.keyring.lock();
       return {};
@@ -268,6 +404,25 @@ export class Server {
     this.vault = vault;
     vault.onChange((ns, parts) => this.changed(ns, parts));
     vault.keyring.listeners.add(() => void this.locked());
+    vault.onEvent((ns, event) => this.push(ns, event));
+    vault.refresher.send = (ns, req) => this.egress(ns, req);
+    vault.refresher.announce = (ns, name, source, expiresAt) =>
+      this.push(ns, { v: 1, event: 'refresh', name, source: source as RecordSource, expiresAt });
+  }
+
+  egress(ns: string, req: EgressRequest): Promise<EgressResponse> {
+    const session = [...this.sessions].find((s) => s.ns === ns && s.role === 'page');
+    if (!session)
+      return Promise.reject(new Refused('ENOTCONN', 'no page is connected to send the refresh'));
+    const channel = new MessageChannel();
+    const answer = egressOver(channel.port1);
+    session.port.postMessage({ v: 1, event: 'egress', request: req }, [channel.port2]);
+    return answer;
+  }
+
+  sweep(): Promise<void[]> {
+    const spaces = new Set([...this.sessions].filter((s) => s.role === 'page').map((s) => s.ns));
+    return Promise.all([...spaces].map((ns) => this.vault.refresher.sweep(ns)));
   }
 
   accept(event: MessageEvent, parent: unknown): boolean {

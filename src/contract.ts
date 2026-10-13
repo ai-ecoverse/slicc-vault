@@ -12,7 +12,7 @@ export type RecordSource =
   | `oauth:${string}`
   | `import:${string}`;
 export type LockMode = 'auto' | 'passkey' | 'passphrase';
-export type RequestKind = 'value' | 'oauth' | 'jerk-seal';
+export type RequestKind = 'value' | 'oauth' | 'jerk-seal' | 'jerk' | 'unseal';
 export type RequestState = 'pending' | 'done' | 'cancelled' | 'expired';
 export type ErrorCode =
   | 'EINVAL'
@@ -186,7 +186,13 @@ export type AuditEntry =
   | RevealEntry
   | SealEntry
   | RemoveEntry
+  | RefreshEntry
   | PolicyEntry;
+
+export interface RefreshEntry extends AuditBase {
+  type: 'refresh';
+  grant: string;
+}
 
 export interface RequestHead {
   method: string;
@@ -348,7 +354,12 @@ export type Op =
       kind?: RecordKind;
       expiresAt?: EpochMs;
       refresh?: string;
+      oauth?: OAuthConfig;
+      request?: string;
+      jerk?: JerkResult;
     }
+  | { op: 'refresh'; name: string }
+  | ({ op: 'answer'; request: string; state: 'progress' | 'done' } & RequestAnswer)
   | {
       op: 'import';
       kind: ImportKind;
@@ -409,6 +420,8 @@ export type OpReply =
   | { op: 'lock' }
   | { op: 'dismissBackupReminder'; backupReminder: BackupReminder }
   | ({ op: 'policy' } & PolicyResult)
+  | { op: 'refresh'; state: 'refreshed' | 'requested'; expiresAt?: EpochMs }
+  | { op: 'answer'; state: RequestState }
   | ({ op: 'forward' } & ForwardResult)
   | {
       op: 'materializeConsume';
@@ -427,7 +440,55 @@ export type ChangedPart = 'secrets' | 'audit' | 'exits';
 export type VaultEvent =
   | { v: Protocol; event: 'status'; status: VaultStatus }
   | { v: Protocol; event: 'placeholders'; placeholders: string[]; scrub: ScrubState }
-  | { v: Protocol; event: 'changed'; parts: ChangedPart[] };
+  | { v: Protocol; event: 'changed'; parts: ChangedPart[] }
+  | { v: Protocol; event: 'refresh'; name: string; source: RecordSource; expiresAt: EpochMs }
+  | { v: Protocol; event: 'egress'; request: EgressRequest }
+  | { v: Protocol; event: 'cancelled'; request: string; kind: RequestKind };
+
+export interface JerkRow {
+  provider: string;
+  name?: string;
+  env: string[];
+  device?: string;
+  signedIn?: boolean;
+  user?: string;
+  scopes?: string[];
+}
+
+export interface RequestAnswer {
+  progress?: string;
+  exit?: number;
+  user?: string;
+  scopes?: string[];
+  message?: string;
+  rows?: JerkRow[];
+  placeholder?: string;
+}
+
+export interface EgressRequest {
+  method: string;
+  url: string;
+  headers: [string, string][];
+  body: string;
+}
+
+export type EgressAnswer =
+  | { status: number; headers: [string, string][]; body: Uint8Array | string }
+  | { error: string };
+
+export interface OAuthConfig {
+  tokenUrl: string;
+  clientId: string;
+  scope?: string;
+  resource?: string;
+}
+
+export interface JerkResult {
+  exit: number;
+  user?: string;
+  scopes?: string[];
+  expires_at?: string;
+}
 
 export interface Hello {
   type: MessageType;
