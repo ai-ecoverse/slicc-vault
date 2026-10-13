@@ -6,7 +6,8 @@ import type { Vault } from './vault.ts';
 interface Compiled {
   version: number;
   scrubber: Scrubber;
-  values: { kind: string; name: string; value: string }[];
+  values: { kind: string; name: string; placeholder: string; value: string }[];
+  others: Map<string, Scrubber>;
 }
 
 export class Scrubbers {
@@ -37,14 +38,20 @@ export class Scrubbers {
       }))
     );
     const scrubber = compile(values, { version });
-    this.cache.set(ns, { version, scrubber, values });
+    this.cache.set(ns, { version, scrubber, values, others: new Map() });
     return scrubber;
   }
 
   async holdsAnother(ns: string, own: { kind: string; name: string }, value: string) {
     await this.get(ns);
-    const known = (this.cache.get(ns) as Compiled).values;
-    const others = known.filter((o) => o.kind !== own.kind || o.name !== own.name);
-    return others.some((o) => value.includes(o.value));
+    const compiled = this.cache.get(ns) as Compiled;
+    const key = `${own.kind}\u0000${own.name}`;
+    let others = compiled.others.get(key);
+    if (!others) {
+      const rest = compiled.values.filter((o) => o.kind !== own.kind || o.name !== own.name);
+      others = compile(rest, { version: compiled.version });
+      compiled.others.set(key, others);
+    }
+    return others.text(value).hits.some((hit) => hit.form !== 'fragment');
   }
 }

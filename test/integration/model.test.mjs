@@ -112,6 +112,21 @@ test('model prepares a request with its provider key and the body scrubbed', asy
     request: req('https://api.anthropic.com/v1', [['x-api-key', nested.placeholder]]),
   });
   assert.match(holds.error.message, /contains another stored value/);
+  const encoded = await page.evaluate(
+    (inner) =>
+      window.harness.call('put', {
+        name: 'ENCODED',
+        value: btoa(inner),
+        kind: 'model',
+        provider: 'anthropic',
+      }),
+    SECRET
+  );
+  const holdsEncoded = await ask('model', {
+    provider: 'anthropic',
+    request: req('https://api.anthropic.com/v1', [['x-api-key', encoded.placeholder]]),
+  });
+  assert.match(holdsEncoded.error.message, /contains another stored value/);
   const named = await ask('model', {
     request: req('https://elsewhere.example.com/v1', [[MODEL_KEY, 'x']]),
   });
