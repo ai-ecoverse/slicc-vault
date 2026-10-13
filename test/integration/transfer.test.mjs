@@ -32,6 +32,7 @@ test('export a backup, which another embedder of the same vault cannot take over
       value: 'fake-model-key-0002',
       source: 'settings',
       kind: 'model',
+      provider: 'anthropic',
     })
   );
   await page.evaluate(() =>

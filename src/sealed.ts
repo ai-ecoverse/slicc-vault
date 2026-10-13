@@ -5,6 +5,7 @@ import { prepare } from './inject.ts';
 import type { Keyring } from './lock.ts';
 import type { Policy } from './policy.ts';
 import { checkName, checkValue, find, records, removed, rulesFor, seal, state } from './records.ts';
+import { kernelPort } from './refusal.ts';
 import { create, current, get, settle } from './requests.ts';
 import { loadRegistered } from './rules.ts';
 
@@ -64,19 +65,35 @@ async function record(ctx: Context, name: string) {
   return found;
 }
 
+function bridge(req: Fields): { server: string; url: string } | null {
+  if (req.kind === undefined || req.kind === 'secret') return null;
+  if (req.kind !== 'mcp')
+    throw new Refused('EINVAL', 'a program seals a secret or an mcp bridge token');
+  const url = typeof req.url === 'string' ? URL.parse(req.url) : null;
+  if (typeof req.server !== 'string' || !req.server || req.server.length > 128) {
+    throw new Refused('EINVAL', 'an mcp bridge token needs its server');
+  }
+  if (!url || kernelPort(url) === null) {
+    throw new Refused('EACCES', 'a program binds an MCP credential only to a kernel-loopback URL');
+  }
+  return { server: req.server, url: url.href };
+}
+
 const sealOp: Handler = async (ctx, req, stamp) => {
   const name = checkName(req.name);
   const value = checkValue(req.value);
+  const bound = bridge(req);
   const now = ctx.now();
   const { record: sealed } = await seal(ctx.db, ctx.keyring.use(), {
     ns: ctx.ns,
-    kind: 'secret',
+    kind: bound ? 'mcp' : 'secret',
     name,
     value,
     source: 'process',
     uid: stamp.uid,
     tag: stamp.tag,
     now,
+    ...(bound ?? {}),
   });
   await ctx.changed();
   return { placeholder: sealed.placeholder, state: state(sealed, ctx.policy(), now) };

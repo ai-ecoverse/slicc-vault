@@ -1,21 +1,25 @@
 import type { Hit, Scrubber, Stream } from '@ai-ecoverse/slicc-scrub';
 import { Refused } from './errors.ts';
+import { Preparer } from './prepare.ts';
 import { register } from './rules.ts';
 import type { Vault } from './vault.ts';
 
 type Fields = Record<string, unknown>;
 
 export const MAX_STREAMS = 64;
+const SANITIZED = new Set(['model', 'mcp', 'records', 'grant', 'refresh']);
 const LOCKED = 'vault is locked: unlock it in the vault window to continue';
 
 export class AgentPort {
   readonly vault: Vault;
   readonly ns: string;
   readonly streams = new Map<string, { stream: Stream; version: number }>();
+  readonly preparer: Preparer;
 
   constructor(vault: Vault, ns: string) {
     this.vault = vault;
     this.ns = ns;
+    this.preparer = new Preparer(vault, ns);
   }
 
   async scrubber(): Promise<Scrubber> {
@@ -106,6 +110,38 @@ export class AgentPort {
   }
 
   answer(fields: Fields): Promise<Fields> | Fields {
+    const out = this.route(fields);
+    if (!(out instanceof Promise)) return out;
+    const op = fields.op as string;
+    const checked = SANITIZED.has(op) ? out.then((reply) => this.sanitized(op, reply)) : out;
+    return checked.catch((error) => this.cleaned(error));
+  }
+
+  async sanitized(op: string, reply: Fields): Promise<Fields> {
+    const scrubber = await this.vault.scrubbers.get(this.ns);
+    if (!scrubber) return reply;
+    const walk = (value: unknown): unknown => {
+      if (typeof value === 'string') return scrubber.text(value).text;
+      if (typeof value === 'number')
+        return scrubber.text(String(value)).hits.length ? undefined : value;
+      if (Array.isArray(value)) return value.map(walk);
+      if (value && typeof value === 'object' && !(value instanceof Uint8Array)) {
+        const entries = Object.entries(value).map(([key, item]) => [key, walk(item)]);
+        return Object.fromEntries(entries.filter(([, item]) => item !== undefined));
+      }
+      return value;
+    };
+    if (op === 'model' || op === 'mcp') return { ...reply, hits: walk(reply.hits) };
+    return walk(reply) as Fields;
+  }
+
+  async cleaned(error: unknown): Promise<never> {
+    const scrubber = error instanceof Refused ? await this.vault.scrubbers.get(this.ns) : null;
+    if (!scrubber) throw error;
+    throw new Refused((error as Refused).code, scrubber.text((error as Refused).message).text);
+  }
+
+  route(fields: Fields): Promise<Fields> | Fields {
     switch (fields.op) {
       case 'redact':
         return this.redact(fields);
@@ -121,6 +157,16 @@ export class AgentPort {
         return this.drop(fields);
       case 'endpoints':
         return this.endpoints(fields);
+      case 'model':
+        return this.preparer.model(fields);
+      case 'mcp':
+        return this.preparer.mcp(fields);
+      case 'records':
+        return this.preparer.list();
+      case 'grant':
+        return this.preparer.grant(fields);
+      case 'refresh':
+        return this.preparer.refresh(fields);
       default:
         throw new Refused('ENOTSUP', `this vault has no op ${String(fields.op)}`);
     }

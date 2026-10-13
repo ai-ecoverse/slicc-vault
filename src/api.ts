@@ -16,6 +16,7 @@ import { all, transact } from './db.ts';
 import { Refused, refusal } from './errors.ts';
 import { forward } from './forward.ts';
 import {
+  binding,
   checkName,
   checkValue,
   dismissBackup,
@@ -95,12 +96,23 @@ export async function audit(
   return { audit: entries, more, ...(more ? { next: page[page.length - 1].seq } : {}) };
 }
 
+async function consistent(vault: Vault, ns: string) {
+  for (let tries = 0; tries < 3; tries++) {
+    const scrubber = await vault.scrubbers.get(ns);
+    const held = await records(vault.db, ns);
+    if ((await vault.scrubbers.get(ns))?.version === scrubber?.version) return { scrubber, held };
+  }
+  throw new Refused('EAGAIN', "the vault's values keep changing; try again");
+}
+
 export async function list(vault: Vault, ns: string): Promise<VaultList> {
   const now = vault.now();
   const policy = vault.policy(ns);
-  const secrets = (await records(vault.db, ns))
+  const { scrubber, held } = await consistent(vault, ns);
+  const clean = scrubber ? (text: string) => scrubber.text(text).text : null;
+  const secrets = held
     .sort((a, b) => a.name.localeCompare(b.name) || a.kind.localeCompare(b.kind))
-    .map((record) => view(record, policy, now));
+    .map((record) => view(record, policy, now, clean));
   const { audit: entries, more } = await audit(vault, ns);
   return {
     secrets,
@@ -131,11 +143,16 @@ function result(vault: Vault, ns: string, record: VaultRecord): SealResult {
   };
 }
 
+const PUTTABLE = new Set<RecordKind>(['secret', 'model', 'mcp']);
+
 async function put(vault: Vault, ns: string, request: Fields): Promise<Fields> {
   const name = checkName(request.name);
   const value = checkValue(request.value);
+  const kind = (request.kind ?? 'secret') as RecordKind;
+  if (!PUTTABLE.has(kind)) throw new Refused('EINVAL', 'put stores a secret, model or mcp record');
+  const bound = binding(kind, request);
   const pending = request.request === undefined ? null : await get(vault.db, ns, request.request);
-  if (pending && (pending.kind !== 'value' || pending.name !== name)) {
+  if (pending && (kind !== 'secret' || pending.kind !== 'value' || pending.name !== name)) {
     throw new Refused('EINVAL', `request ${pending.id} asks for another value`);
   }
   const ended = pending ? current(pending, vault.now()) : 'pending';
@@ -143,13 +160,14 @@ async function put(vault: Vault, ns: string, request: Fields): Promise<Fields> {
   const now = vault.now();
   const { record } = await seal(vault.db, vault.keyring.use(), {
     ns,
-    kind: 'secret',
+    kind,
     name,
     value,
     source: 'settings',
     uid: null,
     tag: null,
     now,
+    ...bound,
     ...(pending ? { answers: { id: pending.id, clock: () => vault.now() } } : {}),
   });
   await vault.changed(ns, ['secrets', 'audit', 'requests']);
@@ -315,6 +333,7 @@ async function sealFromPage(vault: Vault, ns: string, request: Fields): Promise<
     );
   }
   const expiresAt = optionalNumber(request.expiresAt, 'expiresAt');
+  const bound = binding(kind, request);
   const { record } = await seal(vault.db, vault.keyring.use(), {
     ns,
     kind,
@@ -324,6 +343,7 @@ async function sealFromPage(vault: Vault, ns: string, request: Fields): Promise<
     uid: null,
     tag: null,
     now: vault.now(),
+    ...bound,
     ...(expiresAt === undefined ? {} : { expiresAt }),
     ...(refresh === undefined ? {} : { refresh: refresh as string }),
     ...(oauth === undefined ? {} : { oauth }),

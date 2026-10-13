@@ -64,6 +64,8 @@ export interface SecretView {
   sourceDevice: DeviceId | null;
   provider?: string;
   account?: string;
+  server?: string;
+  settings?: Record<string, string>;
   domains: string[];
   rules: Rule[];
   exits?: ExitName[];
@@ -228,6 +230,36 @@ export interface McpServerEntry {
   server: string;
   url: string;
   names?: string[];
+  tokenUrl?: string;
+}
+
+export interface RecordBinding {
+  provider?: string;
+  server?: string;
+  settings?: Record<string, string>;
+}
+
+export interface ModelEndpoint {
+  provider: string;
+  url: string;
+}
+
+export interface OutgoingRequest {
+  method: string;
+  url: string;
+  headers: [string, string][];
+  body?: string | Uint8Array;
+}
+
+export interface AgentRecord {
+  kind: 'model' | 'mcp';
+  name: string;
+  placeholder: string;
+  state: 'ready' | 'expired' | 'refreshing';
+  provider?: string;
+  server?: string;
+  expiresAt?: EpochMs;
+  settings?: Record<string, string>;
 }
 
 export interface ScrubHit {
@@ -344,11 +376,17 @@ export type Op =
   | { op: 'placeholders' }
   | { op: 'list' }
   | { op: 'audit'; before?: number; limit?: number }
-  | { op: 'put'; name: string; value: string; request?: string }
+  | ({
+      op: 'put';
+      name: string;
+      value: string;
+      kind?: 'secret' | 'model' | 'mcp';
+      request?: string;
+    } & RecordBinding)
   | { op: 'cancel'; request: string }
   | { op: 'remove'; name: string; kind?: RecordKind }
   | { op: 'restore'; name: string; kind?: RecordKind }
-  | {
+  | ({
       op: 'seal';
       name: string;
       value: string;
@@ -359,7 +397,7 @@ export type Op =
       oauth?: OAuthConfig;
       request?: string;
       jerk?: JerkResult;
-    }
+    } & RecordBinding)
   | { op: 'refresh'; name: string }
   | ({ op: 'answer'; request: string; state: 'progress' | 'done' } & RequestAnswer)
   | {
@@ -400,7 +438,19 @@ export type AgentOp =
   | { op: 'idle'; stream: string }
   | { op: 'end'; stream: string }
   | { op: 'drop'; stream: string }
-  | { op: 'endpoints'; model?: string[]; mcp?: (string | McpServerEntry)[] };
+  | { op: 'endpoints'; model?: (string | ModelEndpoint)[]; mcp?: (string | McpServerEntry)[] }
+  | { op: 'model'; provider?: string; request: OutgoingRequest }
+  | { op: 'mcp'; server: string; request: OutgoingRequest }
+  | { op: 'records' }
+  | {
+      op: 'grant';
+      server: string;
+      response: string | Uint8Array;
+      oauth: OAuthConfig;
+      name?: string;
+    }
+  | { op: 'refresh'; server: string; name?: string }
+  | { op: 'refresh'; provider: string; name?: string };
 
 export type AgentReply =
   | { op: 'redact'; texts: (string | Uint8Array)[]; hits: ScrubHit[]; version: number }
@@ -408,7 +458,16 @@ export type AgentReply =
   | { op: 'push' | 'idle'; chunk: Uint8Array }
   | { op: 'end'; chunk: Uint8Array; hits: ScrubHit[] }
   | { op: 'drop' }
-  | { op: 'endpoints'; ok: true };
+  | { op: 'endpoints'; ok: true }
+  | { op: 'model' | 'mcp'; request: OutgoingRequest; hits: ScrubHit[]; version: number }
+  | { op: 'records'; records: AgentRecord[] }
+  | {
+      op: 'grant';
+      response: string | Uint8Array;
+      records: { kind: RecordKind; name: string; placeholder: string }[];
+      expiresAt?: EpochMs;
+    }
+  | { op: 'refresh'; state: 'refreshed' | 'requested'; expiresAt?: EpochMs };
 
 export type OpReply =
   | { op: 'sealed'; reply: SealedReply }
