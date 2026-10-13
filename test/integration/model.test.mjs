@@ -156,6 +156,13 @@ test('records lists model and mcp records, never values or secrets', async (t) =
   await page.evaluate(() =>
     window.harness.call('put', { name: 'KEYNAME', value: 'fake_key_name_0121' })
   );
+  await page.evaluate(() =>
+    window.harness.call('put', {
+      name: 'fake_key_name_0121',
+      value: 'fake-named-0122',
+      kind: 'mcp',
+    })
+  );
   const listed = (await ask('records', {})).records;
   assert.ok(!JSON.stringify(listed).includes('fake-'));
   assert.ok(!JSON.stringify(listed).includes('fake_key'));

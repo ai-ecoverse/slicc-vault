@@ -232,7 +232,11 @@ export class Preparer {
       );
     return records(this.vault.db, this.ns).then((held) => {
       const now = this.vault.now();
-      const shown = held.filter((r) => (r.kind === 'model' || r.kind === 'mcp') && !removed(r));
+      const plain = (r: VaultRecord) =>
+        [r.name, r.provider ?? '', r.server ?? ''].every((t) => scrubber.text(t).hits.length === 0);
+      const shown = held.filter(
+        (r) => (r.kind === 'model' || r.kind === 'mcp') && !removed(r) && plain(r)
+      );
       return {
         records: shown.map((r) => {
           const expired = r.expiresAt !== undefined && r.expiresAt <= now;
