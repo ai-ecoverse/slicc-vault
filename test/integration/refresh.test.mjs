@@ -1,8 +1,12 @@
 import assert from 'node:assert/strict';
+import { readFile } from 'node:fs/promises';
 import { test } from 'node:test';
 import { setup } from './setup.mjs';
 
 const { embedder } = await setup();
+const B4 = JSON.parse(
+  await readFile(new URL('./fixtures/b4-refresh-cases.json', import.meta.url), 'utf8')
+).cases;
 const OWNER = { pid: 5, ppid: 1, uid: 1000, gid: 1000, tag: 'cone' };
 
 async function connected(t) {
@@ -416,4 +420,50 @@ test('a J1 lease due for refresh is announced to the page', async (t) => {
     })
   );
   assert.equal(bad.error.code, 'EINVAL');
+});
+
+test('the B4 duplicate-key and userinfo cases are refused by the vault refresh', async (t) => {
+  const page = await connected(t);
+  for (const entry of B4.filter((c) => c.area === 'token-url')) {
+    const sealed = await page.evaluate(
+      (tokenUrl) =>
+        window.harness.call('seal', {
+          name: 'B4_GRANT',
+          value: 'fake-refresh-token-0501',
+          kind: 'grant',
+          source: 'oauth:b4',
+          oauth: { tokenUrl, clientId: 'cid' },
+        }),
+      entry.setup.tokenUrl
+    );
+    assert.equal(sealed.error?.code, entry.vault.code, entry.id);
+  }
+  await page.evaluate(async () => {
+    await window.harness.call('seal', {
+      name: 'B4_GRANT',
+      value: 'fake-refresh-token-0501',
+      kind: 'grant',
+      source: 'oauth:b4',
+      oauth: { tokenUrl: 'https://auth.example/token', clientId: 'cid' },
+    });
+    await window.harness.call('seal', {
+      name: 'B4_TOKEN',
+      value: 'fake-access-token-0501',
+      source: 'oauth:b4',
+      refresh: 'B4_GRANT',
+      expiresAt: Date.now() + 60000,
+    });
+  });
+  for (const entry of B4.filter((c) => c.area === 'token-response')) {
+    const { status, headers, body } = entry.setup.response;
+    const failed = await page.evaluate(
+      (answer) => {
+        window.harness.egress.answer = answer;
+        return window.harness.call('refresh', { name: 'B4_TOKEN' });
+      },
+      { status, headers: Object.entries(headers), body }
+    );
+    assert.equal(failed.error?.code, 'EACCES', entry.id);
+    assert.equal(failed.error.message, entry.vault.message, entry.id);
+  }
 });

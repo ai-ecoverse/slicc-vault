@@ -38,15 +38,20 @@ export type Announce = (ns: string, name: string, source: string, expiresAt: num
 
 export function checkOAuth(value: unknown): OAuth {
   const given = (value ?? {}) as Fields;
-  const url = typeof given.tokenUrl === 'string' ? URL.parse(given.tokenUrl) : null;
+  const raw = typeof given.tokenUrl === 'string' ? given.tokenUrl : '';
+  const url = URL.parse(raw);
   const valid =
     url?.protocol === 'https:' &&
+    !USERINFO.test(raw) &&
     typeof given.clientId === 'string' &&
     given.clientId.length > 0 &&
     (given.scope === undefined || typeof given.scope === 'string') &&
     (given.resource === undefined || typeof given.resource === 'string');
   if (!valid)
-    throw new Refused('EINVAL', 'oauth must be { tokenUrl (https), clientId, scope?, resource? }');
+    throw new Refused(
+      'EINVAL',
+      'oauth must be { tokenUrl (https, without userinfo), clientId, scope?, resource? }'
+    );
   return {
     tokenUrl: url.href,
     clientId: given.clientId as string,
@@ -87,6 +92,26 @@ export function tokenRequest(oauth: OAuth, refreshToken: string): EgressRequest 
   };
 }
 
+const USERINFO = /^[a-z][a-z0-9+.-]*:\/*[^/?#]*@/i;
+const SINGLE = ['access_token', 'refresh_token', 'token_type', 'expires_in'];
+
+export function topKeys(raw: string): string[] {
+  const keys: string[] = [];
+  let depth = 0;
+  for (let i = 0; i < raw.length; i++) {
+    const char = raw[i];
+    if (char === '"') {
+      let end = i + 1;
+      while (end < raw.length && raw[end] !== '"') end += raw[end] === '\\' ? 2 : 1;
+      if (depth === 1 && /^\s*:/.test(raw.slice(end + 1)))
+        keys.push(JSON.parse(raw.slice(i, end + 1)));
+      i = end;
+    } else if (char === '{' || char === '[') depth++;
+    else if (char === '}' || char === ']') depth--;
+  }
+  return keys;
+}
+
 export function tokens(response: EgressResponse, scrubber: Scrubber | null) {
   const raw = typeof response.body === 'string' ? response.body : text(response.body);
   let parsed: Fields;
@@ -96,6 +121,9 @@ export function tokens(response: EgressResponse, scrubber: Scrubber | null) {
   } catch {
     parsed = {};
   }
+  const keys = Object.keys(parsed).length ? topKeys(raw) : [];
+  const twice = SINGLE.find((key) => keys.indexOf(key) !== keys.lastIndexOf(key));
+  if (twice) throw new Refused('EACCES', `refresh failed: the IdP returned ${twice} twice`);
   const access = parsed.access_token;
   const failed = response.status < 200 || response.status > 299 || parsed.error !== undefined;
   if (failed || typeof access !== 'string') {
