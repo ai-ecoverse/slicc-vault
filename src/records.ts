@@ -13,6 +13,7 @@ import { type Dek, encrypt, type Keys, type Sealed } from './keys.ts';
 import type { Policy } from './policy.ts';
 
 export const NAME = /^[A-Za-z_][A-Za-z0-9_]*$/;
+export const SOURCE = /^(?:settings|process|jerk:[^@\s]+@\S+|oauth:\S+|import:\S+)$/;
 export const PLACEHOLDER = /^fnox_proxy_[0-9a-f]{24}$/;
 export const RESTORABLE = 30 * 24 * 60 * 60 * 1000;
 export const MIN_VALUE = 8;
@@ -122,6 +123,13 @@ export function view(record: VaultRecord, policy: Policy, now: number): SecretVi
   };
 }
 
+function kept(existing: VaultRecord, wanted: string | undefined): string {
+  if (wanted !== undefined && wanted !== existing.placeholder) {
+    throw new Refused('EEXIST', `${existing.name} has another placeholder in this vault`);
+  }
+  return existing.placeholder;
+}
+
 async function chosen(store: IDBObjectStore, wanted: string | undefined): Promise<string> {
   if (wanted === undefined) return unused(store);
   if ((await request(store.index('placeholder').count(wanted))) > 0) {
@@ -162,7 +170,9 @@ export async function seal(db: IDBDatabase, dek: Dek, input: SealInput): Promise
       ns: input.ns,
       kind: input.kind,
       name: input.name,
-      placeholder: existing?.placeholder ?? (await chosen(store, input.placeholder)),
+      placeholder: existing
+        ? kept(existing, input.placeholder)
+        : await chosen(store, input.placeholder),
       sealed,
       source: input.source,
       createdAt: existing && !removed(existing) ? existing.createdAt : input.now,

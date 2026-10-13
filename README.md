@@ -228,12 +228,12 @@ Spectrum's Settings › Secrets reads the file and the password, and bios hands 
 
 **`import { kind, bytes, password?, pick? }`** runs in two steps:
 - Without `pick` it answers `{ stage: 'pick', candidates: [{ name, kind, exists, suggestedRules?, refused? }] }`, for the human to choose from. `refused` says why a candidate can't be imported.
-- With `pick` it seals the candidates picked, each given as `{ name, kind }` or, for kind `secret`, as just its name, and answers `{ stage: 'done', imported: [{ name, placeholder, state }], skipped }`. `skipped` lists picked names that were refused or not in the file. A bundle's placeholder is reserved in the same transaction that stores the value, so a refused or interrupted import leaves nothing behind.
+- With `pick` it seals the candidates picked, each given as `{ name, kind }` or, for kind `secret`, as just its name, and answers `{ stage: 'done', imported: [{ name, placeholder, state }], skipped }`. `skipped` lists picked names that were refused or not in the file. Each record is stored in its own transaction, which also reserves a bundle's placeholder, so a record either lands whole or not at all; one that can't be stored (its placeholder was taken meanwhile, the vault was re-keyed) is listed in `skipped`, and the rest still import.
 
 | `kind` | `password` | what becomes a candidate |
 |---|---|---|
-| `bundle` | the export passphrase | each record, with its kind, source, expiry and **placeholder**, so the policy files still match. A placeholder used by another record of the namespace, or by another embedder of this vault, is refused, as is a name whose record here has another placeholder |
-| `keepass` | the master password (KDBX 3 or 4, as kdbxweb reads them; Argon2 through hash-wasm) | each entry with a password, named after its title (upper-cased, other characters as `_`, a leading digit prefixed with `_`), source `import:keepass` |
+| `bundle` | the export passphrase | each record, with its kind, source (`import:bundle` when it isn't a valid source), expiry and **placeholder**, so the policy files still match. A placeholder used by another record of the namespace, or by another embedder of this vault, is refused, as is a name whose record here has another placeholder |
+| `keepass` | the master password (KDBX 3 or 4, as kdbxweb reads them; Argon2 through hash-wasm) | each entry with a password, named after its title (upper-cased, other characters as `_`, a leading digit prefixed with `_`; a name already taken by an earlier entry gets `_2`, `_3`, …), source `import:keepass` |
 | `six` | — | each `NAME=value` line of six's `secrets.env` (`export` and quotes allowed), source `import:six`. `NAME_DOMAINS` becomes `suggestedRules`: a `[[proxy.rules]]` stanza per exact domain, for the human to add with `sudo`, and a note for each wildcard, which isn't carried over |
 
 Values are checked as at `put` (at least 8 bytes, no CR, LF or NUL, no placeholder). An existing name is rotated, keeping its placeholder. A wrong password or passphrase is `EACCES`.
