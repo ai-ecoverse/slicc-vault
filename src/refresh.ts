@@ -55,9 +55,12 @@ export function checkOAuth(value: unknown): OAuth {
   };
 }
 
+export type TokenKind = 'secret' | 'model' | 'mcp';
+const TOKENS = new Set<string>(['secret', 'model', 'mcp']);
+
 export function due(record: VaultRecord, now: number): boolean {
   return (
-    record.kind === 'secret' &&
+    TOKENS.has(record.kind) &&
     !removed(record) &&
     record.refresh !== undefined &&
     record.expiresAt !== undefined &&
@@ -135,31 +138,31 @@ export class Refresher {
   async sweep(ns: string): Promise<void> {
     const now = this.vault.now();
     for (const record of (await records(this.vault.db, ns)).filter((r) => due(r, now))) {
-      await this.refresh(ns, record.name).catch(() => null);
+      await this.refresh(ns, record.name, record.kind as TokenKind).catch(() => null);
     }
   }
 
-  refresh(ns: string, name: string): Promise<Fields> {
-    const key = `${ns}\u0000${name}`;
+  refresh(ns: string, name: string, kind: TokenKind = 'secret'): Promise<Fields> {
+    const key = `${ns}\u0000${kind}\u0000${name}`;
     const known = this.running.get(key);
     if (known !== undefined) return known;
-    const running = this.run(ns, name).finally(() => {
+    const running = this.run(ns, name, kind).finally(() => {
       this.running.delete(key);
     });
     this.running.set(key, running);
     return running;
   }
 
-  async run(ns: string, name: string): Promise<Fields> {
-    const seen = await this.token(ns, name);
+  async run(ns: string, name: string, kind: TokenKind): Promise<Fields> {
+    const seen = await this.token(ns, name, kind);
     return navigator.locks.request(`refresh:${ns}\u0000${seen.refresh}`, () =>
       this.locked(ns, name, seen)
     );
   }
 
-  async token(ns: string, name: string): Promise<VaultRecord> {
+  async token(ns: string, name: string, kind: TokenKind): Promise<VaultRecord> {
     const held = await records(this.vault.db, ns);
-    const record = held.find((r) => r.kind === 'secret' && r.name === name && !removed(r));
+    const record = held.find((r) => r.kind === kind && r.name === name && !removed(r));
     if (!record?.refresh || record.expiresAt === undefined) {
       throw new Refused('ENOENT', `${name} has no refresh source`);
     }
@@ -168,7 +171,7 @@ export class Refresher {
 
   async locked(ns: string, name: string, seen: VaultRecord): Promise<Fields> {
     const held = await records(this.vault.db, ns);
-    const record = held.find((r) => r.kind === 'secret' && r.name === name && !removed(r));
+    const record = held.find((r) => r.kind === seen.kind && r.name === name && !removed(r));
     if (!record) throw new Refused('ENOENT', `${name} has no refresh source`);
     if (record.updatedAt !== seen.updatedAt) {
       return {

@@ -16,6 +16,7 @@ import { all, transact } from './db.ts';
 import { Refused, refusal } from './errors.ts';
 import { forward } from './forward.ts';
 import {
+  binding,
   checkName,
   checkValue,
   dismissBackup,
@@ -131,9 +132,14 @@ function result(vault: Vault, ns: string, record: VaultRecord): SealResult {
   };
 }
 
+const PUTTABLE = new Set<RecordKind>(['secret', 'model', 'mcp']);
+
 async function put(vault: Vault, ns: string, request: Fields): Promise<Fields> {
   const name = checkName(request.name);
   const value = checkValue(request.value);
+  const kind = (request.kind ?? 'secret') as RecordKind;
+  if (!PUTTABLE.has(kind)) throw new Refused('EINVAL', 'put stores a secret, model or mcp record');
+  const bound = binding(kind, request);
   const pending = request.request === undefined ? null : await get(vault.db, ns, request.request);
   if (pending && (pending.kind !== 'value' || pending.name !== name)) {
     throw new Refused('EINVAL', `request ${pending.id} asks for another value`);
@@ -143,13 +149,14 @@ async function put(vault: Vault, ns: string, request: Fields): Promise<Fields> {
   const now = vault.now();
   const { record } = await seal(vault.db, vault.keyring.use(), {
     ns,
-    kind: 'secret',
+    kind,
     name,
     value,
     source: 'settings',
     uid: null,
     tag: null,
     now,
+    ...bound,
     ...(pending ? { answers: { id: pending.id, clock: () => vault.now() } } : {}),
   });
   await vault.changed(ns, ['secrets', 'audit', 'requests']);
@@ -315,6 +322,7 @@ async function sealFromPage(vault: Vault, ns: string, request: Fields): Promise<
     );
   }
   const expiresAt = optionalNumber(request.expiresAt, 'expiresAt');
+  const bound = binding(kind, request);
   const { record } = await seal(vault.db, vault.keyring.use(), {
     ns,
     kind,
@@ -324,6 +332,7 @@ async function sealFromPage(vault: Vault, ns: string, request: Fields): Promise<
     uid: null,
     tag: null,
     now: vault.now(),
+    ...bound,
     ...(expiresAt === undefined ? {} : { expiresAt }),
     ...(refresh === undefined ? {} : { refresh: refresh as string }),
     ...(oauth === undefined ? {} : { oauth }),

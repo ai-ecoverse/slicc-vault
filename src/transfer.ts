@@ -11,6 +11,8 @@ import { Refused } from './errors.ts';
 import { type Dek, decrypt, ITERATIONS } from './keys.ts';
 import {
   aad,
+  type Binding,
+  binding,
   checkValue,
   NAME,
   PLACEHOLDER,
@@ -36,6 +38,8 @@ export interface Item {
   placeholder?: string;
   expiresAt?: number;
   rules?: string;
+  bound?: Binding;
+  invalid?: string;
 }
 
 interface Bundled {
@@ -46,6 +50,9 @@ interface Bundled {
   source: RecordSource;
   createdAt: number;
   expiresAt?: number;
+  provider?: string;
+  server?: string;
+  settings?: Record<string, string>;
 }
 
 function passphrase(value: unknown): string {
@@ -227,7 +234,16 @@ async function items(kind: ImportKind, bytes: Uint8Array, password: unknown): Pr
           : ('import:bundle' as const),
       placeholder: entry.placeholder,
       ...(typeof entry.expiresAt === 'number' ? { expiresAt: entry.expiresAt } : {}),
+      ...bindingOf(entry),
     }));
+}
+
+function bindingOf(entry: Bundled): Pick<Item, 'bound' | 'invalid'> {
+  try {
+    return { bound: binding(entry.kind, entry as unknown as Record<string, unknown>) };
+  } catch (error) {
+    return { invalid: (error as Error).message };
+  }
 }
 
 export function problem(
@@ -236,6 +252,7 @@ export function problem(
   taken: Set<string> = new Set()
 ): string | null {
   if (!NAME.test(item.name) || item.name.length > 128) return 'not a valid name';
+  if (item.invalid) return item.invalid;
   try {
     checkValue(item.value);
   } catch (error) {
@@ -305,6 +322,7 @@ async function store(vault: Vault, ns: string, dek: Dek, item: Item): Promise<Va
       now: vault.now(),
       ...(item.expiresAt === undefined ? {} : { expiresAt: item.expiresAt }),
       ...(item.placeholder === undefined ? {} : { placeholder: item.placeholder }),
+      ...item.bound,
     });
     return record;
   } catch {
@@ -383,6 +401,9 @@ export async function exporter(vault: Vault, ns: string, req: Fields): Promise<F
       source: record.source,
       createdAt: record.createdAt,
       ...(record.expiresAt === undefined ? {} : { expiresAt: record.expiresAt }),
+      ...(record.provider === undefined ? {} : { provider: record.provider }),
+      ...(record.server === undefined ? {} : { server: record.server }),
+      ...(record.settings === undefined ? {} : { settings: record.settings }),
     });
   }
   const bundle = await seal64(items, secret);

@@ -15,12 +15,13 @@ import {
   parseConfig,
   parseExtra,
 } from './policy.ts';
-import { audit, NAME } from './records.ts';
+import { audit, NAME, PROVIDER } from './records.ts';
 import {
   contains,
   endpoint,
   type McpServer,
   NO_ENDPOINTS,
+  type Owned,
   patterns,
   type Registered,
 } from './refusal.ts';
@@ -66,13 +67,17 @@ function servers(value: unknown): McpServer[] {
   return value.map((entry) => {
     const item = typeof entry === 'string' ? { server: entry, url: entry, names: [] } : entry;
     const names = Array.isArray(item?.names) ? item.names : [];
+    const tokenUrl = item?.tokenUrl;
     const valid =
       typeof item?.server === 'string' &&
       typeof item.url === 'string' &&
       endpoint(item.url, true) !== null &&
+      (tokenUrl === undefined ||
+        (typeof tokenUrl === 'string' && endpoint(tokenUrl, false) !== null)) &&
       names.every((name: unknown) => typeof name === 'string' && NAME.test(name));
     if (!valid) throw new Refused('EINVAL', `not an MCP server: ${JSON.stringify(entry)}`);
-    return { server: item.server, url: item.url, names };
+    const token = tokenUrl === undefined ? {} : { tokenUrl: new URL(tokenUrl).href };
+    return { server: item.server, url: item.url, names, ...token };
   });
 }
 
@@ -82,29 +87,49 @@ export function register(
   model: unknown,
   mcp: unknown
 ): Promise<{ registered: Registered; added: number }> {
-  const models = model === undefined ? [] : model;
-  if (
-    !Array.isArray(models) ||
-    !models.every((url) => typeof url === 'string' && endpoint(url, false))
-  ) {
-    throw new Refused('EINVAL', 'model must be a list of https base URLs');
+  const given = model === undefined ? [] : model;
+  const ownedOf = (entry: unknown) =>
+    entry && typeof entry === 'object' ? (entry as Partial<Owned>) : null;
+  const okEntry = (entry: unknown) => {
+    const item = ownedOf(entry);
+    const url = typeof entry === 'string' ? entry : item?.url;
+    const provider = item ? item.provider : 'any';
+    return (
+      typeof url === 'string' &&
+      endpoint(url, false) !== null &&
+      typeof provider === 'string' &&
+      PROVIDER.test(provider)
+    );
+  };
+  if (!Array.isArray(given) || !given.every(okEntry)) {
+    throw new Refused('EINVAL', 'model must be a list of https base URLs or { provider, url }');
   }
+  const models = given.map((entry) => (typeof entry === 'string' ? entry : (entry as Owned).url));
+  const owned = given.filter((entry) => typeof entry !== 'string') as Owned[];
   const mcps = mcp === undefined ? [] : servers(mcp);
   return transact(db, ['meta'], 'readwrite', async (tx) => {
     const meta = tx.objectStore('meta');
     const stored =
       ((await request(meta.get(`endpoints:${ns}`))) as Registered | undefined) ?? NO_ENDPOINTS;
     const modelUrls = [...new Set([...stored.model, ...models])];
+    const ownedBy = new Map(
+      [...(stored.owned ?? []), ...owned].map((o) => [
+        `${o.provider} ${o.url}`,
+        { provider: o.provider, url: o.url },
+      ])
+    );
     const byUrl = new Map(stored.mcp.map((server) => [`${server.server} ${server.url}`, server]));
     for (const server of mcps) {
       const key = `${server.server} ${server.url}`;
       const known = byUrl.get(key);
       byUrl.set(
         key,
-        known ? { ...known, names: [...new Set([...known.names, ...server.names])] } : server
+        known
+          ? { ...known, ...server, names: [...new Set([...known.names, ...server.names])] }
+          : server
       );
     }
-    const registered = { model: modelUrls, mcp: [...byUrl.values()] };
+    const registered = { model: modelUrls, mcp: [...byUrl.values()], owned: [...ownedBy.values()] };
     const added =
       registered.model.length -
       stored.model.length +

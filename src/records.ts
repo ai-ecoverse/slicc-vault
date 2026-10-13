@@ -13,6 +13,7 @@ import { type Dek, encrypt, type Keys, type Sealed } from './keys.ts';
 import type { Policy } from './policy.ts';
 
 export const NAME = /^[A-Za-z_][A-Za-z0-9_]*$/;
+export const PROVIDER = /^[a-z0-9][a-z0-9._-]{0,63}$/;
 export const SOURCE = /^(?:settings|process|jerk:[^@\s]+@\S+|oauth:\S+|import:\S+)$/;
 export const PLACEHOLDER = /^fnox_proxy_[0-9a-f]{24}$/;
 export const RESTORABLE = 30 * 24 * 60 * 60 * 1000;
@@ -32,6 +33,9 @@ export interface VaultRecord {
   expiresAt?: number;
   refresh?: string;
   oauth?: OAuthConfig;
+  provider?: string;
+  server?: string;
+  settings?: Record<string, string>;
   removedAt?: number;
 }
 
@@ -40,6 +44,60 @@ export interface OAuthConfig {
   clientId: string;
   scope?: string;
   resource?: string;
+}
+
+export interface Binding {
+  provider?: string;
+  server?: string;
+  settings?: Record<string, string>;
+}
+
+const SETTINGS = 16;
+
+export function binding(kind: RecordKind, request: Record<string, unknown>): Binding {
+  const { provider, server, settings } = request;
+  if (
+    provider !== undefined &&
+    (kind !== 'model' || typeof provider !== 'string' || !PROVIDER.test(provider))
+  )
+    throw new Refused('EINVAL', 'provider is a pi-ai provider id, for a model record');
+  if (kind === 'model' && provider === undefined)
+    throw new Refused('EINVAL', 'a model record needs its provider');
+  if (
+    server !== undefined &&
+    (kind !== 'mcp' ||
+      typeof server !== 'string' ||
+      !server ||
+      server.length > 128 ||
+      /[\0-\x1f]/.test(server))
+  )
+    throw new Refused('EINVAL', 'server is the MCP server name, for an mcp record');
+  const out: Binding = {};
+  if (provider !== undefined) out.provider = provider as string;
+  if (server !== undefined) out.server = server as string;
+  if (settings === undefined) return out;
+  const entries =
+    settings && typeof settings === 'object' && !Array.isArray(settings)
+      ? Object.entries(settings)
+      : null;
+  const valid =
+    (kind === 'model' || kind === 'mcp') &&
+    entries !== null &&
+    entries.length <= SETTINGS &&
+    entries.every(
+      ([key, value]) =>
+        NAME.test(key) &&
+        typeof value === 'string' &&
+        value.length <= 256 &&
+        !/[\0-\x1f]/.test(value)
+    );
+  if (!valid)
+    throw new Refused(
+      'EINVAL',
+      `settings are at most ${SETTINGS} NAME = text pairs, for a model or mcp record`
+    );
+  out.settings = Object.fromEntries(entries as [string, string][]);
+  return out;
 }
 
 export interface SealInput {
@@ -53,6 +111,9 @@ export interface SealInput {
   expiresAt?: number;
   refresh?: string;
   oauth?: OAuthConfig;
+  provider?: string;
+  server?: string;
+  settings?: Record<string, string>;
   placeholder?: string;
   answers?: Answers;
   now: number;
@@ -121,6 +182,9 @@ export function view(record: VaultRecord, policy: Policy, now: number): SecretVi
     state: state(record, policy, now),
     source: record.source,
     sourceDevice: device(record.source),
+    ...(record.provider === undefined ? {} : { provider: record.provider }),
+    ...(record.server === undefined ? {} : { server: record.server }),
+    ...(record.settings === undefined ? {} : { settings: record.settings }),
     domains: [...new Set(rules.map((rule) => rule.domain))],
     rules,
     ...(exits ? { exits } : {}),
@@ -186,6 +250,17 @@ async function answered(
   await request(store.put({ ...entry, state: 'done', placeholder, ...jerk }));
 }
 
+function bound(existing: VaultRecord | undefined, input: SealInput): Partial<VaultRecord> {
+  const out: Partial<VaultRecord> = {};
+  const provider = input.provider ?? existing?.provider;
+  const server = input.server ?? existing?.server;
+  const settings = input.settings ?? existing?.settings;
+  if (provider !== undefined) out.provider = provider;
+  if (server !== undefined) out.server = server;
+  if (settings !== undefined) out.settings = settings;
+  return out;
+}
+
 async function keyed(tx: IDBTransaction, dek: Dek): Promise<void> {
   const keys = (await request(tx.objectStore('meta').get('keys'))) as Keys | undefined;
   if ((keys?.id ?? '') !== dek.id)
@@ -218,6 +293,7 @@ export async function seal(db: IDBDatabase, dek: Dek, input: SealInput): Promise
       ...(input.expiresAt === undefined ? {} : { expiresAt: input.expiresAt }),
       ...(input.refresh === undefined ? {} : { refresh: input.refresh }),
       ...(input.oauth === undefined ? {} : { oauth: input.oauth }),
+      ...bound(existing, input),
     };
     await request(store.put(record));
     if (input.answers) await answered(tx, input.ns, input.answers, record.placeholder, input.now);

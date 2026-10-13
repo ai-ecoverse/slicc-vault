@@ -1,5 +1,6 @@
 import type { Hit, Scrubber, Stream } from '@ai-ecoverse/slicc-scrub';
 import { Refused } from './errors.ts';
+import { Preparer } from './prepare.ts';
 import { register } from './rules.ts';
 import type { Vault } from './vault.ts';
 
@@ -12,10 +13,12 @@ export class AgentPort {
   readonly vault: Vault;
   readonly ns: string;
   readonly streams = new Map<string, { stream: Stream; version: number }>();
+  readonly preparer: Preparer;
 
   constructor(vault: Vault, ns: string) {
     this.vault = vault;
     this.ns = ns;
+    this.preparer = new Preparer(vault, ns);
   }
 
   async scrubber(): Promise<Scrubber> {
@@ -121,6 +124,16 @@ export class AgentPort {
         return this.drop(fields);
       case 'endpoints':
         return this.endpoints(fields);
+      case 'model':
+        return this.preparer.model(fields);
+      case 'mcp':
+        return this.preparer.mcp(fields);
+      case 'records':
+        return this.preparer.list();
+      case 'grant':
+        return this.preparer.grant(fields);
+      case 'refresh':
+        return this.preparer.refresh(fields);
       default:
         throw new Refused('ENOTSUP', `this vault has no op ${String(fields.op)}`);
     }
