@@ -1,4 +1,4 @@
-import type { Hit, Scrubber } from '@ai-ecoverse/slicc-scrub';
+import { compile, type Hit, type Scrubber } from '@ai-ecoverse/slicc-scrub';
 import { text } from './bytes.ts';
 import { Refused } from './errors.ts';
 import { decrypt } from './keys.ts';
@@ -120,7 +120,13 @@ export class Preparer {
     return fresh;
   }
 
-  async fill(text: string, held: Map<string, VaultRecord>, target: Target, url: boolean) {
+  async fill(
+    text: string,
+    held: Map<string, VaultRecord>,
+    target: Target,
+    url: boolean,
+    seen: { refreshed: boolean }
+  ) {
     let out = text;
     for (const placeholder of new Set(text.match(FOUND) ?? [])) {
       const found = held.get(placeholder);
@@ -136,6 +142,12 @@ export class Preparer {
         throw new Refused('EACCES', `${found.name} is sent only to ${target.who}'s own endpoints`);
       }
       const record = await this.usable(found);
+      if (record !== found) {
+        seen.refreshed = true;
+        if (!target.owns(record)) {
+          throw new Refused('EACCES', `${record.name} changed while it was refreshed; try again`);
+        }
+      }
       held.set(placeholder, record);
       const key = this.vault.keyring.key;
       if (!key) throw new Refused('EACCES', LOCKED);
@@ -156,12 +168,19 @@ export class Preparer {
     }
     const first = await this.scrubber();
     const held = new Map((await records(this.vault.db, this.ns)).map((r) => [r.placeholder, r]));
-    const url = await this.fill(request.url, held, target, true);
+    const seen = { refreshed: false };
+    const url = await this.fill(request.url, held, target, true, seen);
     const headers: [string, string][] = [];
     for (const [name, value] of request.headers) {
-      headers.push([name, await this.fill(value, held, target, false)]);
+      headers.push([name, await this.fill(value, held, target, false, seen)]);
     }
     const scrubber = await this.scrubber();
+    if (!seen.refreshed && scrubber.version !== first.version) {
+      throw new Refused(
+        'EAGAIN',
+        "the vault's values changed meanwhile; prepare the request again"
+      );
+    }
     const all = scrubber.version === first.version ? [scrubber] : [first, scrubber];
     const head = [request.method, request.url, ...request.headers.flat()];
     if (head.some((text) => all.some((s) => s.text(text).hits.length > 0))) {
@@ -317,13 +336,21 @@ export class Preparer {
       { status: 200, headers: [], body: response },
       await this.vault.scrubbers.get(this.ns)
     );
+    checkValue(got.access);
+    if (got.refresh !== null) checkValue(got.refresh);
+    const returned = compile(
+      [got.access, ...(got.refresh === null ? [] : [got.refresh])].map((value, i) => ({
+        name: `T${i}`,
+        placeholder: `fnox_proxy_${'0'.repeat(23)}${i}`,
+        value,
+      })),
+      { version: 0 }
+    );
     const tokensIn = (text: string) =>
-      text.includes(got.access) || (got.refresh !== null && text.includes(got.refresh));
+      returned.text(text).hits.some((hit) => hit.form !== 'fragment');
     if (tokensIn(server) || tokensIn(base) || tokensIn(grantName)) {
       throw new Refused('EINVAL', 'the server or record name holds a value');
     }
-    checkValue(got.access);
-    if (got.refresh !== null) checkValue(got.refresh);
     const now = this.vault.now();
     const source = 'oauth:mcp' as const;
     const dek = this.vault.keyring.use();

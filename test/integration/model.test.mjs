@@ -374,6 +374,13 @@ test('an MCP sign-in is sealed by grant and refreshed in the vault through egres
     response: '{"access_token":"SAME_AS_TOKEN_02"}',
   });
   assert.equal(sameAsToken.error.code, 'EINVAL');
+  const encodedName = await ask('grant', {
+    server: 'docs',
+    name: 'c2VjcmV0YWJjZGVm',
+    oauth,
+    response: '{"access_token":"secretabcdef"}',
+  });
+  assert.equal(encodedName.error.code, 'EINVAL');
   const grantNamed = await ask('grant', {
     server: 'docs',
     name: 'DOCSY',
