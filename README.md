@@ -16,14 +16,14 @@ The build (`npm run build`) writes a flat static tree to `dist/site/`:
 | `button.html`, `button.js` | the lock button. A popup can only open from a click inside a vault document, so bios and spectrum embed this wherever the lock is offered |
 | `popup.html`, `popup.js` | the vault window, a top-level `vault.sliccy.ai` document, used only for the passkey or passphrase lock |
 | `vault.css`, `fonts/` | Spectrum 2 from the CSS-only `@spectrum-css` packages, and Adobe Clean |
-| `config.json` | `{ version, embedders }`. `embedders` is the fallback list, `["https://seven.sliccy.ai"]` |
+| `config.json` | `{ version, embedders }`. `embedders` is `vault.sliccy.ai`'s fallback list, `["https://seven.sliccy.ai"]` |
 
 The bundles hold this repo's code and `@ai-ecoverse/slicc-scrub`. The only third-party code is for KeePass imports: `kdbxweb` (with `@xmldom/xmldom` and `fflate`) and `hash-wasm`'s argon2, exact-pinned and bundled into a separate chunk under `chunks/` that the core frame loads only when a KeePass import starts; its wasm is inlined, never fetched. The sliccy-ai Worker serves the tree from the network on every load, never from OPFS, with:
 - `Content-Security-Policy` with `script-src 'self'`, no inline scripts or styles, and `frame-ancestors` listing the seven origins;
 - `Cross-Origin-Embedder-Policy: require-corp`, `Cross-Origin-Resource-Policy: same-site`, `Cross-Origin-Opener-Policy: same-origin`;
 - `Origin-Agent-Cluster: ?1`, `nosniff`, `Referrer-Policy: no-referrer`, `no-cache` with an ETag.
 
-`GET /embedders.json` is answered by the Worker, not by this tree. It returns `{ "embedders": [...] }`, the same sources as `frame-ancestors`. The vault reads it at start, falls back to `config.json` when it's missing or malformed, and accepts only those origins. An embedder source is `http(s)://host`, optionally with `:port` or `:*`, matched exactly.
+`GET /embedders.json` is answered by the Worker, not by this tree. It returns `{ "embedders": [...] }`, the same sources as `frame-ancestors`. The vault reads it at start and accepts only those origins. When it's missing or malformed, only `vault.sliccy.ai` falls back to `config.json`; on every other host (`vault-preview.sliccy.ai`, branch previews, local) that means no embedders, so it fails closed. An embedder source is `http(s)://host`, optionally with `:port` or `:*`, matched exactly.
 
 `main` is served at `vault.sliccy.ai`, and every other branch at `vault-<label>.sliccy.ai`. seven embeds only `vault.sliccy.ai`.
 

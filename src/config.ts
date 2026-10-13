@@ -7,6 +7,8 @@ export interface Config {
 
 export const FALLBACK: Config = { version: '0.0.0', embedders: ['https://seven.sliccy.ai'] };
 
+export const PRODUCTION = 'vault.sliccy.ai';
+
 const SOURCE = /^https?:\/\/[a-z0-9.-]+(?::(?:\d+|\*))?$/;
 
 function sources(value: unknown): string[] | null {
@@ -24,13 +26,17 @@ async function read(fetcher: typeof fetch, path: string): Promise<Record<string,
   }
 }
 
-export async function load(fetcher: typeof fetch = fetch): Promise<Config> {
+export async function load(
+  fetcher: typeof fetch = fetch,
+  host: string = globalThis.location?.hostname ?? ''
+): Promise<Config> {
   const [own, served] = await Promise.all([
     read(fetcher, '/config.json'),
     read(fetcher, '/embedders.json'),
   ]);
   const version = typeof own?.version === 'string' ? own.version : FALLBACK.version;
-  const embedders = sources(served?.embedders) ?? sources(own?.embedders) ?? FALLBACK.embedders;
+  const fallback = host === PRODUCTION ? (sources(own?.embedders) ?? FALLBACK.embedders) : [];
+  const embedders = sources(served?.embedders) ?? fallback;
   return { version, embedders };
 }
 
