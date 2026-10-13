@@ -487,20 +487,25 @@ export function records(db: IDBDatabase, ns: string): Promise<VaultRecord[]> {
 }
 
 export function withGrantBindings(held: VaultRecord[]): VaultRecord[] {
-  const owners = new Map<string, VaultRecord>();
+  const owners = new Map<string, VaultRecord[]>();
   for (const r of held) {
-    if (r.kind !== 'grant' && r.refresh && !removed(r))
-      owners.set(`${r.source}\u0000${r.refresh}`, r);
+    if (r.kind === 'grant' || !r.refresh || removed(r)) continue;
+    const key = `${r.source}\u0000${r.refresh}`;
+    owners.set(key, [...(owners.get(key) ?? []), r]);
   }
+  const agreed = (list: VaultRecord[], field: 'server' | 'provider') => {
+    const values = new Set(list.map((r) => r[field]));
+    return values.size === 1 ? [...values][0] : undefined;
+  };
   return held.map((r) => {
-    const owner = r.kind === 'grant' ? owners.get(`${r.source}\u0000${r.name}`) : undefined;
-    if (!owner) return r;
+    const list = r.kind === 'grant' ? owners.get(`${r.source}\u0000${r.name}`) : undefined;
+    if (!list) return r;
+    const server = r.server ?? agreed(list, 'server');
+    const provider = r.provider ?? agreed(list, 'provider');
     return {
       ...r,
-      ...(r.server === undefined && owner.server !== undefined ? { server: owner.server } : {}),
-      ...(r.provider === undefined && owner.provider !== undefined
-        ? { provider: owner.provider }
-        : {}),
+      ...(server === undefined ? {} : { server }),
+      ...(provider === undefined ? {} : { provider }),
     };
   });
 }
