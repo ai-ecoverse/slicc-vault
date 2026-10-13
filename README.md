@@ -227,7 +227,7 @@ bios relays each kernel request unchanged as the `sealed` op, with the kernel's 
 - it's unexpired and from this namespace, `stamp.ppid` is the pid that asked, and `path`, `argv` (element by element) and `cwd` are exactly the ones it was issued for;
 - `interpreters` is a list of absolute paths, and fnox's claim matches it: a claimed `interpreter` equals `interpreters[0]`, and no claim means `interpreters` is empty;
 - under each real name's `[exec]` mode, no program in `path` and `interpreters` is refused: for `true` none may be on the refusal list; for `{ argv }` a refused one must itself be the program of one of the grant's prefixes; `{ shell = true }` allows any;
-- no real record has expired meanwhile. Any mismatch is `EACCES: ticket refused: …`, and the ticket stays burned. It answers `{ values: { NAME: value }, placeholders: { NAME: placeholder } }` for the names that were real and still exist, and marks their audit entries `consumed`. The kernel swaps each env var whose value is exactly one of those placeholders, and compiles its own scrubber over these values for the child's output (S2).
+- each real name is still granted by the policy in force now (a removed grant, or an `{ argv }` grant that no longer lists the command, refuses), and no real record has expired meanwhile. Any mismatch is `EACCES: ticket refused: …`, and the ticket stays burned. It answers `{ values: { NAME: value }, placeholders: { NAME: placeholder } }` for the names that were real and still exist, and marks their audit entries `consumed`. The kernel swaps each env var whose value is exactly one of those placeholders, and compiles its own scrubber over these values for the child's output (S2).
 
 ## Forward
 
