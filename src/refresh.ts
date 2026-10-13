@@ -161,10 +161,12 @@ export class Refresher {
     const response = await this.send(ns, tokenRequest(grant.oauth as OAuth, token));
     const got = tokens(response, await this.vault.scrubbers.get(ns));
     const now = this.vault.now();
-    const expiresAt =
-      got.expires === null ? (record.expiresAt as number) : now + got.expires * 1000;
-    const rotations: Rotation[] = [{ record, value: got.access, expiresAt }];
-    if (got.refresh && got.refresh !== token) rotations.push({ record: grant, value: got.refresh });
+    const expiresAt = got.expires === null ? null : now + got.expires * 1000;
+    const replaced = got.refresh && got.refresh !== token ? got.refresh : undefined;
+    const rotations: Rotation[] = [
+      { record, value: got.access, expiresAt },
+      { record: grant, ...(replaced ? { value: replaced } : {}) },
+    ];
     await rotate(
       this.vault.db,
       dek,
@@ -174,7 +176,7 @@ export class Refresher {
       now
     );
     await this.vault.changed(ns, ['secrets', 'audit']);
-    return { state: 'refreshed', expiresAt };
+    return { state: 'refreshed', ...(expiresAt === null ? {} : { expiresAt }) };
   }
 }
 

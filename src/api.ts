@@ -149,8 +149,8 @@ async function put(vault: Vault, ns: string, request: Fields): Promise<Fields> {
     uid: null,
     tag: null,
     now,
+    ...(pending ? { answers: { id: pending.id } } : {}),
   });
-  if (pending) await settle(vault.db, ns, pending.id, now, 'done', record.placeholder);
   await vault.changed(ns, ['secrets', 'audit', 'requests']);
   return { ...result(vault, ns, record) };
 }
@@ -318,9 +318,8 @@ async function sealFromPage(vault: Vault, ns: string, request: Fields): Promise<
     ...(expiresAt === undefined ? {} : { expiresAt }),
     ...(refresh === undefined ? {} : { refresh: refresh as string }),
     ...(oauth === undefined ? {} : { oauth }),
+    ...(pending ? { answers: { id: pending.id, ...(jerk ? { jerk } : {}) } } : {}),
   });
-  if (pending)
-    await settle(vault.db, ns, pending.id, vault.now(), 'done', record.placeholder, jerk);
   await vault.changed(ns, ['secrets', 'audit', 'requests']);
   return { ...result(vault, ns, record) };
 }
@@ -421,7 +420,7 @@ export class Server {
   }
 
   egress(ns: string, req: EgressRequest): Promise<EgressResponse> {
-    const session = [...this.sessions].find((s) => s.ns === ns && s.role === 'page');
+    const session = [...this.sessions].reverse().find((s) => s.ns === ns && s.role === 'page');
     if (!session)
       return Promise.reject(new Refused('ENOTCONN', 'no page is connected to send the refresh'));
     const channel = new MessageChannel();
