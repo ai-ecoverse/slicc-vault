@@ -281,10 +281,10 @@ Values are checked as at `put` (at least 8 bytes, no CR, LF or NUL, no placehold
 The vault burns the ticket, then requires that:
 - it's unexpired and from this namespace, `stamp.ppid` is the pid that asked, and `path`, `argv` (element by element) and `cwd` are exactly the ones it was issued for;
 - `resolved` is an absolute path (missing or malformed refuses), `interpreters` a list of absolute paths and `trusted` a boolean; a claimed `interpreter` from fnox equals `interpreters[0]` (without a claim, the kernel's chain is taken as it is);
-- each real name is still granted by the policy as stored now (reloaded at materialize and at consume): a removed grant, or an `{ argv }` grant that doesn't list the command with `resolved` as its program, refuses (so list a program's real path: a symlink to it matches, a rule naming the symlink doesn't);
+- each real name is still granted by the policy as stored now (reloaded at materialize and at consume): a removed grant, or an `{ argv }` grant that no longer lists the command, refuses;
 - under that name's mode, the chain passes:
   - `true`: no entry of `path`, `resolved` and `interpreters` is on the refusal list, so neither a `#!/usr/bin/env node` script nor a symlink `/tmp/l → /bin/bash` passes, and `trusted` is true ("the program or its interpreter can be changed by a non-root user" otherwise), so a renamed copy of a shell, which its non-root maker owns, doesn't pass either;
-  - `{ argv }`: the listed program is `resolved`, and whatever chain the kernel resolved for it is allowed, so a rule for `npm publish` allows `/usr/bin/npm`'s `node`. But when `resolved` or the chain is a refused program and `trusted` is false, it refuses ("the program or its interpreter can be changed by a non-root user"), and `env` and the other wrappers in the chain always refuse;
+  - `{ argv }`: the listed program is `path`, and when `path` is a link to a refused program the rule must also list that `resolved` program by its real path ("list it in [exec] by its real path"), so a listed `/tmp/l` that is repointed to `/bin/bash` refuses. Whatever chain the kernel resolved for it is allowed, so a rule for `npm publish` allows `/usr/bin/npm`'s `node`. But when `resolved` or the chain is a refused program and `trusted` is false, it refuses ("the program or its interpreter can be changed by a non-root user"), and `env` and the other wrappers in the chain always refuse;
   - `{ shell = true }`: any program and chain, the explicit exception;
 - no real record has expired meanwhile.
 
