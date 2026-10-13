@@ -242,15 +242,16 @@ export function problem(
     return (error as Error).message;
   }
   if (item.placeholder === undefined) return null;
-  if (!PLACEHOLDER.test(item.placeholder)) return 'its placeholder is malformed';
+  if (!PLACEHOLDER.test(item.placeholder))
+    return "the file is damaged: this secret's placeholder isn't valid";
   if (taken.has(item.placeholder))
-    return 'its placeholder is in use by another embedder of this vault';
+    return 'another app that uses this vault already has this secret; use it there, or add it here by hand';
   const same = held.find((r) => r.placeholder === item.placeholder);
   if (same && (same.name !== item.name || same.kind !== item.kind))
-    return 'its placeholder belongs to another record here';
+    return 'this app already has this secret under another name';
   const named = held.find((r) => r.name === item.name && r.kind === item.kind);
   if (named && named.placeholder !== item.placeholder)
-    return 'a record of that name has another placeholder here';
+    return 'this app already has a different secret with this name';
   return null;
 }
 

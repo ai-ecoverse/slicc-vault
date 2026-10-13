@@ -2,7 +2,8 @@ const params = new URLSearchParams(location.search);
 const vault = params.get('vault');
 const seen = [];
 const events = [];
-const egress = { requests: [], answer: null };
+const egress = { requests: [], answer: null, delay: 0 };
+const twins = [];
 const buttonEvents = [];
 let port = null;
 let next = 1;
@@ -32,6 +33,33 @@ function frame(path, hidden) {
   );
 }
 
+function egressed(event) {
+  egress.requests.push(event.data.request);
+  const answer = egress.answer ?? { error: 'no answer configured' };
+  setTimeout(() => event.ports[0].postMessage(answer), egress.delay);
+}
+
+async function twin() {
+  const iframe = await frame('/', true);
+  const channel = new MessageChannel();
+  const other = channel.port1;
+  const welcome = new Promise((resolve) => {
+    other.onmessage = (event) => {
+      const data = event.data;
+      if (data.op === 'welcome' || data.op === 'refused') return resolve(data);
+      if (data.event === 'egress') return egressed(event);
+      if (data.event) return;
+      waiting.get(data.id)?.(data);
+      waiting.delete(data.id);
+    };
+  });
+  twins.push(other);
+  iframe.contentWindow.postMessage({ type: 'slicc-vault', v: 1, op: 'hello', sudoGid: 27 }, vault, [
+    channel.port2,
+  ]);
+  return welcome;
+}
+
 async function connect(path = '/') {
   const iframe = await frame(path, true);
   const channel = new MessageChannel();
@@ -41,10 +69,7 @@ async function connect(path = '/') {
       record('port', event.data);
       const data = event.data;
       if (data.op === 'welcome' || data.op === 'refused') return resolve(data);
-      if (data.event === 'egress') {
-        egress.requests.push(data.request);
-        event.ports[0].postMessage(egress.answer ?? { error: 'no answer configured' });
-      }
+      if (data.event === 'egress') egressed(event);
       if (data.event) return events.push(data);
       waiting.get(data.id)?.(data);
       waiting.delete(data.id);
@@ -155,6 +180,8 @@ function policy(files) {
 
 window.harness = {
   egress,
+  twin,
+  twins,
   policy,
   forward,
   agent,
