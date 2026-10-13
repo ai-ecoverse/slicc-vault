@@ -233,36 +233,42 @@ export class Preparer {
   }
 
   async list(): Promise<Fields> {
-    const scrubber = await this.scrubber();
+    for (let tries = 0; tries < 3; tries++) {
+      const scrubber = await this.scrubber();
+      const held = await records(this.vault.db, this.ns);
+      if ((await this.scrubber()).version === scrubber.version) return this.shown(scrubber, held);
+    }
+    throw new Refused('EAGAIN', "the vault's values keep changing; try again");
+  }
+
+  shown(scrubber: Scrubber, held: VaultRecord[]): Fields {
     const clean = (settings: Record<string, string>) =>
       Object.fromEntries(
         Object.entries(settings)
           .filter(([key]) => scrubber.text(key).hits.length === 0)
           .map(([key, value]) => [key, scrubber.text(value).text])
       );
-    return records(this.vault.db, this.ns).then((held) => {
-      const now = this.vault.now();
-      const plain = (r: VaultRecord) =>
-        [r.name, r.provider ?? '', r.server ?? ''].every((t) => scrubber.text(t).hits.length === 0);
-      const shown = held.filter(
-        (r) => (r.kind === 'model' || r.kind === 'mcp') && !removed(r) && plain(r)
-      );
-      return {
-        records: shown.map((r) => {
-          const expired = r.expiresAt !== undefined && r.expiresAt <= now;
-          return {
-            kind: r.kind,
-            name: r.name,
-            placeholder: r.placeholder,
-            state: expired ? (r.refresh ? 'refreshing' : 'expired') : 'ready',
-            ...(r.provider === undefined ? {} : { provider: r.provider }),
-            ...(r.server === undefined ? {} : { server: r.server }),
-            ...(r.expiresAt === undefined ? {} : { expiresAt: r.expiresAt }),
-            ...(r.settings === undefined ? {} : { settings: clean(r.settings) }),
-          };
-        }),
-      };
-    });
+    const now = this.vault.now();
+    const plain = (r: VaultRecord) =>
+      [r.name, r.provider ?? '', r.server ?? ''].every((t) => scrubber.text(t).hits.length === 0);
+    const shown = held.filter(
+      (r) => (r.kind === 'model' || r.kind === 'mcp') && !removed(r) && plain(r)
+    );
+    return {
+      records: shown.map((r) => {
+        const expired = r.expiresAt !== undefined && r.expiresAt <= now;
+        return {
+          kind: r.kind,
+          name: r.name,
+          placeholder: r.placeholder,
+          state: expired ? (r.refresh ? 'refreshing' : 'expired') : 'ready',
+          ...(r.provider === undefined ? {} : { provider: r.provider }),
+          ...(r.server === undefined ? {} : { server: r.server }),
+          ...(r.expiresAt === undefined ? {} : { expiresAt: r.expiresAt }),
+          ...(r.settings === undefined ? {} : { settings: clean(r.settings) }),
+        };
+      }),
+    };
   }
 
   async grant(fields: Fields): Promise<Fields> {
