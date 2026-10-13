@@ -150,7 +150,7 @@ async function put(vault: Vault, ns: string, request: Fields): Promise<Fields> {
     uid: null,
     tag: null,
     now,
-    ...(pending ? { answers: { id: pending.id } } : {}),
+    ...(pending ? { answers: { id: pending.id, clock: () => vault.now() } } : {}),
   });
   await vault.changed(ns, ['secrets', 'audit', 'requests']);
   return { ...result(vault, ns, record) };
@@ -325,7 +325,9 @@ async function sealFromPage(vault: Vault, ns: string, request: Fields): Promise<
     ...(expiresAt === undefined ? {} : { expiresAt }),
     ...(refresh === undefined ? {} : { refresh: refresh as string }),
     ...(oauth === undefined ? {} : { oauth }),
-    ...(pending ? { answers: { id: pending.id, ...(jerk ? { jerk } : {}) } } : {}),
+    ...(pending
+      ? { answers: { id: pending.id, clock: () => vault.now(), ...(jerk ? { jerk } : {}) } }
+      : {}),
   });
   await vault.changed(ns, ['secrets', 'audit', 'requests']);
   return { ...result(vault, ns, record) };
