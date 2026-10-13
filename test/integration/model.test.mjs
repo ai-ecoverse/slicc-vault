@@ -646,3 +646,38 @@ test("a grant shows its live tokens' agreed binding, and none when they disagree
   );
   assert.notEqual(grant.state, 'removed');
 });
+
+test('a shared grant comes back only with the token whose removal took it', async (t) => {
+  const { page } = await ready(t);
+  const call = (op, fields) => page.evaluate((o, f) => window.harness.call(o, f), op, fields);
+  await call('seal', {
+    name: 'SHARED_GRANT',
+    value: 'fake-shared-refresh-0170',
+    kind: 'grant',
+    source: 'oauth:mcp',
+    oauth: { tokenUrl: 'https://auth.example.com/token', clientId: 'fake-client' },
+  });
+  for (const [name, server] of [
+    ['FIRST_ACCESS', 'one'],
+    ['SECOND_ACCESS', 'two'],
+  ]) {
+    await call('seal', {
+      name,
+      value: `fake-${server}-access-0171`,
+      kind: 'mcp',
+      server,
+      source: 'oauth:mcp',
+      refresh: 'SHARED_GRANT',
+    });
+  }
+  const grant = async () =>
+    (await call('list', {})).list.secrets.find((s) => s.name === 'SHARED_GRANT').state;
+  await call('remove', { name: 'FIRST_ACCESS', kind: 'mcp' });
+  assert.notEqual(await grant(), 'removed');
+  await call('remove', { name: 'SECOND_ACCESS', kind: 'mcp' });
+  assert.equal(await grant(), 'removed');
+  await call('restore', { name: 'FIRST_ACCESS', kind: 'mcp' });
+  assert.equal(await grant(), 'removed');
+  await call('restore', { name: 'SECOND_ACCESS', kind: 'mcp' });
+  assert.notEqual(await grant(), 'removed');
+});
