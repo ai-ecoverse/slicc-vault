@@ -59,7 +59,7 @@ function locate(root, pathname) {
 }
 
 export async function serveVault({ port = 0, embedders = EMBEDDERS, frameAncestors = true } = {}) {
-  const state = { embedders, frameAncestors, requests: [] };
+  const state = { embedders, frameAncestors, servesEmbedders: true, config: null, requests: [] };
   const server = createServer(async (request, response) => {
     const url = new URL(request.url, 'http://localhost');
     const host = (request.headers.host ?? '').split(':')[0];
@@ -68,6 +68,13 @@ export async function serveVault({ port = 0, embedders = EMBEDDERS, frameAncesto
     const headers = vault
       ? vaultHeaders(state.frameAncestors ? state.embedders : ['*'])
       : pageHeaders;
+    if (vault && url.pathname === '/config.json' && state.config) {
+      const body = JSON.stringify(state.config);
+      return response.writeHead(200, { ...headers, 'content-type': types['.json'] }).end(body);
+    }
+    if (vault && url.pathname === '/embedders.json' && !state.servesEmbedders) {
+      return response.writeHead(404, headers).end();
+    }
     if (vault && url.pathname === '/embedders.json') {
       const body = JSON.stringify({ embedders: state.embedders });
       return response.writeHead(200, { ...headers, 'content-type': types['.json'] }).end(body);

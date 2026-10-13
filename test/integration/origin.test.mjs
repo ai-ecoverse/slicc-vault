@@ -23,6 +23,17 @@ test('the vault itself refuses an origin it does not serve, even when framed', a
   assert.deepEqual(await page.evaluate(() => window.harness.buttonEvents), []);
 });
 
+test('off vault.sliccy.ai, a missing embedders.json means no embedders, whatever config.json says', async (t) => {
+  served.state.servesEmbedders = false;
+  served.state.config = { version: '9.9.9', embedders: served.state.embedders };
+  t.after(() => {
+    served.state.servesEmbedders = true;
+    served.state.config = null;
+  });
+  const page = await embedder(t);
+  assert.equal(await page.evaluate(() => window.harness.connect()), null);
+});
+
 test('only the embedding window may say hello, and only in protocol 1', async (t) => {
   const page = await embedder(t);
   const answers = await page.evaluate(async () => {
