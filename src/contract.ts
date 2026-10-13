@@ -284,8 +284,10 @@ export type ImportKind = 'bundle' | 'keepass' | 'six';
 
 export interface ImportCandidate {
   name: string;
+  kind: RecordKind;
   exists: boolean;
   suggestedRules?: string;
+  refused?: string;
 }
 
 export type ImportResult =
@@ -382,7 +384,7 @@ export type OpReply =
   | ({ op: 'put' | 'seal' | 'remove' | 'restore' } & SealResult)
   | { op: 'cancel'; state: RequestState }
   | ({ op: 'import' } & ImportResult)
-  | { op: 'export'; bundle: Uint8Array }
+  | { op: 'export'; bundle: Uint8Array; count: number }
   | { op: 'lock' }
   | { op: 'dismissBackupReminder'; backupReminder: BackupReminder }
   | ({ op: 'policy' } & PolicyResult)

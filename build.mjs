@@ -16,8 +16,21 @@ await build({
   },
   outdir: out.pathname,
   bundle: true,
+  splitting: true,
+  chunkNames: 'chunks/[name]-[hash]',
   format: 'esm',
   platform: 'browser',
+  plugins: [
+    {
+      name: 'no-node-crypto',
+      setup(build) {
+        build.onResolve({ filter: /^crypto$/ }, () => ({ path: 'crypto', namespace: 'empty' }));
+        build.onLoad({ filter: /.*/, namespace: 'empty' }, () => ({
+          contents: 'module.exports = {};',
+        }));
+      },
+    },
+  ],
   target: 'es2024',
   minify: true,
   sourcemap: 'linked',

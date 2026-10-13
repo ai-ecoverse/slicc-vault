@@ -31,6 +31,7 @@ import {
 import { current, get, settle } from './requests.ts';
 import { apply } from './rules.ts';
 import { sealed } from './sealed.ts';
+import { exporter, importer } from './transfer.ts';
 import type { Vault } from './vault.ts';
 
 export const AUDIT_PAGE = 100;
@@ -227,6 +228,10 @@ export async function answer(
       return mark(vault, ns, request, request.op === 'remove');
     case 'cancel':
       return cancel(vault, ns, request);
+    case 'import':
+      return importer(vault, ns, request);
+    case 'export':
+      return exporter(vault, ns, request);
     case 'lock':
       vault.keyring.lock();
       return {};

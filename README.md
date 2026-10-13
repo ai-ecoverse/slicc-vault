@@ -2,8 +2,8 @@
 
 The separate-origin vault at `vault.sliccy.ai`. It holds the sealed secrets, OAuth tokens, and model and MCP credentials of SLICC seven, so that no value ever reaches the model provider. The design is `secrets-tokens-design.md` (revision 4) in slicc-agent-plan. This README is the spec of what is built.
 
-- **Built:** the key store, records, origin namespacing, auto-unlock with an optional passkey or passphrase lock, the embedding API with its `page` and `agent` roles, the page's `put`, `seal`, `remove`, `restore`, `cancel` and `lock`, the scrub state, the lock button and its popup, the attested policy (rules, `[exec]`, `[exits]`, `[limits]`), the injector and `forward` with the response scrub (S1), the agent's `redact`, `redactStream` and `endpoints` (S3), the model and MCP refusal, exec tickets (`materialize` and `materializeConsume`), and the vault side of the `/dev/sealed` ops `seal`, `placeholder`, `list`, `test`, `request`, `status`, `cancel` and `materialize`.
-- **Not built yet:** `import` and `export`, and the agent's `model`, `mcp`, `records`, `grant` and `refresh`. They answer as described below.
+- **Built:** the key store, records, origin namespacing, auto-unlock with an optional passkey or passphrase lock, the embedding API with its `page` and `agent` roles, the page's `put`, `seal`, `remove`, `restore`, `cancel` and `lock`, the scrub state, the lock button and its popup, the attested policy (rules, `[exec]`, `[exits]`, `[limits]`), the injector and `forward` with the response scrub (S1), the agent's `redact`, `redactStream` and `endpoints` (S3), the model and MCP refusal, exec tickets (`materialize` and `materializeConsume`), `import` (backups, KeePass, six's `secrets.env`) and `export`, and the vault side of the `/dev/sealed` ops `seal`, `placeholder`, `list`, `test`, `request`, `status`, `cancel` and `materialize`.
+- **Not built yet:** the agent's `model`, `mcp`, `records`, `grant` and `refresh`. They answer as described below.
 - **The vault has no network stack.** It never fetches anything but its own `config.json` and `embedders.json`: bios sends every request the vault prepares.
 
 ## Documents and hosting
@@ -18,7 +18,7 @@ The build (`npm run build`) writes a flat static tree to `dist/site/`:
 | `vault.css`, `fonts/` | Spectrum 2 from the CSS-only `@spectrum-css` packages, and Adobe Clean |
 | `config.json` | `{ version, embedders }`. `embedders` is the fallback list, `["https://seven.sliccy.ai"]` |
 
-There is no third-party JavaScript: the bundles hold only this repo's code. The sliccy-ai Worker serves the tree from the network on every load, never from OPFS, with:
+The bundles hold this repo's code and `@ai-ecoverse/slicc-scrub`. The only third-party code is for KeePass imports: `kdbxweb` (with `@xmldom/xmldom` and `fflate`) and `hash-wasm`'s argon2, exact-pinned and bundled into a separate chunk under `chunks/` that the core frame loads only when a KeePass import starts; its wasm is inlined, never fetched. The sliccy-ai Worker serves the tree from the network on every load, never from OPFS, with:
 - `Content-Security-Policy` with `script-src 'self'`, no inline scripts or styles, and `frame-ancestors` listing the seven origins;
 - `Cross-Origin-Embedder-Policy: require-corp`, `Cross-Origin-Resource-Policy: same-site`, `Cross-Origin-Opener-Policy: same-origin`;
 - `Origin-Agent-Cluster: ?1`, `nosniff`, `Referrer-Policy: no-referrer`, `no-cache` with an ETag.
@@ -71,7 +71,7 @@ Everything lives in the vault origin's IndexedDB, database `slicc-vault`, versio
 
 ## Backup reminder
 
-`status.exportedAt` is the time of the namespace's last successful `export`, or `null` if it never exported. `status.backupReminder` is `due` once the namespace holds a `secret` record and has never exported, `dismissed` after `dismissBackupReminder`, and `null` otherwise (no secrets yet, or exported). `export` arrives with VAULT-1e; until then `exportedAt` stays `null`.
+`status.exportedAt` is the time of the namespace's last successful `export`, or `null` if it never exported. `status.backupReminder` is `due` once the namespace holds a `secret` record and has never exported, `dismissed` after `dismissBackupReminder`, and `null` otherwise (no secrets yet, or exported).
 
 ## Policy
 
@@ -178,7 +178,9 @@ iframe.contentWindow.postMessage({ type: 'slicc-vault', v: 1, op: 'hello', role:
 | `policy` | `files` | the attested policy files, below (Policy) |
 | `forward` | `head`, `body?`, `owner`, `exit`, `rawTraits`, with a `MessagePort` transferred alongside | the injected head, below (Forward) |
 | `materializeConsume` | `ticket`, `stamp`, `path`, `argv`, `cwd`, `interpreters`, `trusted` | the values for the child's environment, below (Exec) |
-| `import`, `export`, anything else | | `ENOTSUP` |
+| `import` | `kind`, `bytes`, `password?`, `pick?` | below (Import and export) |
+| `export` | `passphrase` | `{ bundle, count }`, below |
+| anything else | | `ENOTSUP` |
 
 `put` and `seal` need the vault unlocked. They answer `EACCES` with a message starting `vault is locked` otherwise.
 
@@ -208,6 +210,33 @@ bios relays each kernel request unchanged as the `sealed` op, with the kernel's 
 
 - **Requests** expire 300 s after they're made. Each uid has at most one pending request per namespace; a second one is `EAGAIN`. `status` and `cancel` see only the caller's own requests (uid 0 sees all), and others get `ENOENT`.
 - A value request shows up in `status.waiting` and is answered by the page's `put` with its `request` id, or ended by `cancel`. `oauth` and `jerk-seal` requests can only be cancelled in this version.
+
+## Import and export
+
+Spectrum's Settings › Secrets reads the file and the password, and bios hands them over. Both need the vault unlocked.
+
+**`export { passphrase }`** returns `{ bundle: Uint8Array, count }`, a backup of the namespace's records of kind `secret`, `model` and `mcp` that aren't removed. Grants aren't included, because they need a fresh sign-in. The passphrase needs at least 12 characters. The bundle is UTF-8 JSON:
+
+```json
+{ "format": "slicc-vault-bundle", "v": 1,
+  "kdf": { "name": "PBKDF2", "hash": "SHA-256", "iterations": 600000, "salt": "<base64url>" },
+  "cipher": { "name": "AES-GCM", "iv": "<base64url>" },
+  "data": "<base64url>" }
+```
+
+`data` is AES-GCM 256 (additional data `slicc-vault-bundle`) over `{ "records": [{ name, kind, value, placeholder, source, createdAt, expiresAt? }] }`. A successful export sets `status.exportedAt`.
+
+**`import { kind, bytes, password?, pick? }`** runs in two steps:
+- Without `pick` it answers `{ stage: 'pick', candidates: [{ name, kind, exists, suggestedRules?, refused? }] }`, for the human to choose from. `refused` says why a candidate can't be imported.
+- With `pick` (a list of names) it seals those and answers `{ stage: 'done', imported: [{ name, placeholder, state }], skipped }`. `skipped` lists picked names that were refused or not in the file.
+
+| `kind` | `password` | what becomes a candidate |
+|---|---|---|
+| `bundle` | the export passphrase | each record, with its kind, source, expiry and **placeholder**, so the policy files still match. A placeholder used by another record of the namespace, or by another embedder of this vault, is refused, as is a name whose record here has another placeholder |
+| `keepass` | the master password (KDBX 3 or 4, as kdbxweb reads them; Argon2 through hash-wasm) | each entry with a password, named after its title (upper-cased, other characters as `_`, a leading digit prefixed with `_`), source `import:keepass` |
+| `six` | — | each `NAME=value` line of six's `secrets.env` (`export` and quotes allowed), source `import:six`. `NAME_DOMAINS` becomes `suggestedRules`: a `[[proxy.rules]]` stanza per exact domain, for the human to add with `sudo`, and a note for each wildcard, which isn't carried over |
+
+Values are checked as at `put` (at least 8 bytes, no CR, LF or NUL, no placeholder). An existing name is rotated, keeping its placeholder. A wrong password or passphrase is `EACCES`.
 
 ## Exec
 
