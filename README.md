@@ -2,7 +2,7 @@
 
 The separate-origin vault at `vault.sliccy.ai`. It holds the sealed secrets, OAuth tokens, and model and MCP credentials of SLICC seven, so that no value ever reaches the model provider. The design is `secrets-tokens-design.md` (revision 4) in slicc-agent-plan. This README is the spec of what is built.
 
-- **Built:** the key store, records, origin namespacing, auto-unlock with an optional passkey or passphrase lock, the embedding API with its `page` and `agent` roles, the page's `put`, `seal`, `remove`, `restore`, `cancel` and `lock`, the scrub state, the lock button and its popup, the attested policy (rules, `[exec]`, `[exits]`, `[limits]`), the injector and `forward` with the response scrub (S1), the agent's `redact`, `redactStream` and `endpoints` (S3), the model and MCP refusal, exec tickets (`materialize` and `materializeConsume`), `import` (backups, KeePass, six's `secrets.env`) and `export`, and the vault side of the `/dev/sealed` ops `seal`, `placeholder`, `list`, `test`, `request`, `status`, `cancel` and `materialize`.
+- **Built:** the key store, records, origin namespacing, auto-unlock with an optional passkey or passphrase lock, the embedding API with its `page` and `agent` roles, the page's `put`, `seal`, `remove`, `restore`, `cancel` and `lock`, the scrub state, the lock button and its popup, the attested policy (rules, `[exec]`, `[exits]`, `[limits]`), the injector and `forward` with the response scrub (S1), the agent's `redact`, `redactStream` and `endpoints` (S3), the model and MCP refusal, exec tickets (`materialize` and `materializeConsume`), `import` (backups, KeePass, six's `secrets.env`) and `export`, sign-in tokens with their grants and refresh through `egress`, and the vault side of the `/dev/sealed` ops `seal`, `placeholder`, `list`, `test`, `request`, `status`, `cancel` and `materialize`.
 - **Not built yet:** the agent's `model`, `mcp`, `records`, `grant` and `refresh`. They answer as described below.
 - **The vault has no network stack.** It never fetches anything but its own `config.json` and `embedders.json`: bios sends every request the vault prepares.
 
@@ -160,7 +160,7 @@ iframe.contentWindow.postMessage({ type: 'slicc-vault', v: 1, op: 'hello', role:
 - On `port2` it answers `{ v: 1, op: 'welcome', role, status }`, or `{ v: 1, op: 'refused', error }` for another protocol version or an unknown role.
 - Everything after that goes over the port. The namespace and the role are fixed by the hello. Requests are `{ v: 1, id, op, ...fields }`; replies are `{ v: 1, id, op, ...fields }` or `{ v: 1, id, error: { code, message } }`. Each port is answered in order (FIFO).
 - **Roles:** `page` (the default) is bios and spectrum. bios may hand spectrum a page port of its own, or relay; the messages are the same. `agent` is the port bios hands the agent worker: it may use only `redact`, `redactStream`, `push`, `idle`, `end`, `drop`, `endpoints`, `model`, `mcp`, `records`, `grant` and `refresh` (the last five `ENOTSUP` in this version), and anything else is `EACCES`. The agent port gets no events. Its ops are below (The agent's ops).
-- **Values:** only `forward` (inside the head it returns, where an accepted rule allows it) and `materializeConsume` (for an `[exec]` grant) put a value into the page. No other op, event or reply carries one, and nothing on the agent port ever does.
+- **Values:** only `forward` (inside the head it returns, where an accepted rule allows it), `materializeConsume` (for an `[exec]` grant) and `egress` (a refresh request) put a value into the page. No other op, event or reply carries one, and nothing on the agent port ever does.
 
 | op (page role) | fields | reply |
 |---|---|---|
@@ -170,7 +170,9 @@ iframe.contentWindow.postMessage({ type: 'slicc-vault', v: 1, op: 'hello', role:
 | `list` | — | `{ list: { secrets, refused, audit, auditMore, exits } }` for Settings › Secrets |
 | `audit` | `before?` (a `seq`), `limit?` (1–1000, default 100) | `{ audit, more, next? }`, newest first; pass `next` as `before` for the next page |
 | `put` | `name`, `value`, `request?` | `{ name, placeholder, state }`. A value typed in Settings, with source `settings`; on an existing name it's a rotation that keeps the placeholder. With `request`, it answers that value request, which must still be pending and ask for `name` (else `EINVAL`, and nothing is stored), so its `/dev/sealed` `status` becomes `done` |
-| `seal` | `name`, `value`, `source`, `kind?` (default `secret`), `expiresAt?`, `refresh?` | `{ name, placeholder, state }`. bios's, for J1 leases and sign-in tokens |
+| `seal` | `name`, `value`, `source`, `kind?` (default `secret`), `expiresAt?`, `refresh?`, `oauth?`, `request?`, `jerk?` | `{ name, placeholder, state }`. bios's, for J1 leases and sign-in tokens, below (Tokens and refresh) |
+| `answer` | `request`, `state` (`progress` or `done`), `progress?` (≤ 200), `exit?`, `user?`, `scopes?`, `message?` (≤ 500), `rows?`, `placeholder?` | `{ state }`. The answer to a `jerk` or `unseal` request (or a sign-in that failed); fields merge into the request, and `status` returns them. `rows` (for `jop: "list"`) are `{ provider, name?, env, device?, signedIn?, user?, scopes? }`, with any other field dropped, so no token can pass. For a `jop: "status"` answered `done` with `exit` 0, the vault adds the placeholder of the provider's own `oauth:<provider>` or `jerk:<provider>@…` record; a `placeholder` given by bios must be one of the namespace's records |
+| `refresh` | `name` | `{ state: 'refreshed', expiresAt }` or `{ state: 'requested' }`, below |
 | `remove`, `restore` | `name`, `kind?` (default `secret`) | `{ name, placeholder, state }`. A record removed more than 30 days ago can't be restored (`ENOENT`) |
 | `cancel` | `request` | `{ state }`; the request's `/dev/sealed` `status` becomes `cancelled` |
 | `lock` | — | `{}`; drops the key everywhere when the lock is on |
@@ -187,7 +189,9 @@ iframe.contentWindow.postMessage({ type: 'slicc-vault', v: 1, op: 'hello', role:
 **Events** on page ports:
 - `{ v: 1, event: 'status', status }` whenever requests, records, the scrub state or the lock change;
 - `{ v: 1, event: 'placeholders', placeholders, scrub }` whenever either changes;
-- `{ v: 1, event: 'changed', parts }`, with `parts` among `secrets`, `audit` and `exits`, so a view knows what to reload.
+- `{ v: 1, event: 'changed', parts }`, with `parts` among `secrets`, `audit` and `exits`, so a view knows what to reload;
+- `{ v: 1, event: 'refresh', name, source, expiresAt }`, when a J1 lease is due (below);
+- `{ v: 1, event: 'egress', request }`, with a `MessagePort`, when the vault needs bios to send a request it built (below).
 
 **Errors** use errno names: `EINVAL`, `ENOENT`, `EACCES`, `EEXIST`, `EAGAIN`, `ETIMEDOUT`, `ENOTCONN`, and `ENOTSUP` for ops this version doesn't have.
 
@@ -204,12 +208,28 @@ bios relays each kernel request unchanged as the `sealed` op, with the kernel's 
 | `request` | `kind: "value"`, `name`, `prompt?` (≤ 200 characters) | `{ state: "pending", id }` |
 | `request` | `kind: "oauth"`, `provider`, `oauth` (an object) | the same |
 | `request` | `kind: "jerk-seal"`, `provider` | the same |
-| `status` | `id` | `{ state }`, with `placeholder` and `record` once a value request is `done` |
+| `request` | `kind: "jerk"`, `jop` (`list`, `status`, `create`), `provider?` (needed but for `list`), `scope?`, `params?` (an object) | the same, or `{ state: 'done', id, exit: 2, message }` for a J2 refusal |
+| `request` | `kind: "unseal"`, `provider` | the same, or the J2 refusal |
+| `status` | `id` | `{ state }`, with `placeholder` and `record` once the request is `done`, `jerk` for a sign-in or lease that reported it, and the latest `answer` fields (`progress`, `exit`, `user`, `scopes`, `message`, `rows`, `placeholder`) |
 | `cancel` | `id` | `{ state }`: `cancelled`, or the state it had already reached |
 | `materialize` | `names` (or `shellGrants: true`), `path`, `argv`, `cwd`, `interpreter?` | `{ ticket, expiresAt, real: { NAME: true \| false } }`, below (Exec) |
 
-- **Requests** expire 300 s after they're made. Each uid has at most one pending request per namespace; a second one is `EAGAIN`. `status` and `cancel` see only the caller's own requests (uid 0 sees all), and others get `ENOENT`.
-- A value request shows up in `status.waiting` and is answered by the page's `put` with its `request` id, or ended by `cancel`. `oauth` and `jerk-seal` requests can only be cancelled in this version.
+- **Requests** expire 300 s after they're made. Each uid has at most one pending request per namespace that waits for a human (`value`, `oauth`, `jerk-seal`, and `jerk` with `jop: "create"`); a second one is `EAGAIN`. `status` and `cancel` see only the caller's own requests (uid 0 sees all), and others get `ENOENT`. Only requests that wait for a human show in `status.waiting`.
+- A value request is answered by the page's `put` with its `request` id. A sign-in or lease (`oauth`, `jerk-seal`) is answered by `seal` with `request` (Tokens and refresh). Every other kind is answered by the page's `answer`. `cancel` ends any of them and pushes `{ v: 1, event: 'cancelled', request, kind }` to the page, which passes it on to J1 where it can.
+- **J-8's jerk requests** (§3.7.1): the vault only keeps their state; bios learns of them from the relay and answers. `jop: "create"` and `unseal` are for root and cones only (J2): the stamp must have uid 0, or a tag whose `agentId` starts with `cone:`. Anyone else gets `done` with `exit: 2` at once, before bios sees anything.
+
+## Tokens and refresh
+
+The vault has no network stack, so sign-ins run in seven's page (route (b), §3.11) and the vault keeps only the results.
+- **A sign-in's tokens:** bios runs the sign-in, does the code exchange, and hands the results to `seal`, keeping no copy:
+  - the refresh token as `{ kind: 'grant', name, value, source: 'oauth:<provider>', oauth: { tokenUrl, clientId, scope?, resource? } }`. A grant is never injected and never exported; `tokenUrl` must be `https:`;
+  - the access token as `{ name, value, source: 'oauth:<provider>', expiresAt, refresh: '<grant name>' }`.
+  - With `request` (the id of a pending `oauth` or `jerk-seal` request) and `jerk` (`{ exit, user?, scopes?, expires_at? }`), `seal` also answers that request: its `/dev/sealed` `status` becomes `done`, with `jerk`, the record's `placeholder` and `record` state.
+- **A J1 lease:** `{ name, value, source: 'jerk:<provider>@<device>', expiresAt, refresh: 'jerk-seal' }`.
+- **When a token is due** (5 minutes before `expiresAt`): the core frame checks once a minute, for every connected namespace, and `refresh { name }` asks for it at once.
+  - A `jerk-seal` token is announced once per `expiresAt` with the `refresh` event, and bios runs J1 `seal` again (`{ state: 'requested' }`).
+  - An OAuth token is refreshed in the vault: it builds `POST tokenUrl` with `grant_type=refresh_token`, the refresh token, `client_id` and any `scope` and `resource` (form-encoded), and sends it through bios with the `egress` event. bios sends the request through its exits and posts `{ status, headers, body }` (or `{ error }`) on the event's port within 30 s. The vault reads `access_token`, `expires_in` and any new `refresh_token`, rotates the records (their placeholders stay), audits a `refresh` entry, and answers `{ state: 'refreshed', expiresAt }`. A failed refresh is `EACCES: refresh failed: <the IdP's error code>`, scrubbed. Without a connected page it's `ENOTCONN`.
+- `egress` carries the refresh token to the page, in transit only; the response goes back to the vault, never to the kernel.
 
 ## Import and export
 

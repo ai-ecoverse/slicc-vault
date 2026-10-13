@@ -2,6 +2,7 @@ const params = new URLSearchParams(location.search);
 const vault = params.get('vault');
 const seen = [];
 const events = [];
+const egress = { requests: [], answer: null };
 const buttonEvents = [];
 let port = null;
 let next = 1;
@@ -40,6 +41,10 @@ async function connect(path = '/') {
       record('port', event.data);
       const data = event.data;
       if (data.op === 'welcome' || data.op === 'refused') return resolve(data);
+      if (data.event === 'egress') {
+        egress.requests.push(data.request);
+        event.ports[0].postMessage(egress.answer ?? { error: 'no answer configured' });
+      }
       if (data.event) return events.push(data);
       waiting.get(data.id)?.(data);
       waiting.delete(data.id);
@@ -149,6 +154,7 @@ function policy(files) {
 }
 
 window.harness = {
+  egress,
   policy,
   forward,
   agent,

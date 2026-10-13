@@ -1,11 +1,12 @@
 import { type Channel, channel, type Message, type Part } from './channel.ts';
 import { type Config, load } from './config.ts';
-import type { ScrubState, VaultStatus } from './contract.ts';
+import type { ScrubState, VaultEvent, VaultStatus } from './contract.ts';
 import { open } from './db.ts';
 import { Exec } from './exec.ts';
 import { Keyring } from './lock.ts';
 import { EMPTY, type Policy } from './policy.ts';
 import { backupState, records, reminder, scrubVersion } from './records.ts';
+import { Refresher } from './refresh.ts';
 import { pending, waiting } from './requests.ts';
 import { loadPolicy, loadStored } from './rules.ts';
 import { Scrubbers } from './scrubbers.ts';
@@ -23,10 +24,13 @@ export interface Vault {
   now(): number;
   changed(ns: string, parts: Part[]): Promise<void>;
   onChange(listener: Listener): () => void;
+  emit(ns: string, event: VaultEvent): void;
+  onEvent(listener: (ns: string, event: VaultEvent) => void): void;
   context(ns: string): Context;
   scrub(ns: string): Promise<ScrubState>;
   scrubbers: Scrubbers;
   exec: Exec;
+  refresher: Refresher;
   status(ns: string): Promise<VaultStatus>;
 }
 
@@ -44,12 +48,14 @@ export async function start(options: Options = {}): Promise<Vault> {
   const now = options.now ?? Date.now;
   const listeners = new Set<Listener>();
   const policies = new Map<string, Policy>();
+  const eventListeners = new Set<(ns: string, event: VaultEvent) => void>();
   const notify = async (ns: string, parts: Part[]) => {
     await Promise.all([...listeners].map((listener) => listener(ns, parts)));
   };
   const vault: Vault = {
     scrubbers: undefined as unknown as Scrubbers,
     exec: undefined as unknown as Exec,
+    refresher: undefined as unknown as Refresher,
     db,
     config,
     keyring,
@@ -70,6 +76,12 @@ export async function start(options: Options = {}): Promise<Vault> {
       listeners.add(listener);
       return () => listeners.delete(listener);
     },
+    emit(ns, event) {
+      for (const listener of eventListeners) listener(ns, event);
+    },
+    onEvent(listener) {
+      eventListeners.add(listener);
+    },
     context(ns) {
       return {
         db,
@@ -79,6 +91,7 @@ export async function start(options: Options = {}): Promise<Vault> {
         policy: () => vault.policy(ns),
         now,
         changed: () => vault.changed(ns, ['secrets', 'requests', 'audit']),
+        emit: (event) => vault.emit(ns, event),
       };
     },
     async scrub(ns) {
@@ -113,6 +126,7 @@ export async function start(options: Options = {}): Promise<Vault> {
   });
   vault.scrubbers = new Scrubbers(vault);
   vault.exec = new Exec(vault);
+  vault.refresher = new Refresher(vault);
   const reload = async (ns: string, parts: Part[]) => {
     if (parts.includes('exits') && policies.has(ns)) await vault.loadPolicy(ns);
     await notify(ns, parts);

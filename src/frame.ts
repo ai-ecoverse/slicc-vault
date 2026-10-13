@@ -3,6 +3,8 @@ import { purge } from './records.ts';
 import { sweep } from './requests.ts';
 import { start } from './vault.ts';
 
+export const SWEEP = 60 * 1000;
+
 export async function boot(win: Window = window): Promise<Server | null> {
   if (win.parent === win) return null;
   const queued: MessageEvent[] = [];
@@ -20,5 +22,7 @@ export async function boot(win: Window = window): Promise<Server | null> {
   for (const event of queued.splice(0)) server.accept(event, parent);
   const now = vault.now();
   await Promise.all([purge(vault.db, now), sweep(vault.db, now)]);
+  const running = server;
+  setInterval(() => void running.sweep(), SWEEP);
   return server;
 }
