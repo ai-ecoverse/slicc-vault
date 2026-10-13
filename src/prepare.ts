@@ -408,6 +408,7 @@ export class Preparer {
     if (!byServer === !byProvider)
       throw new Refused('EINVAL', 'refresh takes a server or a provider');
     const named = fields.name;
+    const before = await this.scrubber();
     const matching = (await records(this.vault.db, this.ns)).filter(
       (r) =>
         !removed(r) &&
@@ -426,10 +427,12 @@ export class Preparer {
         `${byServer ? server : provider} has several; name the one to refresh`
       );
     }
-    const before = await this.scrubber();
     const reply = await this.vault.refresher.refresh(this.ns, found.name, found.kind as TokenKind);
     const expiry = reply.expiresAt;
-    if (typeof expiry !== 'number' || before.text(String(expiry)).hits.length === 0) return reply;
+    if (typeof expiry !== 'number') return reply;
+    const after = await this.scrubber();
+    const alone = after.version <= before.version + 1;
+    if (alone && before.text(String(expiry)).hits.length === 0) return reply;
     const { expiresAt: _echo, ...rest } = reply;
     return rest;
   }
