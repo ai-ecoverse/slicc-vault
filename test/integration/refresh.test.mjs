@@ -196,7 +196,7 @@ test('two vault frames refresh one token with one request to the IdP', async (t)
 
 test('a page port that stopped answering egress gets no more, and the next refresh goes to a live one', async (t) => {
   const page = await connected(t);
-  assert.equal((await page.evaluate(() => window.harness.twin(true))).op, 'welcome');
+  assert.equal((await page.evaluate(() => window.harness.twin(true, true))).op, 'welcome');
   await page.evaluate(async () => {
     await window.harness.call('seal', {
       name: 'CLOSED_GRANT',
@@ -217,7 +217,6 @@ test('a page port that stopped answering egress gets no more, and the next refre
       headers: [],
       body: JSON.stringify({ access_token: 'fake-access-token-0202', expires_in: 3600 }),
     };
-    window.harness.twins[0].close();
     window.harness.call('refresh', { name: 'CLOSED_TOKEN' }).then((reply) => {
       window.first = reply;
     });
@@ -232,6 +231,19 @@ test('a page port that stopped answering egress gets no more, and the next refre
     window.harness.call('refresh', { name: 'CLOSED_TOKEN' })
   );
   assert.equal(refreshed.state, 'refreshed');
+  const kept = await page.evaluate(async () => {
+    const before = window.harness.twinEvents.length;
+    const list = await window.harness.call('list', {}, [], window.harness.twins[0]);
+    await window.harness.call('seal', {
+      name: 'AFTER',
+      value: 'fake-after-value-0001',
+      source: 'settings',
+    });
+    await new Promise((resolve) => setTimeout(resolve, 300));
+    return { list: Boolean(list.list), events: window.harness.twinEvents.length - before };
+  });
+  assert.equal(kept.list, true);
+  assert.ok(kept.events > 0);
 });
 
 test('a J1 lease due for refresh is announced to the page', async (t) => {
