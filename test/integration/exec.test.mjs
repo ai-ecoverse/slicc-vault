@@ -49,7 +49,13 @@ const materialize = (page, fields, stamp = PARENT) =>
   );
 const consume = (page, fields) =>
   page.evaluate(
-    (f) => window.harness.call('materializeConsume', { interpreters: [], trusted: false, ...f }),
+    (f) =>
+      window.harness.call('materializeConsume', {
+        interpreters: [],
+        trusted: false,
+        resolved: f.path,
+        ...f,
+      }),
     fields
   );
 
@@ -72,6 +78,7 @@ test('a ticket reveals exactly the exec-enabled values to the child it names', a
     path: ask.path,
     argv: ask.argv,
     cwd: ask.cwd,
+    trusted: true,
   });
   assert.deepEqual(values.values, { NPM_TOKEN: VALUES.NPM_TOKEN });
   assert.deepEqual(values.placeholders, { NPM_TOKEN: placeholders.NPM_TOKEN });
@@ -338,6 +345,52 @@ test('an npm-style env-node script: an argv rule allows it when trusted, nothing
     trusted: true,
   });
   assert.match(viaEnv.error.message, /env and other wrappers stay refused/);
+});
+
+test('the refusal list applies to the program the kernel resolved, and exec true needs a trusted one', async (t) => {
+  const { page } = await ready(t);
+  const run = async (names, path, argv, consumed) => {
+    const ask = { names, path, argv, cwd: '/' };
+    const got = await materialize(page, ask);
+    return consume(page, { ...ask, ticket: got.ticket, stamp: CHILD, ...consumed });
+  };
+  const viaLink = await run(['NPM_TOKEN'], '/tmp/l', ['l'], {
+    resolved: '/bin/bash',
+    trusted: true,
+  });
+  assert.match(viaLink.error.message, /NPM_TOKEN isn't revealed to \/bin\/bash/);
+  const listedLink = await run(['GH_TOKEN'], '/usr/bin/gh', ['gh', 'release', 'upload'], {
+    resolved: '/bin/bash',
+    trusted: true,
+  });
+  assert.match(listedLink.error.message, /doesn't list this command as the kernel resolved it/);
+  const shell = await materialize(page, {
+    shellGrants: true,
+    path: '/tmp/l',
+    argv: ['l'],
+    cwd: '/',
+  });
+  const shellLink = await consume(page, {
+    ticket: shell.ticket,
+    stamp: CHILD,
+    path: '/tmp/l',
+    argv: ['l'],
+    cwd: '/',
+    resolved: '/bin/bash',
+  });
+  assert.deepEqual(shellLink.values, { SHELL_KEY: VALUES.SHELL_KEY });
+  const copy = await run(['NPM_TOKEN'], '/tmp/x', ['x'], { resolved: '/tmp/x', trusted: false });
+  assert.match(copy.error.message, /can be changed by a non-root user/);
+  const rooted = await run(['NPM_TOKEN'], '/usr/bin/x', ['x'], {
+    resolved: '/usr/bin/x',
+    trusted: true,
+  });
+  assert.deepEqual(rooted.values, { NPM_TOKEN: VALUES.NPM_TOKEN });
+  const unresolved = await run(['NPM_TOKEN'], '/usr/bin/x', ['x'], {
+    resolved: null,
+    trusted: true,
+  });
+  assert.match(unresolved.error.message, /no resolved program/);
 });
 
 test('an expired record is never revealed', async (t) => {

@@ -110,23 +110,27 @@ export async function argvSha256(argv: string[]): Promise<string> {
   return hex(new Uint8Array(await crypto.subtle.digest('SHA-256', bytes)));
 }
 
-export function allowedChain(
-  policy: Policy,
-  name: string,
-  path: string,
-  chain: string[],
-  trusted: boolean
-): string | null {
+export interface Ran {
+  resolved: string;
+  interpreters: string[];
+  trusted: boolean;
+}
+
+const UNTRUSTED = 'the program or its interpreter can be changed by a non-root user';
+
+export function allowedChain(policy: Policy, name: string, path: string, ran: Ran): string | null {
   const mode = policy.exec(name);
   if (mode === 'shell') return null;
+  const { resolved, interpreters, trusted } = ran;
   if (mode === 'argv') {
-    const wrapper = chain.find((program) => WRAPPERS.test(basename(program)));
+    const wrapper = interpreters.find((program) => WRAPPERS.test(basename(program)));
     if (wrapper) return `${name} isn't revealed to ${wrapper}: env and other wrappers stay refused`;
-    if (trusted || !chain.some(refusedProgram)) return null;
-    return `${name} isn't revealed: the script or its interpreter can be changed by a non-root user`;
+    if (trusted || ![resolved, ...interpreters].some(refusedProgram)) return null;
+    return `${name} isn't revealed: ${UNTRUSTED}`;
   }
-  const blocked = [path, ...chain].find(refusedProgram);
-  return blocked ? `${name} isn't revealed to ${blocked}` : null;
+  const blocked = [path, resolved, ...interpreters].find(refusedProgram);
+  if (blocked) return `${name} isn't revealed to ${blocked}`;
+  return trusted ? null : `${name} isn't revealed: ${UNTRUSTED}`;
 }
 
 function real(policy: Policy, name: string, ask: Asked): boolean {
@@ -196,7 +200,11 @@ function matching(found: Ticket, req: Fields, now: number): void {
   if (req.cwd !== found.cwd) fail('another cwd');
 }
 
-function chainOf(found: Ticket, req: Fields): string[] {
+function chainOf(found: Ticket, req: Fields): Ran {
+  const resolved = req.resolved;
+  if (typeof resolved !== 'string' || !resolved.startsWith('/')) {
+    fail('the kernel sent no resolved program');
+  }
   const chain = req.interpreters;
   if (!Array.isArray(chain) || !chain.every((p) => typeof p === 'string' && p.startsWith('/'))) {
     fail('the kernel sent no interpreter chain');
@@ -206,17 +214,17 @@ function chainOf(found: Ticket, req: Fields): string[] {
   if (found.interpreter !== null && found.interpreter !== interpreters[0]) {
     fail("fnox's interpreter isn't the one the kernel resolved");
   }
-  return interpreters;
+  return { resolved, interpreters, trusted: req.trusted as boolean };
 }
 
-function granted(policy: Policy, found: Ticket, interpreters: string[], trusted: boolean): void {
+function granted(policy: Policy, found: Ticket, ran: Ran): void {
   for (const name of found.names) {
     const mode = policy.exec(name);
     if (mode === false) fail(`${name} is no longer granted in [exec]`);
-    if (mode === 'argv' && !listed(policy.argv(name) as string[][], found.path, found.argv)) {
-      fail(`${name}'s [exec] grant no longer lists this command`);
+    if (mode === 'argv' && !listed(policy.argv(name) as string[][], ran.resolved, found.argv)) {
+      fail(`${name}'s [exec] grant doesn't list this command as the kernel resolved it`);
     }
-    const blocked = allowedChain(policy, name, found.path, interpreters, trusted);
+    const blocked = allowedChain(policy, name, found.path, ran);
     if (blocked) fail(blocked);
   }
 }
@@ -303,8 +311,7 @@ export class Exec {
     this.tickets.delete(id);
     if (!found || found.ns !== ns) return fail('unknown or already used');
     matching(found, req, this.vault.now());
-    const chain = chainOf(found, req);
-    granted(await this.vault.loadPolicy(ns), found, chain, req.trusted as boolean);
+    granted(await this.vault.loadPolicy(ns), found, chainOf(found, req));
     const key = this.vault.keyring.key;
     if (!key) throw new Refused('EACCES', 'vault is locked: unlock it in the vault window');
     const held = await records(this.vault.db, ns);
