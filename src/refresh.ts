@@ -1,5 +1,6 @@
 import type { Scrubber } from '@ai-ecoverse/slicc-scrub';
 import { text } from './bytes.ts';
+import { request, transact } from './db.ts';
 import { Refused } from './errors.ts';
 import { decrypt } from './keys.ts';
 import { aad, type Rotation, records, removed, rotate, type VaultRecord } from './records.ts';
@@ -108,7 +109,6 @@ export class Refresher {
   readonly vault: Vault;
   send: Send | null = null;
   announce: Announce | null = null;
-  readonly announced = new Map<string, number>();
   readonly running = new Map<string, Promise<Fields>>();
 
   constructor(vault: Vault) {
@@ -134,23 +134,43 @@ export class Refresher {
   }
 
   async run(ns: string, name: string): Promise<Fields> {
+    const seen = await this.token(ns, name);
+    return navigator.locks.request(`refresh:${ns}\u0000${seen.refresh}`, () =>
+      this.locked(ns, name, seen)
+    );
+  }
+
+  async token(ns: string, name: string): Promise<VaultRecord> {
     const held = await records(this.vault.db, ns);
     const record = held.find((r) => r.kind === 'secret' && r.name === name && !removed(r));
     if (!record?.refresh || record.expiresAt === undefined) {
       throw new Refused('ENOENT', `${name} has no refresh source`);
     }
+    return record;
+  }
+
+  async locked(ns: string, name: string, seen: VaultRecord): Promise<Fields> {
+    const record = await this.token(ns, name);
+    if (record.refresh !== seen.refresh) throw new Refused('EAGAIN', `${name} changed meanwhile`);
+    if (record.updatedAt !== seen.updatedAt && !due(record, this.vault.now())) {
+      return { state: 'refreshed', expiresAt: record.expiresAt };
+    }
     if (record.refresh === JERK) return this.jerk(ns, record);
+    const held = await records(this.vault.db, ns);
     const grant = held.find((r) => r.kind === 'grant' && r.name === record.refresh && !removed(r));
     if (!grant?.oauth) throw new Refused('ENOENT', `${name}'s grant ${record.refresh} is missing`);
     return this.oauth(ns, record, grant);
   }
 
-  jerk(ns: string, record: VaultRecord): Fields {
-    const key = `${ns}\u0000${record.name}`;
-    if (this.announced.get(key) !== record.expiresAt) {
-      this.announced.set(key, record.expiresAt as number);
-      this.announce?.(ns, record.name, record.source, record.expiresAt as number);
-    }
+  async jerk(ns: string, record: VaultRecord): Promise<Fields> {
+    const key = `announced:${ns}\u0000${record.name}`;
+    const fresh = await transact(this.vault.db, ['meta'], 'readwrite', async (tx) => {
+      const meta = tx.objectStore('meta');
+      if ((await request(meta.get(key))) === record.expiresAt) return false;
+      await request(meta.put(record.expiresAt, key));
+      return true;
+    });
+    if (fresh) this.announce?.(ns, record.name, record.source, record.expiresAt as number);
     return { state: 'requested' };
   }
 

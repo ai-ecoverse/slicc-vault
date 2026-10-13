@@ -63,7 +63,7 @@ test('export a backup, which another embedder of the same vault cannot take over
     bytes: exported.bundle,
     password: PASSPHRASE,
   });
-  assert.ok(taken.candidates.every((c) => /another embedder/.test(c.refused)));
+  assert.ok(taken.candidates.every((c) => /another app that uses this vault/.test(c.refused)));
   shared.bundle = exported.bundle;
   shared.placeholder = a.placeholder;
 });

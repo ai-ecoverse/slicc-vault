@@ -104,6 +104,44 @@ test('a route (b) sign-in is sealed against its request, with a grant that refre
   );
 });
 
+test('two vault frames refresh one token with one request to the IdP', async (t) => {
+  const page = await connected(t);
+  assert.equal((await page.evaluate(() => window.harness.twin())).op, 'welcome');
+  await page.evaluate(async () => {
+    await window.harness.call('seal', {
+      name: 'TWIN_GRANT',
+      value: 'fake-refresh-token-0101',
+      kind: 'grant',
+      source: 'oauth:github',
+      oauth: { tokenUrl: 'https://auth.example.com/token', clientId: 'fake-client' },
+    });
+    await window.harness.call('seal', {
+      name: 'TWIN_TOKEN',
+      value: 'fake-access-token-0101',
+      source: 'oauth:github',
+      refresh: 'TWIN_GRANT',
+      expiresAt: Date.now() + 60000,
+    });
+    window.harness.egress.delay = 400;
+    window.harness.egress.answer = {
+      status: 200,
+      headers: [],
+      body: JSON.stringify({ access_token: 'fake-access-token-0102', expires_in: 3600 }),
+    };
+  });
+  const [here, there] = await page.evaluate(() =>
+    Promise.all([
+      window.harness.call('refresh', { name: 'TWIN_TOKEN' }),
+      window.harness.call('refresh', { name: 'TWIN_TOKEN' }, [], window.harness.twins[0]),
+    ])
+  );
+  assert.equal(here.state, 'refreshed');
+  assert.equal(there.state, 'refreshed');
+  assert.equal(here.expiresAt, there.expiresAt);
+  const sent = await page.evaluate(() => window.harness.egress.requests);
+  assert.equal(sent.length, 1);
+});
+
 test('a J1 lease due for refresh is announced to the page', async (t) => {
   const page = await connected(t);
   await page.evaluate(() =>
