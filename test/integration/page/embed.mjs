@@ -4,6 +4,7 @@ const seen = [];
 const events = [];
 const egress = { requests: [], answer: null, delay: 0 };
 const twins = [];
+const twinEvents = [];
 const buttonEvents = [];
 let port = null;
 let core = null;
@@ -40,7 +41,7 @@ function egressed(event) {
   setTimeout(() => event.ports[0].postMessage(answer), egress.delay);
 }
 
-async function twin(same = false) {
+async function twin(same = false, deaf = false) {
   const iframe = same ? core : await frame('/', true);
   const channel = new MessageChannel();
   const other = channel.port1;
@@ -48,8 +49,8 @@ async function twin(same = false) {
     other.onmessage = (event) => {
       const data = event.data;
       if (data.op === 'welcome' || data.op === 'refused') return resolve(data);
-      if (data.event === 'egress') return egressed(event);
-      if (data.event) return;
+      if (data.event === 'egress') return deaf ? null : egressed(event);
+      if (data.event) return twinEvents.push(data);
       waiting.get(data.id)?.(data);
       waiting.delete(data.id);
     };
@@ -184,6 +185,7 @@ window.harness = {
   egress,
   twin,
   twins,
+  twinEvents,
   policy,
   forward,
   agent,
