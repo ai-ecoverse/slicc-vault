@@ -69,6 +69,7 @@ interface Session {
   last: string;
   queue: Promise<void>;
   agent?: AgentPort;
+  silent?: boolean;
 }
 
 type StoredAudit = AuditEntry & { ns: string };
@@ -426,14 +427,16 @@ export class Server {
   }
 
   egress(ns: string, req: EgressRequest): Promise<EgressResponse> {
-    const session = [...this.sessions].reverse().find((s) => s.ns === ns && s.role === 'page');
+    const session = [...this.sessions]
+      .reverse()
+      .find((s) => s.ns === ns && s.role === 'page' && !s.silent);
     if (!session)
       return Promise.reject(new Refused('ENOTCONN', 'no page is connected to send the refresh'));
     const channel = new MessageChannel();
     const answer = egressOver(channel.port1);
     session.port.postMessage({ v: 1, event: 'egress', request: req }, [channel.port2]);
     answer.catch((error: Refused) => {
-      if (error.code === 'ETIMEDOUT') this.sessions.delete(session);
+      if (error.code === 'ETIMEDOUT') session.silent = true;
     });
     return answer;
   }

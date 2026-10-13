@@ -194,7 +194,7 @@ test('two vault frames refresh one token with one request to the IdP', async (t)
   assert.equal(sent.length, 1);
 });
 
-test('a page port that stopped answering egress is dropped, and the next refresh goes to a live one', async (t) => {
+test('a page port that stopped answering egress gets no more, and the next refresh goes to a live one', async (t) => {
   const page = await connected(t);
   assert.equal((await page.evaluate(() => window.harness.twin(true))).op, 'welcome');
   await page.evaluate(async () => {
