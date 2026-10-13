@@ -291,6 +291,16 @@ async function write(tx: IDBTransaction, input: SealInput, sealed: Sealed): Prom
     | VaultRecord
     | undefined;
   guard(existing, input);
+  if (
+    input.server !== undefined &&
+    existing?.server !== undefined &&
+    existing.server !== input.server
+  ) {
+    throw new Refused(
+      'EEXIST',
+      `${input.name} belongs to another MCP server; give this one another name`
+    );
+  }
   const record: VaultRecord = {
     ns: input.ns,
     kind: input.kind,

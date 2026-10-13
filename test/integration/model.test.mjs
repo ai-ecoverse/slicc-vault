@@ -273,6 +273,16 @@ test('an MCP sign-in is sealed by grant and refreshed in the vault through egres
     }),
   });
   assert.equal(second.records[0].name, 'DOCS_SECOND');
+  const scoped = await ask('grant', {
+    server: 'docs',
+    name: 'DOCS_THIRD',
+    oauth,
+    response: JSON.stringify({
+      access_token: 'fake-mcp-access-0112',
+      scope: 'read fake-mcp-access-0112',
+    }),
+  });
+  assert.equal(JSON.parse(scoped.response).scope, `read ${scoped.records[0].placeholder}`);
   const ambiguous = await ask('refresh', { server: 'docs' });
   assert.match(ambiguous.error.message, /several; name the one/);
   const none = await ask('refresh', { provider: 'anthropic' });

@@ -449,8 +449,8 @@ export type AgentOp =
       oauth: OAuthConfig;
       name?: string;
     }
-  | { op: 'refresh'; server: string }
-  | { op: 'refresh'; provider: string };
+  | { op: 'refresh'; server: string; name?: string }
+  | { op: 'refresh'; provider: string; name?: string };
 
 export type AgentReply =
   | { op: 'redact'; texts: (string | Uint8Array)[]; hits: ScrubHit[]; version: number }

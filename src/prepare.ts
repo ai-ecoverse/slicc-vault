@@ -30,7 +30,6 @@ export const MAX_BODY = 32 * 1024 * 1024;
 const FOUND = /fnox_proxy_[0-9a-f]{24}/g;
 const METHOD = /^[A-Z]{1,16}$/;
 const TOKEN = /^[!#$%&'*+.^_`|~0-9A-Za-z-]+$/;
-const SHOWN = ['token_type', 'expires_in', 'scope'];
 const LOCKED = 'vault is locked: unlock it in the vault window to continue';
 
 export function outgoing(value: unknown): Outgoing {
@@ -264,15 +263,6 @@ export class Preparer {
     if (!NAME.test(base) || grantName.length > 128) {
       throw new Refused('EINVAL', 'name must be a record name');
     }
-    const taken = (await records(this.vault.db, this.ns)).find(
-      (r) => r.kind === 'mcp' && r.name === base && r.server !== server
-    );
-    if (taken) {
-      throw new Refused(
-        'EEXIST',
-        `${base} belongs to another MCP server; give this sign-in a name`
-      );
-    }
     const got = tokens(
       { status: 200, headers: [], body: response },
       await this.vault.scrubbers.get(this.ns)
@@ -301,9 +291,11 @@ export class Preparer {
     await this.vault.changed(this.ns, ['secrets', 'audit']);
     const raw = typeof response === 'string' ? response : text(response);
     const parsed = JSON.parse(raw) as Fields;
-    const kept = Object.fromEntries(
-      SHOWN.filter((field) => parsed[field] !== undefined).map((field) => [field, parsed[field]])
-    );
+    const scrubber = (await this.vault.scrubbers.get(this.ns)) as Scrubber;
+    const kept: Fields = {};
+    if (typeof parsed.token_type === 'string') kept.token_type = parsed.token_type;
+    if (typeof parsed.expires_in === 'number') kept.expires_in = parsed.expires_in;
+    if (typeof parsed.scope === 'string') kept.scope = scrubber.text(parsed.scope).text;
     const rewritten = JSON.stringify({
       ...kept,
       access_token: sealedAccess.placeholder,
