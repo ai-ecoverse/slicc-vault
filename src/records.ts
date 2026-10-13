@@ -500,10 +500,11 @@ export function withGrantBindings(held: VaultRecord[]): VaultRecord[] {
   return held.map((r) => {
     const list = r.kind === 'grant' ? owners.get(`${r.source}\u0000${r.name}`) : undefined;
     if (!list) return r;
-    const server = r.server ?? agreed(list, 'server');
-    const provider = r.provider ?? agreed(list, 'provider');
+    const { server: _server, provider: _provider, ...rest } = r;
+    const server = agreed(list, 'server');
+    const provider = agreed(list, 'provider');
     return {
-      ...r,
+      ...rest,
       ...(server === undefined ? {} : { server }),
       ...(provider === undefined ? {} : { provider }),
     };
