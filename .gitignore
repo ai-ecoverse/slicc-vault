@@ -4,3 +4,4 @@ coverage/
 artifacts/
 test/unit/
 src/endpoints.json
+src/jerk-wasm.json

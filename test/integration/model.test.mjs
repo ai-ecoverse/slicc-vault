@@ -302,7 +302,11 @@ test('an MCP sign-in is sealed by grant and refreshed in the vault through egres
     window.harness.egress.answer = {
       status: 200,
       headers: [],
-      body: JSON.stringify({ access_token: 'fake-mcp-access-0107', expires_in: 3600 }),
+      body: JSON.stringify({
+        token_type: 'Bearer',
+        access_token: 'fake-mcp-access-0107',
+        expires_in: 3600,
+      }),
     };
   });
   const refreshed = await ask('refresh', { server: 'docs' });
@@ -329,7 +333,7 @@ test('an MCP sign-in is sealed by grant and refreshed in the vault through egres
   const clash = await ask('grant', {
     server: 'DOCS',
     oauth,
-    response: JSON.stringify({ access_token: 'fake-mcp-access-0109' }),
+    response: JSON.stringify({ token_type: 'Bearer', access_token: 'fake-mcp-access-0109' }),
   });
   assert.equal(clash.error.code, 'EEXIST');
   const second = await ask('grant', {
@@ -337,6 +341,7 @@ test('an MCP sign-in is sealed by grant and refreshed in the vault through egres
     name: 'DOCS_SECOND',
     oauth,
     response: JSON.stringify({
+      token_type: 'Bearer',
       access_token: 'fake-mcp-access-0110',
       refresh_token: 'fake-mcp-refresh-0111',
     }),
@@ -347,6 +352,7 @@ test('an MCP sign-in is sealed by grant and refreshed in the vault through egres
     name: 'DOCS_THIRD',
     oauth,
     response: JSON.stringify({
+      token_type: 'Bearer',
       access_token: 'fake-mcp-access-0112',
       scope: 'read fake-mcp-access-0112',
     }),
@@ -356,7 +362,11 @@ test('an MCP sign-in is sealed by grant and refreshed in the vault through egres
   assert.match(ambiguous.error.message, /several; name the one/);
   const none = await ask('refresh', { provider: 'anthropic' });
   assert.equal(none.error.code, 'ENOENT');
-  const short = await ask('grant', { server: 'docs', oauth, response: '{"access_token":"short"}' });
+  const short = await ask('grant', {
+    server: 'docs',
+    oauth,
+    response: '{"token_type":"Bearer","access_token":"short"}',
+  });
   await page.evaluate(() =>
     window.harness.call('put', { name: 'NAMEVAL', value: 'fake_key_name_0124' })
   );
@@ -364,28 +374,29 @@ test('an MCP sign-in is sealed by grant and refreshed in the vault through egres
     server: 'docs',
     name: 'fake_key_name_0124',
     oauth,
-    response: '{"access_token":"fake-mcp-access-0123"}',
+    response: '{"token_type":"Bearer","access_token":"fake-mcp-access-0123"}',
   });
   assert.equal(named.error.code, 'EINVAL');
   const sameAsToken = await ask('grant', {
     server: 'docs',
     name: 'SAME_AS_TOKEN_02',
     oauth,
-    response: '{"access_token":"SAME_AS_TOKEN_02"}',
+    response: '{"token_type":"Bearer","access_token":"SAME_AS_TOKEN_02"}',
   });
   assert.equal(sameAsToken.error.code, 'EINVAL');
   const encodedName = await ask('grant', {
     server: 'docs',
     name: 'c2VjcmV0YWJjZGVm',
     oauth,
-    response: '{"access_token":"secretabcdef"}',
+    response: '{"token_type":"Bearer","access_token":"secretabcdef"}',
   });
   assert.equal(encodedName.error.code, 'EINVAL');
   const grantNamed = await ask('grant', {
     server: 'docs',
     name: 'DOCSY',
     oauth,
-    response: '{"access_token":"fake-mcp-access-0125","refresh_token":"DOCSY_GRANT"}',
+    response:
+      '{"token_type":"Bearer","access_token":"fake-mcp-access-0125","refresh_token":"DOCSY_GRANT"}',
   });
   assert.equal(grantNamed.error.code, 'EINVAL');
   assert.equal(short.error.code, 'EINVAL');
@@ -521,7 +532,11 @@ test('a value stored while a request refreshes its credential makes the vault pr
     h.egress.answer = {
       status: 200,
       headers: [],
-      body: JSON.stringify({ access_token: 'fake-ims-access-0142', expires_in: 3600 }),
+      body: JSON.stringify({
+        token_type: 'Bearer',
+        access_token: 'fake-ims-access-0142',
+        expires_in: 3600,
+      }),
     };
   });
   const placeholder = (await ask('records', {})).records.find(
@@ -573,6 +588,7 @@ test('removing an MCP sign-in removes its grant, and restoring brings both back'
     server: 'docs',
     oauth,
     response: JSON.stringify({
+      token_type: 'Bearer',
       access_token: 'fake-mcp-access-0150',
       refresh_token: 'fake-mcp-refresh-0151',
     }),
@@ -617,6 +633,7 @@ test("a grant shows its live tokens' agreed binding, and none when they disagree
     server: 'docs',
     oauth,
     response: JSON.stringify({
+      token_type: 'Bearer',
       access_token: 'fake-mcp-access-0160',
       refresh_token: 'fake-mcp-refresh-0161',
     }),

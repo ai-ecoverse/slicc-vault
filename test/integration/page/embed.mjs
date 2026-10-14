@@ -2,7 +2,16 @@ const params = new URLSearchParams(location.search);
 const vault = params.get('vault');
 const seen = [];
 const events = [];
-const egress = { requests: [], answer: null, delay: 0 };
+const egress = {
+  requests: [],
+  answer: null,
+  delay: 0,
+  manual: false,
+  held: [],
+  release(answer) {
+    egress.held.shift()?.postMessage(answer);
+  },
+};
 const twins = [];
 const twinEvents = [];
 const buttonEvents = [];
@@ -37,6 +46,7 @@ function frame(path, hidden) {
 
 function egressed(event) {
   egress.requests.push(event.data.request);
+  if (egress.manual) return egress.held.push(event.ports[0]);
   const answer = egress.answer ?? { error: 'no answer configured' };
   setTimeout(() => event.ports[0].postMessage(answer), egress.delay);
 }

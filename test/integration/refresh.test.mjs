@@ -65,6 +65,7 @@ test('a route (b) sign-in is sealed against its request, with a grant that refre
       status: 200,
       headers: [['content-type', 'application/json']],
       body: JSON.stringify({
+        token_type: 'Bearer',
         access_token: 'fake-access-token-0002',
         refresh_token: 'fake-refresh-token-0002',
         expires_in: 3600,
@@ -104,7 +105,7 @@ test('a route (b) sign-in is sealed against its request, with a grant that refre
     window.harness.egress.answer = {
       status: 200,
       headers: [],
-      body: '{"access_token":"fake-access-token-0003","expires_in":-5}',
+      body: '{"token_type":"Bearer","access_token":"fake-access-token-0003","expires_in":-5}',
     };
   });
   const invalid = await page.evaluate(() =>
@@ -116,7 +117,7 @@ test('a route (b) sign-in is sealed against its request, with a grant that refre
     window.harness.egress.answer = {
       status: 200,
       headers: [],
-      body: '{"access_token":"fake-access-token-0005","refresh_token":""}',
+      body: '{"token_type":"Bearer","access_token":"fake-access-token-0005","refresh_token":""}',
     };
   });
   const empty = await page.evaluate(() => window.harness.call('refresh', { name: 'GITHUB_TOKEN' }));
@@ -125,7 +126,7 @@ test('a route (b) sign-in is sealed against its request, with a grant that refre
     window.harness.egress.answer = {
       status: 200,
       headers: [],
-      body: '{"access_token":"fake-access-token-0006","refresh_token":null}',
+      body: '{"token_type":"Bearer","access_token":"fake-access-token-0006","refresh_token":null}',
     };
   });
   const nulled = await page.evaluate(() =>
@@ -211,7 +212,11 @@ test('two vault frames refresh one token with one request to the IdP', async (t)
     window.harness.egress.answer = {
       status: 200,
       headers: [],
-      body: JSON.stringify({ access_token: 'fake-access-token-0102', expires_in: 3600 }),
+      body: JSON.stringify({
+        token_type: 'Bearer',
+        access_token: 'fake-access-token-0102',
+        expires_in: 3600,
+      }),
     };
   });
   const [here, there] = await page.evaluate(() =>
@@ -250,7 +255,11 @@ test('a page port that stopped answering egress gets no more, and the next refre
     window.harness.egress.answer = {
       status: 200,
       headers: [],
-      body: JSON.stringify({ access_token: 'fake-access-token-0202', expires_in: 3600 }),
+      body: JSON.stringify({
+        token_type: 'Bearer',
+        access_token: 'fake-access-token-0202',
+        expires_in: 3600,
+      }),
     };
     window.harness.call('refresh', { name: 'CLOSED_TOKEN' }).then((reply) => {
       window.first = reply;
@@ -304,7 +313,11 @@ test('a grant removed and restored while its refresh is in flight refuses the st
     h.egress.answer = {
       status: 200,
       headers: [],
-      body: JSON.stringify({ access_token: 'fake-access-token-0402', expires_in: 3600 }),
+      body: JSON.stringify({
+        token_type: 'Bearer',
+        access_token: 'fake-access-token-0402',
+        expires_in: 3600,
+      }),
     };
     const pending = h.call('refresh', { name: 'RACE_TOKEN' });
     while (h.egress.requests.length === 0) await new Promise((resolve) => setTimeout(resolve, 20));
@@ -343,7 +356,11 @@ test('the minute sweep refreshes a due token without being asked', {
     window.harness.egress.answer = {
       status: 200,
       headers: [],
-      body: JSON.stringify({ access_token: 'fake-access-token-0302', expires_in: 3600 }),
+      body: JSON.stringify({
+        token_type: 'Bearer',
+        access_token: 'fake-access-token-0302',
+        expires_in: 3600,
+      }),
     };
   });
   let sent = 0;
@@ -380,7 +397,11 @@ test('a page that says hello gets its due tokens refreshed at once', async (t) =
     window.harness.egress.answer = {
       status: 200,
       headers: [],
-      body: JSON.stringify({ access_token: 'fake-access-token-0402', expires_in: 3600 }),
+      body: JSON.stringify({
+        token_type: 'Bearer',
+        access_token: 'fake-access-token-0402',
+        expires_in: 3600,
+      }),
     };
   });
   assert.equal(await page.evaluate(() => window.harness.egress.requests.length), 0);

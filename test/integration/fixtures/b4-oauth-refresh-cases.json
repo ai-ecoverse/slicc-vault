@@ -1,0 +1,1336 @@
+{
+  "source": "slicc-agent-plan/evidence/b4-oauth-refresh-cases.json (jerk-oauth 0.14.1 observations)",
+  "cases": [
+    {
+      "id": "tt-missing",
+      "area": "token-response",
+      "setup": {
+        "response": {
+          "status": 200,
+          "headers": {
+            "content-type": "application/json"
+          },
+          "body": "{\"access_token\":\"at\",\"expires_in\":3600}"
+        },
+        "tokenUrl": "https://auth.example/token",
+        "nowSecs": 1000
+      },
+      "expect": {
+        "result": "refuse",
+        "kind": "invalid_token_type",
+        "message": "token_type must be Bearer"
+      },
+      "note": "token_type absent"
+    },
+    {
+      "id": "tt-numeric",
+      "area": "token-response",
+      "setup": {
+        "response": {
+          "status": 200,
+          "headers": {
+            "content-type": "application/json"
+          },
+          "body": "{\"access_token\":\"at\",\"token_type\":7}"
+        },
+        "tokenUrl": "https://auth.example/token",
+        "nowSecs": 1000
+      },
+      "expect": {
+        "result": "refuse",
+        "kind": "invalid_token_type",
+        "message": "token_type must be Bearer"
+      },
+      "note": "token_type is a number"
+    },
+    {
+      "id": "tt-null",
+      "area": "token-response",
+      "setup": {
+        "response": {
+          "status": 200,
+          "headers": {
+            "content-type": "application/json"
+          },
+          "body": "{\"access_token\":\"at\",\"token_type\":null}"
+        },
+        "tokenUrl": "https://auth.example/token",
+        "nowSecs": 1000
+      },
+      "expect": {
+        "result": "refuse",
+        "kind": "invalid_token_type",
+        "message": "token_type must be Bearer"
+      },
+      "note": "token_type is null"
+    },
+    {
+      "id": "tt-empty",
+      "area": "token-response",
+      "setup": {
+        "response": {
+          "status": 200,
+          "headers": {
+            "content-type": "application/json"
+          },
+          "body": "{\"access_token\":\"at\",\"token_type\":\"\"}"
+        },
+        "tokenUrl": "https://auth.example/token",
+        "nowSecs": 1000
+      },
+      "expect": {
+        "result": "refuse",
+        "kind": "invalid_token_type",
+        "message": "token_type must be Bearer"
+      },
+      "note": "token_type is \"\""
+    },
+    {
+      "id": "tt-mac",
+      "area": "token-response",
+      "setup": {
+        "response": {
+          "status": 200,
+          "headers": {
+            "content-type": "application/json"
+          },
+          "body": "{\"access_token\":\"at\",\"token_type\":\"mac\"}"
+        },
+        "tokenUrl": "https://auth.example/token",
+        "nowSecs": 1000
+      },
+      "expect": {
+        "result": "refuse",
+        "kind": "invalid_token_type",
+        "message": "token_type must be Bearer"
+      },
+      "note": "non-Bearer token_type"
+    },
+    {
+      "id": "tt-dpop",
+      "area": "token-response",
+      "setup": {
+        "response": {
+          "status": 200,
+          "headers": {
+            "content-type": "application/json"
+          },
+          "body": "{\"access_token\":\"at\",\"token_type\":\"DPoP\"}"
+        },
+        "tokenUrl": "https://auth.example/token",
+        "nowSecs": 1000
+      },
+      "expect": {
+        "result": "refuse",
+        "kind": "invalid_token_type",
+        "message": "token_type must be Bearer"
+      },
+      "note": "DPoP is not Bearer"
+    },
+    {
+      "id": "tt-bearer-canonical",
+      "area": "token-response",
+      "setup": {
+        "response": {
+          "status": 200,
+          "headers": {
+            "content-type": "application/json"
+          },
+          "body": "{\"access_token\":\"at\",\"token_type\":\"Bearer\",\"expires_in\":3600,\"scope\":\"read\"}"
+        },
+        "tokenUrl": "https://auth.example/token",
+        "nowSecs": 1000
+      },
+      "expect": {
+        "result": "accept",
+        "fields": {
+          "accessToken": "at",
+          "expiresAt": 4600,
+          "scope": "read"
+        }
+      },
+      "note": "happy path"
+    },
+    {
+      "id": "tt-bearer-lower",
+      "area": "token-response",
+      "setup": {
+        "response": {
+          "status": 200,
+          "headers": {
+            "content-type": "application/json"
+          },
+          "body": "{\"access_token\":\"at\",\"token_type\":\"bearer\"}"
+        },
+        "tokenUrl": "https://auth.example/token",
+        "nowSecs": 1000
+      },
+      "expect": {
+        "result": "accept",
+        "fields": {
+          "accessToken": "at"
+        }
+      },
+      "note": "case-insensitive (RFC 6749 \u00a75.1)"
+    },
+    {
+      "id": "tt-bearer-upper",
+      "area": "token-response",
+      "setup": {
+        "response": {
+          "status": 200,
+          "headers": {
+            "content-type": "application/json"
+          },
+          "body": "{\"access_token\":\"at\",\"token_type\":\"BEARER\"}"
+        },
+        "tokenUrl": "https://auth.example/token",
+        "nowSecs": 1000
+      },
+      "expect": {
+        "result": "accept",
+        "fields": {
+          "accessToken": "at"
+        }
+      },
+      "note": "case-insensitive"
+    },
+    {
+      "id": "tt-bearer-padded",
+      "area": "token-response",
+      "setup": {
+        "response": {
+          "status": 200,
+          "headers": {
+            "content-type": "application/json"
+          },
+          "body": "{\"access_token\":\"at\",\"token_type\":\" Bearer \"}"
+        },
+        "tokenUrl": "https://auth.example/token",
+        "nowSecs": 1000
+      },
+      "expect": {
+        "result": "refuse",
+        "kind": "invalid_token_type",
+        "message": "token_type must be Bearer"
+      },
+      "note": "whitespace around the type. \" Bearer \" (padded) is refused; jerk-oauth does not trim."
+    },
+    {
+      "id": "at-empty",
+      "area": "token-response",
+      "setup": {
+        "response": {
+          "status": 200,
+          "headers": {
+            "content-type": "application/json"
+          },
+          "body": "{\"access_token\":\"\",\"token_type\":\"Bearer\"}"
+        },
+        "tokenUrl": "https://auth.example/token",
+        "nowSecs": 1000
+      },
+      "expect": {
+        "result": "refuse",
+        "kind": "empty_access_token",
+        "message": "empty access_token"
+      },
+      "note": "empty access_token"
+    },
+    {
+      "id": "at-number",
+      "area": "token-response",
+      "setup": {
+        "response": {
+          "status": 200,
+          "headers": {
+            "content-type": "application/json"
+          },
+          "body": "{\"access_token\":42,\"token_type\":\"Bearer\"}"
+        },
+        "tokenUrl": "https://auth.example/token",
+        "nowSecs": 1000
+      },
+      "expect": {
+        "result": "refuse",
+        "kind": "missing_access_token",
+        "message": "missing access_token"
+      },
+      "note": "non-string access_token"
+    },
+    {
+      "id": "at-object",
+      "area": "token-response",
+      "setup": {
+        "response": {
+          "status": 200,
+          "headers": {
+            "content-type": "application/json"
+          },
+          "body": "{\"access_token\":{\"v\":\"x\"},\"token_type\":\"Bearer\"}"
+        },
+        "tokenUrl": "https://auth.example/token",
+        "nowSecs": 1000
+      },
+      "expect": {
+        "result": "refuse",
+        "kind": "missing_access_token",
+        "message": "missing access_token"
+      },
+      "note": "object access_token"
+    },
+    {
+      "id": "at-missing",
+      "area": "token-response",
+      "setup": {
+        "response": {
+          "status": 200,
+          "headers": {
+            "content-type": "application/json"
+          },
+          "body": "{\"refresh_token\":\"rt\",\"token_type\":\"Bearer\"}"
+        },
+        "tokenUrl": "https://auth.example/token",
+        "nowSecs": 1000
+      },
+      "expect": {
+        "result": "refuse",
+        "kind": "missing_access_token",
+        "message": "missing access_token"
+      },
+      "note": "no access_token"
+    },
+    {
+      "id": "rt-empty",
+      "area": "token-response",
+      "setup": {
+        "response": {
+          "status": 200,
+          "headers": {
+            "content-type": "application/json"
+          },
+          "body": "{\"access_token\":\"at\",\"refresh_token\":\"\",\"token_type\":\"Bearer\"}"
+        },
+        "tokenUrl": "https://auth.example/token",
+        "nowSecs": 1000
+      },
+      "expect": {
+        "result": "accept",
+        "fields": {
+          "accessToken": "at",
+          "refreshToken": ""
+        }
+      },
+      "note": "empty refresh_token: record whether it surfaces. jerk-oauth surfaces refreshToken \"\" \u2014 a vault should treat an empty refresh_token as absent (keep the old one) or refuse; storing \"\" would brick the grant."
+    },
+    {
+      "id": "rt-number",
+      "area": "token-response",
+      "setup": {
+        "response": {
+          "status": 200,
+          "headers": {
+            "content-type": "application/json"
+          },
+          "body": "{\"access_token\":\"at\",\"refresh_token\":5,\"token_type\":\"Bearer\"}"
+        },
+        "tokenUrl": "https://auth.example/token",
+        "nowSecs": 1000
+      },
+      "expect": {
+        "result": "accept",
+        "fields": {
+          "accessToken": "at"
+        }
+      },
+      "note": "non-string refresh_token: record whether it surfaces. a non-string refresh_token is silently dropped (no refreshToken field); same as absent."
+    },
+    {
+      "id": "rt-null",
+      "area": "token-response",
+      "setup": {
+        "response": {
+          "status": 200,
+          "headers": {
+            "content-type": "application/json"
+          },
+          "body": "{\"access_token\":\"at\",\"refresh_token\":null,\"token_type\":\"Bearer\"}"
+        },
+        "tokenUrl": "https://auth.example/token",
+        "nowSecs": 1000
+      },
+      "expect": {
+        "result": "accept",
+        "fields": {
+          "accessToken": "at"
+        }
+      },
+      "note": "null refresh_token. null refresh_token is treated as absent."
+    },
+    {
+      "id": "error-with-token",
+      "area": "token-response",
+      "setup": {
+        "response": {
+          "status": 200,
+          "headers": {
+            "content-type": "application/json"
+          },
+          "body": "{\"error\":\"invalid_grant\",\"access_token\":\"at\",\"token_type\":\"Bearer\"}"
+        },
+        "tokenUrl": "https://auth.example/token",
+        "nowSecs": 1000
+      },
+      "expect": {
+        "result": "refuse",
+        "kind": "error_with_token",
+        "message": "response contains both error and access_token"
+      },
+      "note": "error and a token together"
+    },
+    {
+      "id": "error-null-with-token",
+      "area": "token-response",
+      "setup": {
+        "response": {
+          "status": 200,
+          "headers": {
+            "content-type": "application/json"
+          },
+          "body": "{\"error\":null,\"access_token\":\"at\",\"token_type\":\"Bearer\"}"
+        },
+        "tokenUrl": "https://auth.example/token",
+        "nowSecs": 1000
+      },
+      "expect": {
+        "result": "accept",
+        "fields": {
+          "accessToken": "at"
+        }
+      },
+      "note": "error: null is treated as absent. accepted: error:null counts as no error."
+    },
+    {
+      "id": "2xx-with-error",
+      "area": "token-response",
+      "setup": {
+        "response": {
+          "status": 200,
+          "headers": {
+            "content-type": "application/json"
+          },
+          "body": "{\"error\":\"invalid_grant\",\"error_description\":\"expired\"}"
+        },
+        "tokenUrl": "https://auth.example/token",
+        "nowSecs": 1000
+      },
+      "expect": {
+        "result": "refuse",
+        "kind": "idp_error",
+        "message": "invalid_grant: expired"
+      },
+      "note": "HTTP 200 carrying error (jerk-oauth sees only the body)"
+    },
+    {
+      "id": "4xx-error",
+      "area": "token-response",
+      "setup": {
+        "response": {
+          "status": 400,
+          "headers": {
+            "content-type": "application/json"
+          },
+          "body": "{\"error\":\"invalid_grant\",\"error_description\":\"expired\"}"
+        },
+        "tokenUrl": "https://auth.example/token",
+        "nowSecs": 1000
+      },
+      "expect": {
+        "result": "refuse",
+        "kind": "idp_error",
+        "message": "invalid_grant: expired"
+      },
+      "note": "the usual RFC 6749 \u00a75.2 error"
+    },
+    {
+      "id": "ei-string",
+      "area": "token-response",
+      "setup": {
+        "response": {
+          "status": 200,
+          "headers": {
+            "content-type": "application/json"
+          },
+          "body": "{\"access_token\":\"at\",\"token_type\":\"Bearer\",\"expires_in\":\"3600\"}"
+        },
+        "tokenUrl": "https://auth.example/token",
+        "nowSecs": 1000
+      },
+      "expect": {
+        "result": "refuse",
+        "kind": "invalid_expires_in",
+        "message": "invalid expires_in: must be an integer"
+      },
+      "note": "expires_in as a string"
+    },
+    {
+      "id": "ei-float",
+      "area": "token-response",
+      "setup": {
+        "response": {
+          "status": 200,
+          "headers": {
+            "content-type": "application/json"
+          },
+          "body": "{\"access_token\":\"at\",\"token_type\":\"Bearer\",\"expires_in\":3600.5}"
+        },
+        "tokenUrl": "https://auth.example/token",
+        "nowSecs": 1000
+      },
+      "expect": {
+        "result": "refuse",
+        "kind": "invalid_expires_in",
+        "message": "invalid expires_in: must be an integer"
+      },
+      "note": "expires_in as a float"
+    },
+    {
+      "id": "ei-negative",
+      "area": "token-response",
+      "setup": {
+        "response": {
+          "status": 200,
+          "headers": {
+            "content-type": "application/json"
+          },
+          "body": "{\"access_token\":\"at\",\"token_type\":\"Bearer\",\"expires_in\":-5}"
+        },
+        "tokenUrl": "https://auth.example/token",
+        "nowSecs": 1000
+      },
+      "expect": {
+        "result": "refuse",
+        "kind": "invalid_expires_in",
+        "message": "invalid expires_in: negative"
+      },
+      "note": "negative"
+    },
+    {
+      "id": "ei-huge",
+      "area": "token-response",
+      "setup": {
+        "response": {
+          "status": 200,
+          "headers": {
+            "content-type": "application/json"
+          },
+          "body": "{\"access_token\":\"at\",\"token_type\":\"Bearer\",\"expires_in\":1e300}"
+        },
+        "tokenUrl": "https://auth.example/token",
+        "nowSecs": 1000
+      },
+      "expect": {
+        "result": "refuse",
+        "kind": "invalid_expires_in",
+        "message": "invalid expires_in: must be an integer"
+      },
+      "note": "huge (raw JSON 1e300)"
+    },
+    {
+      "id": "ei-too-large-int",
+      "area": "token-response",
+      "setup": {
+        "response": {
+          "status": 200,
+          "headers": {
+            "content-type": "application/json"
+          },
+          "body": "{\"access_token\":\"at\",\"token_type\":\"Bearer\",\"expires_in\":315360001}"
+        },
+        "tokenUrl": "https://auth.example/token",
+        "nowSecs": 1000
+      },
+      "expect": {
+        "result": "refuse",
+        "kind": "invalid_expires_in",
+        "message": "invalid expires_in: too large"
+      },
+      "note": "just over the 10-year cap"
+    },
+    {
+      "id": "ei-cap",
+      "area": "token-response",
+      "setup": {
+        "response": {
+          "status": 200,
+          "headers": {
+            "content-type": "application/json"
+          },
+          "body": "{\"access_token\":\"at\",\"token_type\":\"Bearer\",\"expires_in\":315360000}"
+        },
+        "tokenUrl": "https://auth.example/token",
+        "nowSecs": 1000
+      },
+      "expect": {
+        "result": "accept",
+        "fields": {
+          "accessToken": "at",
+          "expiresAt": 315361000
+        }
+      },
+      "note": "exactly the 10-year cap"
+    },
+    {
+      "id": "ei-bool",
+      "area": "token-response",
+      "setup": {
+        "response": {
+          "status": 200,
+          "headers": {
+            "content-type": "application/json"
+          },
+          "body": "{\"access_token\":\"at\",\"token_type\":\"Bearer\",\"expires_in\":true}"
+        },
+        "tokenUrl": "https://auth.example/token",
+        "nowSecs": 1000
+      },
+      "expect": {
+        "result": "refuse",
+        "kind": "invalid_expires_in",
+        "message": "invalid expires_in: unexpected type"
+      },
+      "note": "bool"
+    },
+    {
+      "id": "ei-absent",
+      "area": "token-response",
+      "setup": {
+        "response": {
+          "status": 200,
+          "headers": {
+            "content-type": "application/json"
+          },
+          "body": "{\"access_token\":\"at\",\"token_type\":\"Bearer\"}"
+        },
+        "tokenUrl": "https://auth.example/token",
+        "nowSecs": 1000
+      },
+      "expect": {
+        "result": "accept",
+        "fields": {
+          "accessToken": "at"
+        }
+      },
+      "note": "no expires_in: no expiresAt"
+    },
+    {
+      "id": "ei-zero",
+      "area": "token-response",
+      "setup": {
+        "response": {
+          "status": 200,
+          "headers": {
+            "content-type": "application/json"
+          },
+          "body": "{\"access_token\":\"at\",\"token_type\":\"Bearer\",\"expires_in\":0}"
+        },
+        "tokenUrl": "https://auth.example/token",
+        "nowSecs": 1000
+      },
+      "expect": {
+        "result": "accept",
+        "fields": {
+          "accessToken": "at",
+          "expiresAt": 1000
+        }
+      },
+      "note": "already expired. accepted with expiresAt = now (already expired); a vault should refresh again or treat it as an error."
+    },
+    {
+      "id": "body-array",
+      "area": "token-response",
+      "setup": {
+        "response": {
+          "status": 200,
+          "headers": {
+            "content-type": "application/json"
+          },
+          "body": "[]"
+        },
+        "tokenUrl": "https://auth.example/token",
+        "nowSecs": 1000
+      },
+      "expect": {
+        "result": "refuse",
+        "kind": "invalid_json",
+        "message": "invalid token response JSON"
+      },
+      "note": "non-object JSON"
+    },
+    {
+      "id": "body-number",
+      "area": "token-response",
+      "setup": {
+        "response": {
+          "status": 200,
+          "headers": {
+            "content-type": "application/json"
+          },
+          "body": "12345"
+        },
+        "tokenUrl": "https://auth.example/token",
+        "nowSecs": 1000
+      },
+      "expect": {
+        "result": "refuse",
+        "kind": "invalid_json",
+        "message": "invalid token response JSON"
+      },
+      "note": "non-object JSON"
+    },
+    {
+      "id": "body-null",
+      "area": "token-response",
+      "setup": {
+        "response": {
+          "status": 200,
+          "headers": {
+            "content-type": "application/json"
+          },
+          "body": "null"
+        },
+        "tokenUrl": "https://auth.example/token",
+        "nowSecs": 1000
+      },
+      "expect": {
+        "result": "refuse",
+        "kind": "invalid_json",
+        "message": "invalid token response JSON"
+      },
+      "note": "JSON null"
+    },
+    {
+      "id": "body-json-string",
+      "area": "token-response",
+      "setup": {
+        "response": {
+          "status": 200,
+          "headers": {
+            "content-type": "application/json"
+          },
+          "body": "\"TOKMARK7f3a-bare\""
+        },
+        "tokenUrl": "https://auth.example/token",
+        "nowSecs": 1000
+      },
+      "expect": {
+        "result": "refuse",
+        "kind": "invalid_json",
+        "message": "invalid token response JSON"
+      },
+      "note": "JSON-string body; the marker must not appear in the error"
+    },
+    {
+      "id": "body-broken",
+      "area": "token-response",
+      "setup": {
+        "response": {
+          "status": 200,
+          "headers": {
+            "content-type": "application/json"
+          },
+          "body": "{\"access_token\":\"TOKMARK7f3a-x\","
+        },
+        "tokenUrl": "https://auth.example/token",
+        "nowSecs": 1000
+      },
+      "expect": {
+        "result": "refuse",
+        "kind": "invalid_json",
+        "message": "invalid token response JSON"
+      },
+      "note": "truncated JSON; no body echo"
+    },
+    {
+      "id": "body-empty",
+      "area": "token-response",
+      "setup": {
+        "response": {
+          "status": 200,
+          "headers": {
+            "content-type": "application/json"
+          },
+          "body": ""
+        },
+        "tokenUrl": "https://auth.example/token",
+        "nowSecs": 1000
+      },
+      "expect": {
+        "result": "refuse",
+        "kind": "invalid_json",
+        "message": "invalid token response JSON"
+      },
+      "note": "empty body"
+    },
+    {
+      "id": "body-html",
+      "area": "token-response",
+      "setup": {
+        "response": {
+          "status": 502,
+          "headers": {
+            "content-type": "text/html"
+          },
+          "body": "<html>502 Bad Gateway</html>"
+        },
+        "tokenUrl": "https://auth.example/token",
+        "nowSecs": 1000
+      },
+      "expect": {
+        "result": "refuse",
+        "kind": "invalid_json",
+        "message": "invalid token response JSON"
+      },
+      "note": "proxy error page"
+    },
+    {
+      "id": "dup-access-token",
+      "area": "token-response",
+      "setup": {
+        "response": {
+          "status": 200,
+          "headers": {
+            "content-type": "application/json"
+          },
+          "body": "{\"access_token\":\"first\",\"access_token\":\"second\",\"token_type\":\"Bearer\"}"
+        },
+        "tokenUrl": "https://auth.example/token",
+        "nowSecs": 1000
+      },
+      "expect": {
+        "result": "accept",
+        "fields": {
+          "accessToken": "second"
+        }
+      },
+      "note": "duplicate keys: record which wins. serde_json: the last duplicate wins (JS JSON.parse does the same)."
+    },
+    {
+      "id": "dup-token-type",
+      "area": "token-response",
+      "setup": {
+        "response": {
+          "status": 200,
+          "headers": {
+            "content-type": "application/json"
+          },
+          "body": "{\"access_token\":\"at\",\"token_type\":\"mac\",\"token_type\":\"Bearer\"}"
+        },
+        "tokenUrl": "https://auth.example/token",
+        "nowSecs": 1000
+      },
+      "expect": {
+        "result": "accept",
+        "fields": {
+          "accessToken": "at"
+        }
+      },
+      "note": "duplicate token_type (mac, then Bearer): record which wins. last duplicate wins, so mac-then-Bearer is accepted; a stricter vault may refuse duplicate keys outright."
+    },
+    {
+      "id": "dup-refresh-token",
+      "area": "token-response",
+      "setup": {
+        "response": {
+          "status": 200,
+          "headers": {
+            "content-type": "application/json"
+          },
+          "body": "{\"access_token\":\"at\",\"refresh_token\":\"rt-a\",\"refresh_token\":\"rt-b\",\"token_type\":\"Bearer\"}"
+        },
+        "tokenUrl": "https://auth.example/token",
+        "nowSecs": 1000
+      },
+      "expect": {
+        "result": "accept",
+        "fields": {
+          "accessToken": "at",
+          "refreshToken": "rt-b"
+        }
+      },
+      "note": "duplicate refresh_token: record which wins. last duplicate wins."
+    },
+    {
+      "id": "extra-fields",
+      "area": "token-response",
+      "setup": {
+        "response": {
+          "status": 200,
+          "headers": {
+            "content-type": "application/json"
+          },
+          "body": "{\"access_token\":\"at\",\"token_type\":\"Bearer\",\"id_token\":\"x.y.z\",\"foo\":{\"bar\":1},\"refresh_token_expires_in\":99}"
+        },
+        "tokenUrl": "https://auth.example/token",
+        "nowSecs": 1000
+      },
+      "expect": {
+        "result": "accept",
+        "fields": {
+          "accessToken": "at"
+        }
+      },
+      "note": "unknown fields are ignored. id_token and other unknown fields are ignored; scope is returned only when present."
+    },
+    {
+      "id": "url-https",
+      "area": "token-url",
+      "setup": {
+        "tokenUrl": "https://auth.example/token"
+      },
+      "expect": {
+        "result": "accept",
+        "fields": {
+          "url": "https://auth.example/token",
+          "body": "grant_type=refresh_token&refresh_token=rt-x&client_id=cid"
+        },
+        "note": "refreshRequest(config with this token_url, refreshToken) result"
+      },
+      "note": "baseline"
+    },
+    {
+      "id": "url-https-upper",
+      "area": "token-url",
+      "setup": {
+        "tokenUrl": "HTTPS://AUTH.EXAMPLE/token"
+      },
+      "expect": {
+        "result": "accept",
+        "fields": {
+          "url": "HTTPS://AUTH.EXAMPLE/token",
+          "body": "grant_type=refresh_token&refresh_token=rt-x&client_id=cid"
+        },
+        "note": "refreshRequest(config with this token_url, refreshToken) result"
+      },
+      "note": "scheme/host case. returned verbatim, not normalized."
+    },
+    {
+      "id": "url-http-nonloop",
+      "area": "token-url",
+      "setup": {
+        "tokenUrl": "http://evil.example/token"
+      },
+      "expect": {
+        "result": "refuse",
+        "kind": "config_invalid",
+        "message": "token_url: must use https (http is only allowed for loopback hosts), got http://evil.example",
+        "note": "refreshRequest(config with this token_url, refreshToken) result"
+      },
+      "note": "http only for loopback"
+    },
+    {
+      "id": "url-http-127",
+      "area": "token-url",
+      "setup": {
+        "tokenUrl": "http://127.0.0.1:9/token"
+      },
+      "expect": {
+        "result": "accept",
+        "fields": {
+          "url": "http://127.0.0.1:9/token",
+          "body": "grant_type=refresh_token&refresh_token=rt-x&client_id=cid"
+        },
+        "note": "refreshRequest(config with this token_url, refreshToken) result"
+      },
+      "note": "loopback http"
+    },
+    {
+      "id": "url-http-localhost",
+      "area": "token-url",
+      "setup": {
+        "tokenUrl": "http://localhost:9/token"
+      },
+      "expect": {
+        "result": "accept",
+        "fields": {
+          "url": "http://localhost:9/token",
+          "body": "grant_type=refresh_token&refresh_token=rt-x&client_id=cid"
+        },
+        "note": "refreshRequest(config with this token_url, refreshToken) result"
+      },
+      "note": "loopback http"
+    },
+    {
+      "id": "url-http-ipv6",
+      "area": "token-url",
+      "setup": {
+        "tokenUrl": "http://[::1]:9/token"
+      },
+      "expect": {
+        "result": "accept",
+        "fields": {
+          "url": "http://[::1]:9/token",
+          "body": "grant_type=refresh_token&refresh_token=rt-x&client_id=cid"
+        },
+        "note": "refreshRequest(config with this token_url, refreshToken) result"
+      },
+      "note": "loopback http"
+    },
+    {
+      "id": "url-http-127-0-0-2",
+      "area": "token-url",
+      "setup": {
+        "tokenUrl": "http://127.0.0.2:9/token"
+      },
+      "expect": {
+        "result": "refuse",
+        "kind": "config_invalid",
+        "message": "token_url: must use https (http is only allowed for loopback hosts), got http://127.0.0.2",
+        "note": "refreshRequest(config with this token_url, refreshToken) result"
+      },
+      "note": "only 127.0.0.1/localhost/[::1] count as loopback here"
+    },
+    {
+      "id": "url-lookalike-localhost",
+      "area": "token-url",
+      "setup": {
+        "tokenUrl": "http://localhost.evil.example/token"
+      },
+      "expect": {
+        "result": "refuse",
+        "kind": "config_invalid",
+        "message": "token_url: must use https (http is only allowed for loopback hosts), got http://localhost.evil.example",
+        "note": "refreshRequest(config with this token_url, refreshToken) result"
+      },
+      "note": "look-alike"
+    },
+    {
+      "id": "url-lookalike-nipio",
+      "area": "token-url",
+      "setup": {
+        "tokenUrl": "http://127.0.0.1.nip.io/token"
+      },
+      "expect": {
+        "result": "refuse",
+        "kind": "config_invalid",
+        "message": "token_url: must use https (http is only allowed for loopback hosts), got http://127.0.0.1.nip.io",
+        "note": "refreshRequest(config with this token_url, refreshToken) result"
+      },
+      "note": "look-alike"
+    },
+    {
+      "id": "url-data",
+      "area": "token-url",
+      "setup": {
+        "tokenUrl": "data:text/plain,x"
+      },
+      "expect": {
+        "result": "refuse",
+        "kind": "config_invalid",
+        "message": "token_url: must use https (http is only allowed for loopback hosts), got data://",
+        "note": "refreshRequest(config with this token_url, refreshToken) result"
+      },
+      "note": "data:"
+    },
+    {
+      "id": "url-javascript",
+      "area": "token-url",
+      "setup": {
+        "tokenUrl": "javascript:alert(1)"
+      },
+      "expect": {
+        "result": "refuse",
+        "kind": "config_invalid",
+        "message": "token_url: must use https (http is only allowed for loopback hosts), got javascript://",
+        "note": "refreshRequest(config with this token_url, refreshToken) result"
+      },
+      "note": "javascript:"
+    },
+    {
+      "id": "url-ftp",
+      "area": "token-url",
+      "setup": {
+        "tokenUrl": "ftp://auth.example/token"
+      },
+      "expect": {
+        "result": "refuse",
+        "kind": "config_invalid",
+        "message": "token_url: must use https (http is only allowed for loopback hosts), got ftp://auth.example",
+        "note": "refreshRequest(config with this token_url, refreshToken) result"
+      },
+      "note": "ftp:"
+    },
+    {
+      "id": "url-relative",
+      "area": "token-url",
+      "setup": {
+        "tokenUrl": "/token"
+      },
+      "expect": {
+        "result": "refuse",
+        "kind": "config_invalid",
+        "message": "token_url: must be an absolute URL",
+        "note": "refreshRequest(config with this token_url, refreshToken) result"
+      },
+      "note": "relative"
+    },
+    {
+      "id": "url-userinfo",
+      "area": "token-url",
+      "setup": {
+        "tokenUrl": "https://user:pw@auth.example/token"
+      },
+      "expect": {
+        "result": "refuse",
+        "kind": "config_invalid",
+        "message": "token_url: must not contain userinfo",
+        "note": "refreshRequest(config with this token_url, refreshToken) result"
+      },
+      "note": "userinfo"
+    },
+    {
+      "id": "url-userinfo-user",
+      "area": "token-url",
+      "setup": {
+        "tokenUrl": "https://user@auth.example/token"
+      },
+      "expect": {
+        "result": "refuse",
+        "kind": "config_invalid",
+        "message": "token_url: must not contain userinfo",
+        "note": "refreshRequest(config with this token_url, refreshToken) result"
+      },
+      "note": "username only"
+    },
+    {
+      "id": "url-userinfo-empty",
+      "area": "token-url",
+      "setup": {
+        "tokenUrl": "https://:@auth.example/token"
+      },
+      "expect": {
+        "result": "accept",
+        "fields": {
+          "url": "https://:@auth.example/token",
+          "body": "grant_type=refresh_token&refresh_token=rt-x&client_id=cid"
+        },
+        "note": "refreshRequest(config with this token_url, refreshToken) result"
+      },
+      "note": "empty userinfo: the URL parser drops it. accepted and returned verbatim (\"https://:@\u2026\"); fetch/URL drops the empty userinfo, so no credentials are sent."
+    },
+    {
+      "id": "url-userinfo-loopback",
+      "area": "token-url",
+      "setup": {
+        "tokenUrl": "http://a:b@127.0.0.1:9/token"
+      },
+      "expect": {
+        "result": "refuse",
+        "kind": "config_invalid",
+        "message": "token_url: must not contain userinfo",
+        "note": "refreshRequest(config with this token_url, refreshToken) result"
+      },
+      "note": "userinfo on loopback"
+    },
+    {
+      "id": "echo-error-description-long",
+      "area": "error-echo",
+      "setup": {
+        "response": {
+          "status": 400,
+          "headers": {
+            "content-type": "application/json"
+          },
+          "body": "{\"error\":\"invalid_grant\",\"error_description\":\"TOKMARK7f3a-\u00e9\\u0001x\u00e9\\u0001x\u00e9\\u0001x\u00e9\\u0001x\u00e9\\u0001x\u00e9\\u0001x\u00e9\\u0001x\u00e9\\u0001x\u00e9\\u0001x\u00e9\\u0001x\u00e9\\u0001x\u00e9\\u0001x\u00e9\\u0001x\u00e9\\u0001x\u00e9\\u0001x\u00e9\\u0001x\u00e9\\u0001x\u00e9\\u0001x\u00e9\\u0001x\u00e9\\u0001x\u00e9\\u0001x\u00e9\\u0001x\u00e9\\u0001x\u00e9\\u0001x\u00e9\\u0001x\u00e9\\u0001x\u00e9\\u0001x\u00e9\\u0001x\u00e9\\u0001x\u00e9\\u0001x\u00e9\\u0001x\u00e9\\u0001x\u00e9\\u0001x\u00e9\\u0001x\u00e9\\u0001x\u00e9\\u0001x\u00e9\\u0001x\u00e9\\u0001x\u00e9\\u0001x\u00e9\\u0001x\u00e9\\u0001x\u00e9\\u0001x\u00e9\\u0001x\u00e9\\u0001x\u00e9\\u0001x\u00e9\\u0001x\u00e9\\u0001x\u00e9\\u0001x\u00e9\\u0001x\u00e9\\u0001x\u00e9\\u0001x\u00e9\\u0001x\u00e9\\u0001x\u00e9\\u0001x\u00e9\\u0001x\u00e9\\u0001x\u00e9\\u0001x\u00e9\\u0001x\u00e9\\u0001x\u00e9\\u0001x\u00e9\\u0001x\u00e9\\u0001x\u00e9\\u0001x\u00e9\\u0001x\u00e9\\u0001x\u00e9\\u0001x\u00e9\\u0001x\u00e9\\u0001x\u00e9\\u0001x\u00e9\\u0001x\u00e9\\u0001x\u00e9\\u0001x\u00e9\\u0001x\u00e9\\u0001x\u00e9\\u0001x\u00e9\\u0001x\u00e9\\u0001x\u00e9\\u0001x\u00e9\\u0001x\u00e9\\u0001x\u00e9\\u0001x\u00e9\\u0001x\u00e9\\u0001x\u00e9\\u0001x\u00e9\\u0001x\u00e9\\u0001x\u00e9\\u0001x\u00e9\\u0001x\u00e9\\u0001x\u00e9\\u0001x\u00e9\\u0001x\u00e9\\u0001x\u00e9\\u0001x\u00e9\\u0001x\u00e9\\u0001x\u00e9\\u0001x\u00e9\\u0001x\u00e9\\u0001x\u00e9\\u0001x\u00e9\\u0001x<script>\"}"
+        },
+        "tokenUrl": "https://auth.example/token",
+        "nowSecs": 1000
+      },
+      "expect": {
+        "result": "refuse",
+        "kind": "idp_error",
+        "message": "invalid_grant: TOKMARK7f3a-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx<script>"
+      },
+      "note": "error_description cut to \u2264128 printable ASCII (jerk-oauth: 120); non-printable and non-ASCII dropped. the message keeps only printable ASCII and is cut to 120 characters (\"invalid_grant: \" + description)."
+    },
+    {
+      "id": "echo-error-marker",
+      "area": "error-echo",
+      "setup": {
+        "response": {
+          "status": 400,
+          "headers": {
+            "content-type": "application/json"
+          },
+          "body": "{\"error\":\"TOKMARK7f3a-err\"}"
+        },
+        "tokenUrl": "https://auth.example/token",
+        "nowSecs": 1000
+      },
+      "expect": {
+        "result": "refuse",
+        "kind": "idp_error",
+        "message": "TOKMARK7f3a-err"
+      },
+      "note": "the IdP error code is passed through (sanitized); the vault should not log it raw"
+    },
+    {
+      "id": "echo-reflected-token",
+      "area": "error-echo",
+      "setup": {
+        "response": {
+          "status": 400,
+          "headers": {
+            "content-type": "application/json"
+          },
+          "body": "{\"error\":\"invalid_grant\",\"error_description\":\"bad refresh_token TOKMARK7f3a-rt1\"}"
+        },
+        "tokenUrl": "https://auth.example/token",
+        "nowSecs": 1000
+      },
+      "expect": {
+        "result": "refuse",
+        "kind": "idp_error",
+        "message": "invalid_grant: bad refresh_token TOKMARK7f3a-rt1"
+      },
+      "note": "an IdP that reflects the refresh token in error_description: jerk-oauth passes it through (bounded); the vault must not log or show it"
+    },
+    {
+      "id": "echo-token-type",
+      "area": "error-echo",
+      "setup": {
+        "response": {
+          "status": 200,
+          "headers": {
+            "content-type": "application/json"
+          },
+          "body": "{\"access_token\":\"at\",\"token_type\":\"TOKMARK7f3a-tt\"}"
+        },
+        "tokenUrl": "https://auth.example/token",
+        "nowSecs": 1000
+      },
+      "expect": {
+        "result": "refuse",
+        "kind": "invalid_token_type",
+        "message": "token_type must be Bearer"
+      },
+      "note": "token_type value must not be echoed"
+    },
+    {
+      "id": "echo-expires-in",
+      "area": "error-echo",
+      "setup": {
+        "response": {
+          "status": 200,
+          "headers": {
+            "content-type": "application/json"
+          },
+          "body": "{\"access_token\":\"at\",\"token_type\":\"Bearer\",\"expires_in\":\"TOKMARK7f3a\"}"
+        },
+        "tokenUrl": "https://auth.example/token",
+        "nowSecs": 1000
+      },
+      "expect": {
+        "result": "refuse",
+        "kind": "invalid_expires_in",
+        "message": "invalid expires_in: must be an integer"
+      },
+      "note": "expires_in value must not be echoed"
+    },
+    {
+      "id": "rot-rotated",
+      "area": "rotation",
+      "setup": {
+        "fakeAs": "b4-oauth-fake-as.mjs /token",
+        "mode": {
+          "rotate": true,
+          "live": ["TOKMARK7f3a-rt1"]
+        },
+        "request": {
+          "method": "POST",
+          "contentType": "application/x-www-form-urlencoded",
+          "body": "grant_type=refresh_token&refresh_token=TOKMARK7f3a-rt1&client_id=cid"
+        },
+        "response": {
+          "status": 200,
+          "headers": {
+            "content-type": "application/json"
+          },
+          "body": "{\"access_token\":\"TOKMARK7f3a-at2\",\"refresh_token\":\"TOKMARK7f3a-rt2\",\"expires_in\":60,\"token_type\":\"Bearer\"}"
+        },
+        "nowSecs": 2000
+      },
+      "expect": {
+        "result": "accept",
+        "fields": {
+          "accessToken": "TOKMARK7f3a-at2",
+          "refreshToken": "TOKMARK7f3a-rt2",
+          "expiresAt": 2060
+        }
+      },
+      "note": "the new refresh_token is surfaced; the caller must store it and drop rt1"
+    },
+    {
+      "id": "rot-reused",
+      "area": "rotation",
+      "setup": {
+        "fakeAs": "b4-oauth-fake-as.mjs /token",
+        "mode": {
+          "rotate": true,
+          "live": ["TOKMARK7f3a-rt2"]
+        },
+        "request": {
+          "method": "POST",
+          "contentType": "application/x-www-form-urlencoded",
+          "body": "grant_type=refresh_token&refresh_token=TOKMARK7f3a-rt1&client_id=cid"
+        },
+        "response": {
+          "status": 400,
+          "headers": {
+            "content-type": "application/json"
+          },
+          "body": "{\"error\":\"invalid_grant\",\"error_description\":\"refresh token reused\"}"
+        },
+        "nowSecs": 2000
+      },
+      "expect": {
+        "result": "refuse",
+        "kind": "idp_error",
+        "message": "invalid_grant: refresh token reused"
+      },
+      "note": "reuse of a rotated token \u2192 IdP invalid_grant \u2192 refuse with idp_error; the vault should treat the grant as revoked"
+    },
+    {
+      "id": "rot-no-new-token",
+      "area": "rotation",
+      "setup": {
+        "fakeAs": "b4-oauth-fake-as.mjs /token",
+        "mode": {
+          "rotate": false,
+          "live": ["TOKMARK7f3a-rt2"]
+        },
+        "request": {
+          "method": "POST",
+          "contentType": "application/x-www-form-urlencoded",
+          "body": "grant_type=refresh_token&refresh_token=TOKMARK7f3a-rt2&client_id=cid"
+        },
+        "response": {
+          "status": 200,
+          "headers": {
+            "content-type": "application/json"
+          },
+          "body": "{\"access_token\":\"TOKMARK7f3a-at3\",\"expires_in\":60,\"token_type\":\"Bearer\"}"
+        },
+        "nowSecs": 2000
+      },
+      "expect": {
+        "result": "accept",
+        "fields": {
+          "accessToken": "TOKMARK7f3a-at3",
+          "expiresAt": 2060
+        }
+      },
+      "note": "no refresh_token in the response: jerk-oauth returns no refreshToken field (it is stateless); the caller keeps the old refresh token per RFC 6749 \u00a76"
+    }
+  ]
+}

@@ -332,9 +332,10 @@ export class Preparer {
     if (!NAME.test(base) || grantName.length > 128) {
       throw new Refused('EINVAL', 'name must be a record name');
     }
-    const got = tokens(
+    const got = await tokens(
       { status: 200, headers: [], body: response },
-      await this.vault.scrubbers.get(this.ns)
+      await this.vault.scrubbers.get(this.ns),
+      this.vault.now()
     );
     checkValue(got.access);
     if (got.refresh !== null) checkValue(got.refresh);
