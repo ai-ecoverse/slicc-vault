@@ -46,7 +46,7 @@
     "release": "semantic-release"
   },
   "devDependencies": {
-    "@ai-ecoverse/jerk-oauth": "0.15.1",
+    "@ai-ecoverse/jerk-oauth": "0.15.2",
     "@ai-ecoverse/slicc-scrub": "1.0.0",
     "@ai-ecoverse/slicc-shared-web": "1.13.1",
     "@biomejs/biome": "2.5.15",
