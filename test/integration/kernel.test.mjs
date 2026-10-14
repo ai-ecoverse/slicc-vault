@@ -17,7 +17,7 @@ const VALUES = {
 };
 const POLICY_TEXT = `[exec]
 ANY_KEY = true
-GH_TOKEN = { argv = [["/usr/bin/printenv", "GH_TOKEN"]] }
+GH_TOKEN = { argv = [["/usr/bin/printenv", "GH_TOKEN"], ["/usr/local/bin/show.sh"]] }
 SHELL_KEY = { shell = true }
 SCRIPT_KEY = { argv = [["/usr/local/bin/run.sh"], ["/tmp/run.sh"]] }
 `;
@@ -93,8 +93,9 @@ async function kernelFor(t, page, users, consumed = []) {
       '-c',
       `mkdir -p /usr/local/bin
 printf '#!/usr/bin/bash\\nprintf %%s "$SCRIPT_KEY" > "$1"\\n' > /usr/local/bin/run.sh
+printf '#!/usr/bin/bash\\nprintf %%s "$GH_TOKEN" > "$1"\\nprintf "%%s\\\\n" "$GH_TOKEN"\\n' > /usr/local/bin/show.sh
 cp /usr/local/bin/run.sh /tmp/run.sh
-chmod 755 /usr/local/bin/run.sh /tmp/run.sh
+chmod 755 /usr/local/bin/run.sh /usr/local/bin/show.sh /tmp/run.sh
 ln -s /usr/bin/bash /tmp/l`,
     ],
     { cwd: '/' }
@@ -141,9 +142,15 @@ test('KS-8: exec true reveals a value to a trusted catalog program', async (t) =
 
 test('KS-8: an argv grant reveals the value, and S2 shows the placeholder on stdout', async (t) => {
   const { page, placeholders, consumed, kernel } = await enforced(t);
-  const shown = await spawn(kernel, placeholders, ['GH_TOKEN'], ['/usr/bin/printenv', 'GH_TOKEN']);
+  const shown = await spawn(
+    kernel,
+    placeholders,
+    ['GH_TOKEN'],
+    ['/usr/local/bin/show.sh', '/tmp/shown']
+  );
   assert.equal(shown.status, 0, shown.stderr);
   assert.equal(shown.stdout, `${placeholders.GH_TOKEN}\n`);
+  assert.equal(await text(kernel, '/tmp/shown'), VALUES.GH_TOKEN);
   assert.deepEqual([consumed.length, consumed[0].error], [1, undefined]);
   assert.equal((await audited(page, 'GH_TOKEN')).consumed, true);
 });
