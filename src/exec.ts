@@ -184,12 +184,14 @@ function shown(argv: string[], redact: (text: string) => string): string {
   return text.length > ARGV_SHOWN ? `${text.slice(0, ARGV_SHOWN - 1)}…` : text;
 }
 
+export const ENFORCE = 'kernel users must be enforce';
+
 function fail(why: string): never {
   throw new Refused('EACCES', `ticket refused: ${why}`);
 }
 
 function matching(found: Ticket, req: Fields, now: number): void {
-  const stamp = (req.stamp ?? {}) as Partial<Stamp>;
+  const stamp = req.stamp as Partial<Stamp>;
   const argv = Array.isArray(req.argv) ? req.argv : null;
   if (now >= found.expiresAt) fail('expired');
   if (stamp.ppid !== found.pid) fail("the exec'ing process isn't a child of the one that asked");
@@ -247,6 +249,7 @@ export class Exec {
   }
 
   async materialize(ns: string, req: Fields, stamp: Stamp): Promise<Fields> {
+    if (stamp.users !== 'enforce') throw new Refused('EACCES', ENFORCE);
     this.sweep(this.vault.now());
     const ask = asked(req);
     const policy = await this.vault.loadPolicy(ns);
@@ -315,6 +318,7 @@ export class Exec {
     const found = this.tickets.get(id);
     this.tickets.delete(id);
     if (!found || found.ns !== ns) return fail('unknown or already used');
+    if ((req.stamp as Partial<Stamp> | undefined)?.users !== 'enforce') fail(ENFORCE);
     matching(found, req, this.vault.now());
     granted(await this.vault.loadPolicy(ns), found, chainOf(found, req));
     const key = this.vault.keyring.key;

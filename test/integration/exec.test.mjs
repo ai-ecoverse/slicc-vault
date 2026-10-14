@@ -11,8 +11,8 @@ const VALUES = {
   SHELL_KEY: 'fake-value-shell-0003',
   PLAIN_KEY: 'fake-value-plain-0004',
 };
-const PARENT = { pid: 40, ppid: 1, uid: 1000, gid: 1000, tag: 'cone' };
-const CHILD = { pid: 41, ppid: 40, uid: 1000, gid: 1000, tag: 'cone' };
+const PARENT = { pid: 40, ppid: 1, uid: 1000, gid: 1000, tag: 'cone', users: 'enforce' };
+const CHILD = { pid: 41, ppid: 40, uid: 1000, gid: 1000, tag: 'cone', users: 'enforce' };
 
 async function ready(t, limits = '') {
   const page = await embedder(t);
