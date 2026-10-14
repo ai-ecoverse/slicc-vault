@@ -123,19 +123,33 @@ const audited = async (page, name) =>
     (e) => e.type === 'materialize' && e.name === name
   );
 
-test('KS-8 end to end: the kernel consumes vault tickets, swaps the values in, and scrubs the child', async (t) => {
+async function enforced(t) {
   const { page, placeholders } = await vault(t);
   const consumed = [];
   const kernel = await kernelFor(t, page, 'enforce', consumed);
+  return { page, placeholders, consumed, kernel };
+}
 
+const text = async (kernel, path) => new TextDecoder().decode(await kernel.readFile(path));
+
+test('KS-8: exec true reveals a value to a trusted catalog program', async (t) => {
+  const { page, placeholders, kernel } = await enforced(t);
   const plain = await spawn(kernel, placeholders, ['ANY_KEY'], ['/usr/bin/true']);
   assert.equal(plain.status, 0, plain.stderr);
   assert.equal((await audited(page, 'ANY_KEY')).consumed, true);
+});
 
+test('KS-8: an argv grant reveals the value, and S2 shows the placeholder on stdout', async (t) => {
+  const { page, placeholders, consumed, kernel } = await enforced(t);
   const shown = await spawn(kernel, placeholders, ['GH_TOKEN'], ['/usr/bin/printenv', 'GH_TOKEN']);
   assert.equal(shown.status, 0, shown.stderr);
   assert.equal(shown.stdout, `${placeholders.GH_TOKEN}\n`);
+  assert.deepEqual([consumed.length, consumed[0].error], [1, undefined]);
+  assert.equal((await audited(page, 'GH_TOKEN')).consumed, true);
+});
 
+test('KS-8: a shell grant swaps the value in, and S2 scrubs its raw and encoded forms', async (t) => {
+  const { placeholders, kernel } = await enforced(t);
   const shell = await spawn(
     kernel,
     placeholders,
@@ -148,75 +162,79 @@ test('KS-8 end to end: the kernel consumes vault tickets, swaps the values in, a
   );
   assert.equal(shell.status, 0, shell.stderr);
   assert.equal(shell.stdout, `[redacted:SHELL_KEY]\n${placeholders.SHELL_KEY}\n`);
-  assert.equal(new TextDecoder().decode(await kernel.readFile('/tmp/shell')), VALUES.SHELL_KEY);
+  assert.equal(await text(kernel, '/tmp/shell'), VALUES.SHELL_KEY);
+});
 
-  const trustedScript = await spawn(
+test('KS-8: an argv grant reveals the value to a trusted script, not to its untrusted copy', async (t) => {
+  const { placeholders, consumed, kernel } = await enforced(t);
+  const trusted = await spawn(
     kernel,
     placeholders,
     ['SCRIPT_KEY'],
     ['/usr/local/bin/run.sh', '/tmp/script-out']
   );
-  assert.equal(trustedScript.status, 0, trustedScript.stderr);
-  assert.equal(
-    new TextDecoder().decode(await kernel.readFile('/tmp/script-out')),
-    VALUES.SCRIPT_KEY
-  );
-
-  const refused = [
-    [
-      'a symlink to bash under exec true',
-      ['ANY_KEY'],
-      ['/tmp/l', '-c', 'true'],
-      /ANY_KEY isn't revealed to \/usr\/bin\/bash/,
-    ],
-    [
-      'an untrusted copy of the script',
-      ['SCRIPT_KEY'],
-      ['/tmp/run.sh', '/tmp/copy-out'],
-      /can be changed by a non-root user/,
-    ],
-  ];
-  for (const [why, names, argv, reason] of refused) {
-    const before = consumed.length;
-    const got = await spawn(kernel, placeholders, names, argv);
-    assert.equal(got.status, 126, why);
-    assert.match(got.stderr, /"ticket":"[0-9a-f]{32}"/, why);
-    assert.equal(consumed.length, before + 1, why);
-    assert.match(consumed.at(-1).error, reason, why);
-    assert.ok(!got.stdout.includes('fake-value'), why);
-  }
-  assert.deepEqual(consumed.at(-2).resolved, '/usr/bin/bash');
+  assert.equal(trusted.status, 0, trusted.stderr);
+  assert.equal(await text(kernel, '/tmp/script-out'), VALUES.SCRIPT_KEY);
+  const copy = await spawn(kernel, placeholders, ['SCRIPT_KEY'], ['/tmp/run.sh', '/tmp/copy-out']);
+  assert.equal(copy.status, 126);
+  assert.match(copy.stderr, /"ticket":"[0-9a-f]{32}"/);
   assert.equal(consumed.at(-1).trusted, false);
-  const dumper = await spawn(kernel, placeholders, ['ANY_KEY'], ['/usr/bin/printenv', 'ANY_KEY']);
-  assert.equal(dumper.status, 126);
-  assert.match(dumper.stderr, /"code":"EACCES".*printenv/);
-  const before = consumed.length;
-  const wrongArgv = await spawn(
+  assert.match(consumed.at(-1).error, /can be changed by a non-root user/);
+  assert.equal(await kernel.readFile('/tmp/copy-out').catch(() => null), null);
+});
+
+test('KS-8: a symlink to bash is refused under exec true, by the program the kernel resolved', async (t) => {
+  const { placeholders, consumed, kernel } = await enforced(t);
+  const got = await spawn(kernel, placeholders, ['ANY_KEY'], ['/tmp/l', '-c', 'true']);
+  assert.equal(got.status, 126);
+  assert.match(got.stderr, /"ticket":"[0-9a-f]{32}"/);
+  assert.equal(consumed.length, 1);
+  assert.equal(consumed[0].resolved, '/usr/bin/bash');
+  assert.match(consumed[0].error, /ANY_KEY isn't revealed to \/usr\/bin\/bash/);
+});
+
+test('KS-8: an env dumper under exec true gets no ticket', async (t) => {
+  const { placeholders, consumed, kernel } = await enforced(t);
+  const got = await spawn(kernel, placeholders, ['ANY_KEY'], ['/usr/bin/printenv', 'ANY_KEY']);
+  assert.equal(got.status, 126);
+  assert.match(got.stderr, /"code":"EACCES".*printenv/);
+  assert.equal(consumed.length, 0);
+  assert.ok(!got.stdout.includes('fake-value'));
+});
+
+test('KS-8: another argv than the booked one is refused by the kernel before any consume', async (t) => {
+  const { placeholders, consumed, kernel } = await enforced(t);
+  const got = await spawn(
     kernel,
     placeholders,
     ['GH_TOKEN'],
     ['/usr/bin/printenv', 'GH_TOKEN', 'HOME'],
     ['/usr/bin/printenv', 'GH_TOKEN']
   );
-  assert.equal(wrongArgv.status, 126);
-  assert.match(wrongArgv.stderr, /"ticket":"[0-9a-f]{32}"/);
-  assert.equal(consumed.length, before);
-  assert.equal(await kernel.readFile('/tmp/copy-out').catch(() => null), null);
+  assert.equal(got.status, 126);
+  assert.match(got.stderr, /"ticket":"[0-9a-f]{32}"/);
+  assert.equal(consumed.length, 0);
 });
 
-test('KS-8 end to end: with kernel users off nothing is trusted, so exec true reveals nothing', async (t) => {
+test('KS-8: with kernel users off nothing is trusted, so exec true reveals nothing', async (t) => {
   const { page, placeholders } = await vault(t);
   const consumed = [];
   const kernel = await kernelFor(t, page, 'off', consumed);
   const got = await spawn(kernel, placeholders, ['ANY_KEY'], ['/usr/bin/true']);
   assert.equal(got.status, 126);
   assert.deepEqual([consumed[0].trusted, /non-root user/.test(consumed[0].error)], [false, true]);
+});
+
+test('KS-8: with kernel users off a shell grant still swaps the value in', async (t) => {
+  const { page, placeholders } = await vault(t);
+  const kernel = await kernelFor(t, page, 'off');
   const shell = await spawn(
     kernel,
     placeholders,
     ['SHELL_KEY'],
-    ['/usr/bin/bash', '-c', 'printf "%s\\n" "$SHELL_KEY"']
+    ['/usr/bin/bash', '-c', 'printf %s "$SHELL_KEY" > /tmp/off; printf "%s\\n" "$SHELL_KEY"']
   );
   assert.equal(shell.status, 0, shell.stderr);
   assert.equal(shell.stdout, `${placeholders.SHELL_KEY}\n`);
+  assert.equal(await text(kernel, '/tmp/off'), VALUES.SHELL_KEY);
 });
