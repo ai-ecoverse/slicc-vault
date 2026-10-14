@@ -197,6 +197,13 @@ test('the /dev/sealed test op gives the injector verdict', async (t) => {
   );
   const no = await verdict('https://api.example.com/v1/items', 'DELETE');
   assert.equal(no.verdict, 'refuse');
+  const off = await page.evaluate(() =>
+    window.harness.sealed(
+      { v: 1, op: 'test', name: 'TOKEN_A', url: 'https://api.example.com/v1/items', method: 'GET' },
+      { pid: 42, ppid: 1, uid: 1000, gid: 1000, tag: 'cone', users: 'off' }
+    )
+  );
+  assert.deepEqual([off.verdict, off.reason], ['refuse', 'kernel users must be enforce']);
 });
 
 test('lock has no effect on an auto-unlocking vault, which keeps injecting and scrubbing', async (t) => {

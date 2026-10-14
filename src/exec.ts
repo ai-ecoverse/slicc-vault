@@ -184,7 +184,7 @@ function shown(argv: string[], redact: (text: string) => string): string {
   return text.length > ARGV_SHOWN ? `${text.slice(0, ARGV_SHOWN - 1)}…` : text;
 }
 
-export const ENFORCE = 'kernel users must be enforce';
+const ENFORCE = 'kernel users must be enforce';
 
 function fail(why: string): never {
   throw new Refused('EACCES', `ticket refused: ${why}`);

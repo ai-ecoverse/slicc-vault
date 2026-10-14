@@ -260,6 +260,7 @@ class Injector {
   }
 
   async run(): Promise<Prepared> {
+    if (this.input.owner.users !== 'enforce') throw new Refusal('kernel users must be enforce');
     this.checkTarget();
     const all = this.input.head.headers.flatMap(([, value]) => {
       const basic = /^Basic\s+(\S+)$/i.exec(value);

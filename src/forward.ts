@@ -2,7 +2,6 @@ import type { Scrubber, Stream } from '@ai-ecoverse/slicc-scrub';
 import type { ExitName } from './contract.ts';
 import { request, transact } from './db.ts';
 import { Refused } from './errors.ts';
-import { ENFORCE } from './exec.ts';
 import { type Head, type Prepared, prepare, type Traits } from './inject.ts';
 import { audit, records, type VaultRecord } from './records.ts';
 import { loadRegistered } from './rules.ts';
@@ -140,7 +139,6 @@ export async function forward(
   const exit = checkExit(fields.exit);
   const traits = checkTraits(fields.rawTraits);
   const body = bodyOf(fields.body);
-  if (owner.users !== 'enforce') return { refused: { status: 403, reason: ENFORCE } };
   const [held, registered] = await Promise.all([
     records(vault.db, ns),
     loadRegistered(vault.db, ns),
