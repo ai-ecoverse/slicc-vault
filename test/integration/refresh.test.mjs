@@ -7,7 +7,7 @@ const { embedder } = await setup();
 const B4 = JSON.parse(
   await readFile(new URL('./fixtures/b4-refresh-cases.json', import.meta.url), 'utf8')
 ).cases;
-const OWNER = { pid: 5, ppid: 1, uid: 1000, gid: 1000, tag: 'cone' };
+const OWNER = { pid: 5, ppid: 1, uid: 1000, gid: 1000, tag: 'cone', users: 'enforce' };
 
 async function connected(t) {
   const page = await embedder(t);

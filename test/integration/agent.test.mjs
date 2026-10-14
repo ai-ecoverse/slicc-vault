@@ -7,7 +7,7 @@ const { embedder } = await setup();
 
 const VALUE_A = 'fake-value-0001-aaaa';
 const VALUE_M = 'fake-mcp-cred-0003-mmmm';
-const OWNER = { pid: 9, ppid: 1, uid: 1000, gid: 1000, tag: 'cone' };
+const OWNER = { pid: 9, ppid: 1, uid: 1000, gid: 1000, tag: 'cone', users: 'enforce' };
 const SERVER = 'http://8080.kernel.localhost/mcp';
 
 async function ready(t) {
@@ -240,4 +240,22 @@ test('the agent role cannot use page ops, and pages cannot use agent ops', async
   assert.equal(fromPage.error.code, 'ENOTSUP');
   const seen = await page.evaluate(() => JSON.stringify(window.harness.seen));
   assert.ok(!seen.includes(VALUE_M));
+});
+
+test('a kernel request to a registered MCP server gets no credential while kernel users is not enforce', async (t) => {
+  const { page, m } = await ready(t);
+  await page.evaluate(
+    (url) =>
+      window.harness.ask('endpoints', { mcp: [{ server: 'docs', url, names: ['DOCS_MCP'] }] }),
+    SERVER
+  );
+  const sent = await page.evaluate((f) => window.harness.forward(f), {
+    head: { method: 'POST', url: `${SERVER}/call`, headers: [['Authorization', `Bearer ${m}`]] },
+    body: '{}',
+    owner: { ...OWNER, users: 'off' },
+    exit: 'page',
+    rawTraits: {},
+  });
+  assert.deepEqual(sent.reply.refused, { status: 403, reason: 'kernel users must be enforce' });
+  assert.ok(!JSON.stringify(sent).includes(VALUE_M));
 });

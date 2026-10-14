@@ -159,7 +159,7 @@ function ask(op, fields = {}) {
   });
 }
 
-const stamp = { pid: 42, ppid: 1, uid: 1000, gid: 1000, tag: 'cone' };
+const stamp = { pid: 42, ppid: 1, uid: 1000, gid: 1000, tag: 'cone', users: 'enforce' };
 
 async function sealed(req, as = stamp) {
   return (await call('sealed', { req, stamp: as })).reply;

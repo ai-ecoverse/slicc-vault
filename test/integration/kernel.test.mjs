@@ -223,25 +223,28 @@ test('KS-8: another argv than the booked one is refused by the kernel before any
   assert.equal(consumed.length, 0);
 });
 
-test('KS-8: with kernel users off nothing is trusted, so exec true reveals nothing', async (t) => {
+test('KS-8: with kernel users off, exec true gets no ticket', async (t) => {
   const { page, placeholders } = await vault(t);
   const consumed = [];
   const kernel = await kernelFor(t, page, 'off', consumed);
   const got = await spawn(kernel, placeholders, ['ANY_KEY'], ['/usr/bin/true']);
   assert.equal(got.status, 126);
-  assert.deepEqual([consumed[0].trusted, /non-root user/.test(consumed[0].error)], [false, true]);
+  assert.match(got.stderr, /kernel users must be enforce/);
+  assert.equal(consumed.length, 0);
 });
 
-test('KS-8: with kernel users off a shell grant still swaps the value in', async (t) => {
+test('KS-8: with kernel users off even a shell grant reveals nothing', async (t) => {
   const { page, placeholders } = await vault(t);
-  const kernel = await kernelFor(t, page, 'off');
+  const consumed = [];
+  const kernel = await kernelFor(t, page, 'off', consumed);
   const shell = await spawn(
     kernel,
     placeholders,
     ['SHELL_KEY'],
-    ['/usr/bin/bash', '-c', 'printf %s "$SHELL_KEY" > /tmp/off; printf "%s\\n" "$SHELL_KEY"']
+    ['/usr/bin/bash', '-c', 'printf %s "$SHELL_KEY" > /tmp/off']
   );
-  assert.equal(shell.status, 0, shell.stderr);
-  assert.equal(shell.stdout, `${placeholders.SHELL_KEY}\n`);
-  assert.equal(await text(kernel, '/tmp/off'), VALUES.SHELL_KEY);
+  assert.equal(shell.status, 126);
+  assert.match(shell.stderr, /kernel users must be enforce/);
+  assert.equal(consumed.length, 0);
+  assert.equal(await kernel.readFile('/tmp/off').catch(() => null), null);
 });

@@ -7,7 +7,7 @@ const { embedder } = await setup();
 
 const VALUE_A = 'fake-value-0001-aaaa';
 const VALUE_B = 'fake-value-0002-bbbb';
-const OWNER = { pid: 9, ppid: 1, uid: 1000, gid: 1000, tag: 'cone' };
+const OWNER = { pid: 9, ppid: 1, uid: 1000, gid: 1000, tag: 'cone', users: 'enforce' };
 
 async function ready(t, extra = '') {
   const page = await embedder(t);
@@ -214,4 +214,19 @@ test('lock has no effect on an auto-unlocking vault, which keeps injecting and s
   assert.ok((await send(page, fields)).reply.head);
   const red = await page.evaluate((v) => window.harness.ask('redact', { texts: [v] }), VALUE_A);
   assert.deepEqual(red.texts, [a]);
+});
+
+test('forward injects nothing while kernel users is not enforce', async (t) => {
+  const { page, a } = await ready(t);
+  for (const users of ['off', 'report', undefined]) {
+    const { users: _users, ...bare } = OWNER;
+    const { reply } = await send(page, {
+      head: head('https://api.example.com/v1/items', [['Authorization', `Bearer ${a}`]]),
+      owner: users ? { ...bare, users } : bare,
+      exit: 'page',
+      rawTraits: {},
+    });
+    assert.deepEqual(reply.refused, { status: 403, reason: 'kernel users must be enforce' });
+    assert.ok(!JSON.stringify(reply).includes(VALUE_A));
+  }
 });
