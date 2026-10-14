@@ -48,11 +48,11 @@ export function checkOAuth(value: unknown): OAuth {
     typeof given.clientId === 'string' &&
     given.clientId.length > 0 &&
     (given.scope === undefined || typeof given.scope === 'string') &&
-    (given.resource === undefined || typeof given.resource === 'string');
+    (given.resource === undefined || resourceUrl(given.resource));
   if (!valid)
     throw new Refused(
       'EINVAL',
-      'oauth must be { tokenUrl (https, without userinfo), clientId, scope?, resource? }'
+      'oauth must be { tokenUrl (https, without userinfo), clientId, scope?, resource? (https or loopback http, without userinfo or fragment) }'
     );
   return {
     tokenUrl: url.href,
@@ -75,25 +75,48 @@ export function due(record: VaultRecord, now: number): boolean {
   );
 }
 
-export function tokenRequest(oauth: OAuth, refreshToken: string): EgressRequest {
-  const form = new URLSearchParams({
-    grant_type: 'refresh_token',
-    refresh_token: refreshToken,
-    client_id: oauth.clientId,
-  });
-  if (oauth.scope) form.set('scope', oauth.scope);
-  if (oauth.resource) form.set('resource', oauth.resource);
+export async function tokenRequest(oauth: OAuth, refreshToken: string): Promise<EgressRequest> {
+  const { request } = await import('./oauth.ts');
+  let built: { url: string; body: string };
+  try {
+    built = request({
+      token_url: oauth.tokenUrl,
+      client_id: oauth.clientId,
+      refresh_token: refreshToken,
+      ...(oauth.scope ? { scope: oauth.scope } : {}),
+      ...(oauth.resource ? { resource: oauth.resource } : {}),
+    });
+  } catch {
+    throw new Refused('EACCES', "refresh failed: the grant's oauth settings are invalid");
+  }
   return {
     method: 'POST',
-    url: oauth.tokenUrl,
+    url: built.url,
     headers: [
       ['content-type', 'application/x-www-form-urlencoded'],
       ['accept', 'application/json'],
     ],
-    body: form.toString(),
+    body: built.body,
   };
 }
 
+function resourceUrl(value: unknown): boolean {
+  if (typeof value !== 'string') return false;
+  const url = URL.parse(value);
+  const loopback = url?.protocol === 'http:' && LOOPBACK.has(url.hostname);
+  const scheme = url?.protocol === 'https:' || loopback;
+  return Boolean(
+    url &&
+      scheme &&
+      !userinfo(value) &&
+      !url.username &&
+      !url.password &&
+      !url.hash &&
+      !value.includes('#')
+  );
+}
+
+const LOOPBACK = new Set(['127.0.0.1', 'localhost', '[::1]']);
 const AUTHORITY = /^[a-z][a-z0-9+.-]*:\/*([^/?#]*)/i;
 
 export function userinfo(raw: string): boolean {
@@ -103,6 +126,7 @@ export function userinfo(raw: string): boolean {
     .replace(/\\/g, '/');
   return (AUTHORITY.exec(cleaned)?.[1] ?? '').includes('@');
 }
+const ERROR_CODE = /^[\x20\x21\x23-\x5b\x5d-\x7e]{1,128}$/;
 const SINGLE = ['access_token', 'refresh_token', 'token_type', 'expires_in'];
 
 export function topKeys(raw: string): string[] {
@@ -122,8 +146,12 @@ export function topKeys(raw: string): string[] {
   return keys;
 }
 
-export function tokens(response: EgressResponse, scrubber: Scrubber | null) {
-  const raw = typeof response.body === 'string' ? response.body : text(response.body);
+const JERK_REASONS: Record<string, string> = {
+  invalid_token_type: 'the IdP returned a token_type other than Bearer',
+  invalid_expires_in: 'the IdP returned an invalid expires_in',
+};
+
+function precheck(response: EgressResponse, raw: string, scrubber: Scrubber | null) {
   let parsed: Fields;
   try {
     const json = JSON.parse(raw);
@@ -137,7 +165,13 @@ export function tokens(response: EgressResponse, scrubber: Scrubber | null) {
   const access = parsed.access_token;
   const failed = response.status < 200 || response.status > 299 || parsed.error !== undefined;
   if (failed || typeof access !== 'string') {
-    const reason = typeof parsed.error === 'string' ? parsed.error : `status ${response.status}`;
+    const code = parsed.error;
+    const reason =
+      typeof code === 'string' && ERROR_CODE.test(code)
+        ? code
+        : parsed.error === undefined || parsed.error === null
+          ? `status ${response.status}`
+          : 'the IdP sent an unreadable error';
     throw new Refused(
       'EACCES',
       `refresh failed: ${scrubber ? scrubber.text(reason).text : reason}`
@@ -154,13 +188,37 @@ export function tokens(response: EgressResponse, scrubber: Scrubber | null) {
   ) {
     throw new Refused('EACCES', 'refresh failed: the IdP returned an invalid expires_in');
   }
-  const expires = lifetime === undefined ? null : lifetime;
   const replacement = parsed.refresh_token;
   if (replacement !== undefined && typeof replacement !== 'string') {
     throw new Refused('EACCES', 'refresh failed: the IdP returned an invalid refresh_token');
   }
-  const refresh = replacement ?? null;
-  return { access, expires, refresh };
+  return replacement as string | undefined;
+}
+
+export async function tokens(
+  response: EgressResponse,
+  scrubber: Scrubber | null,
+  now: number = Date.now()
+) {
+  const raw = typeof response.body === 'string' ? response.body : text(response.body);
+  const replacement = precheck(response, raw, scrubber);
+  const nowSecs = Math.floor(now / 1000);
+  if (!Number.isSafeInteger(nowSecs)) {
+    throw new Refused('EACCES', "refresh failed: the vault's clock is invalid");
+  }
+  const { parse } = await import('./oauth.ts');
+  let got: Awaited<ReturnType<typeof parse>>;
+  try {
+    got = parse(raw, nowSecs);
+  } catch (error) {
+    const code = String((error as { code?: unknown }).code);
+    throw new Refused(
+      'EACCES',
+      `refresh failed: ${JERK_REASONS[code] ?? 'the IdP response is invalid'}`
+    );
+  }
+  const expires = got.expiresAt === undefined ? null : got.expiresAt - nowSecs;
+  return { access: got.accessToken, expires, refresh: got.refreshToken ?? replacement ?? null };
 }
 
 export class Refresher {
@@ -242,8 +300,8 @@ export class Refresher {
     if (!this.send) throw new Refused('ENOTCONN', 'no page is connected to send the refresh');
     const dek = this.vault.keyring.use();
     const token = await decrypt(dek.key, grant.sealed, aad(grant.ns, grant.kind, grant.name));
-    const response = await this.send(ns, tokenRequest(grant.oauth as OAuth, token));
-    const got = tokens(response, await this.vault.scrubbers.get(ns));
+    const response = await this.send(ns, await tokenRequest(grant.oauth as OAuth, token));
+    const got = await tokens(response, await this.vault.scrubbers.get(ns), this.vault.now());
     const now = this.vault.now();
     const expiresAt = got.expires === null ? null : now + got.expires * 1000;
     const replaced = got.refresh !== null && got.refresh !== token ? got.refresh : undefined;

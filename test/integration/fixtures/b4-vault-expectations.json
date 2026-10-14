@@ -1,0 +1,138 @@
+{
+  "note": "the vault's outcome for each B4 case (and a +long variant with tokens long enough to seal); every difference from jerk-oauth is a stricter refusal",
+  "expect": {
+    "url-https": {
+      "sealed": true,
+      "url": "https://auth.example/token"
+    },
+    "url-https-upper": {
+      "sealed": true,
+      "url": "https://auth.example/token"
+    },
+    "url-http-nonloop": {
+      "sealed": false
+    },
+    "url-http-127": {
+      "sealed": false
+    },
+    "url-http-localhost": {
+      "sealed": false
+    },
+    "url-http-ipv6": {
+      "sealed": false
+    },
+    "url-http-127-0-0-2": {
+      "sealed": false
+    },
+    "url-lookalike-localhost": {
+      "sealed": false
+    },
+    "url-lookalike-nipio": {
+      "sealed": false
+    },
+    "url-data": {
+      "sealed": false
+    },
+    "url-javascript": {
+      "sealed": false
+    },
+    "url-ftp": {
+      "sealed": false
+    },
+    "url-relative": {
+      "sealed": false
+    },
+    "url-userinfo": {
+      "sealed": false
+    },
+    "url-userinfo-user": {
+      "sealed": false
+    },
+    "url-userinfo-empty": {
+      "sealed": false
+    },
+    "url-userinfo-loopback": {
+      "sealed": false
+    },
+    "tt-missing": "refresh failed: the IdP returned a token_type other than Bearer",
+    "tt-missing+long": "refresh failed: the IdP returned a token_type other than Bearer",
+    "tt-numeric": "refresh failed: the IdP returned a token_type other than Bearer",
+    "tt-numeric+long": "refresh failed: the IdP returned a token_type other than Bearer",
+    "tt-null": "refresh failed: the IdP returned a token_type other than Bearer",
+    "tt-null+long": "refresh failed: the IdP returned a token_type other than Bearer",
+    "tt-empty": "refresh failed: the IdP returned a token_type other than Bearer",
+    "tt-empty+long": "refresh failed: the IdP returned a token_type other than Bearer",
+    "tt-mac": "refresh failed: the IdP returned a token_type other than Bearer",
+    "tt-mac+long": "refresh failed: the IdP returned a token_type other than Bearer",
+    "tt-dpop": "refresh failed: the IdP returned a token_type other than Bearer",
+    "tt-dpop+long": "refresh failed: the IdP returned a token_type other than Bearer",
+    "tt-bearer-canonical": "values shorter than 8 bytes can't be protected from the model",
+    "tt-bearer-canonical+long": "refreshed exp",
+    "tt-bearer-lower": "values shorter than 8 bytes can't be protected from the model",
+    "tt-bearer-lower+long": "refreshed noexp",
+    "tt-bearer-upper": "values shorter than 8 bytes can't be protected from the model",
+    "tt-bearer-upper+long": "refreshed noexp",
+    "tt-bearer-padded": "refresh failed: the IdP returned a token_type other than Bearer",
+    "tt-bearer-padded+long": "refresh failed: the IdP returned a token_type other than Bearer",
+    "at-empty": "refresh failed: the IdP response is invalid",
+    "at-number": "refresh failed: status 200",
+    "at-object": "refresh failed: status 200",
+    "at-missing": "refresh failed: status 200",
+    "at-missing+long": "refresh failed: status 200",
+    "rt-empty": "values shorter than 8 bytes can't be protected from the model",
+    "rt-empty+long": "values shorter than 8 bytes can't be protected from the model",
+    "rt-number": "refresh failed: the IdP returned an invalid refresh_token",
+    "rt-number+long": "refresh failed: the IdP returned an invalid refresh_token",
+    "rt-null": "refresh failed: the IdP returned an invalid refresh_token",
+    "rt-null+long": "refresh failed: the IdP returned an invalid refresh_token",
+    "error-with-token": "refresh failed: invalid_grant",
+    "error-with-token+long": "refresh failed: invalid_grant",
+    "error-null-with-token": "refresh failed: status 200",
+    "error-null-with-token+long": "refresh failed: status 200",
+    "2xx-with-error": "refresh failed: invalid_grant",
+    "4xx-error": "refresh failed: invalid_grant",
+    "ei-string": "refresh failed: the IdP returned an invalid expires_in",
+    "ei-string+long": "refresh failed: the IdP returned an invalid expires_in",
+    "ei-float": "refresh failed: the IdP returned an invalid expires_in",
+    "ei-float+long": "refresh failed: the IdP returned an invalid expires_in",
+    "ei-negative": "refresh failed: the IdP returned an invalid expires_in",
+    "ei-negative+long": "refresh failed: the IdP returned an invalid expires_in",
+    "ei-huge": "refresh failed: the IdP returned an invalid expires_in",
+    "ei-huge+long": "refresh failed: the IdP returned an invalid expires_in",
+    "ei-too-large-int": "refresh failed: the IdP returned an invalid expires_in",
+    "ei-too-large-int+long": "refresh failed: the IdP returned an invalid expires_in",
+    "ei-cap": "values shorter than 8 bytes can't be protected from the model",
+    "ei-cap+long": "refreshed exp",
+    "ei-bool": "refresh failed: the IdP returned an invalid expires_in",
+    "ei-bool+long": "refresh failed: the IdP returned an invalid expires_in",
+    "ei-absent": "values shorter than 8 bytes can't be protected from the model",
+    "ei-absent+long": "refreshed noexp",
+    "ei-zero": "values shorter than 8 bytes can't be protected from the model",
+    "ei-zero+long": "refreshed exp",
+    "body-array": "refresh failed: status 200",
+    "body-number": "refresh failed: status 200",
+    "body-null": "refresh failed: status 200",
+    "body-json-string": "refresh failed: status 200",
+    "body-broken": "refresh failed: status 200",
+    "body-empty": "refresh failed: status 200",
+    "body-html": "refresh failed: status 502",
+    "dup-access-token": "refresh failed: the IdP returned access_token twice",
+    "dup-access-token+long": "refresh failed: the IdP returned access_token twice",
+    "dup-token-type": "refresh failed: the IdP returned token_type twice",
+    "dup-token-type+long": "refresh failed: the IdP returned token_type twice",
+    "dup-refresh-token": "refresh failed: the IdP returned refresh_token twice",
+    "dup-refresh-token+long": "refresh failed: the IdP returned refresh_token twice",
+    "extra-fields": "values shorter than 8 bytes can't be protected from the model",
+    "extra-fields+long": "refreshed noexp",
+    "echo-error-description-long": "refresh failed: invalid_grant",
+    "echo-error-marker": "refresh failed: TOKMARK7f3a-err",
+    "echo-reflected-token": "refresh failed: invalid_grant",
+    "echo-token-type": "refresh failed: the IdP returned a token_type other than Bearer",
+    "echo-token-type+long": "refresh failed: the IdP returned a token_type other than Bearer",
+    "echo-expires-in": "refresh failed: the IdP returned an invalid expires_in",
+    "echo-expires-in+long": "refresh failed: the IdP returned an invalid expires_in",
+    "rot-rotated": "refreshed, grant rotated to TOKMARK7f3a-rt2",
+    "rot-reused": "refresh failed: invalid_grant",
+    "rot-no-new-token": "refreshed, grant kept"
+  }
+}
