@@ -54,7 +54,68 @@ test('CI runs for the merge queue as well as for pull requests and main', async 
   assert.ok('merge_group' in ci.on);
   assert.ok('pull_request' in ci.on);
   assert.deepEqual(ci.on.push, { branches: ['main'] });
-  assert.deepEqual(Object.keys(ci.jobs), ['ci']);
+  assert.deepEqual(Object.keys(ci.jobs), ['runner', 'ci']);
+});
+
+test("CI picks the bench pool only for this repo's own code, and a hosted runner for forks", async () => {
+  const ci = (await workflows()).find((w) => w.name === 'ci.yml').doc;
+  const { runner, ci: job } = ci.jobs;
+  assert.equal(
+    runner['runs-on'],
+    "${{ vars.CERT_LIGHT_RUNNER || vars.CERT_RUNNER || 'ubuntu-latest' }}"
+  );
+  assert.equal(job.needs, 'runner');
+  assert.equal(job.with['runs-on'], '${{ needs.runner.outputs.runner }}');
+  const decide = new Function(
+    'context',
+    'github',
+    'core',
+    'process',
+    `return (async () => {${runner.steps[0].with.script}})();`
+  );
+  const run = async (context, entries = []) => {
+    let picked;
+    const core = {
+      setOutput: (_, v) => (picked = v),
+      summary: { addRaw: () => ({ write: async () => {} }) },
+    };
+    const github = {
+      graphql: async () => ({ repository: { mergeQueue: { entries: { nodes: entries } } } }),
+    };
+    const env = { POOL: 'cloud-run-bench' };
+    await decide(
+      { repo: { owner: 'ai-ecoverse', repo: 'slicc-vault' }, ...context },
+      github,
+      core,
+      { env }
+    );
+    return picked;
+  };
+  const pr = (full) => ({
+    eventName: 'pull_request',
+    payload: { pull_request: { head: { repo: { full_name: full } } } },
+  });
+  assert.equal(await run(pr('ai-ecoverse/slicc-vault')), 'cloud-run-bench');
+  assert.equal(await run(pr('someone/slicc-vault')), 'ubuntu-latest');
+  assert.equal(
+    await run({ eventName: 'pull_request', payload: { pull_request: { head: { repo: null } } } }),
+    'ubuntu-latest'
+  );
+  const group = {
+    eventName: 'merge_group',
+    payload: { merge_group: { base_ref: 'refs/heads/main' } },
+  };
+  assert.equal(
+    await run(group, [{ pullRequest: { number: 1, isCrossRepository: false } }]),
+    'cloud-run-bench'
+  );
+  assert.equal(
+    await run(group, [{ pullRequest: { number: 1, isCrossRepository: true } }]),
+    'ubuntu-latest'
+  );
+  assert.equal(await run(group, [{ pullRequest: null }]), 'ubuntu-latest');
+  assert.equal(await run({ eventName: 'push', ref: 'refs/heads/main' }), 'cloud-run-bench');
+  assert.equal(await run({ eventName: 'push', ref: 'refs/heads/x' }), 'ubuntu-latest');
 });
 
 test('the release workflow can still be dispatched, but only main gets past its guard', async () => {
