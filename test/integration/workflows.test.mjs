@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { readdir, readFile } from 'node:fs/promises';
 import { test } from 'node:test';
-import yaml from 'js-yaml';
+import { load } from 'js-yaml';
 import { decide } from '../../.github/runner.mjs';
 
 const dir = new URL('../../.github/workflows/', import.meta.url);
@@ -14,7 +14,7 @@ async function workflows() {
   return Promise.all(
     names.map(async (name) => ({
       name,
-      doc: yaml.load(await readFile(new URL(name, dir), 'utf8')),
+      doc: load(await readFile(new URL(name, dir), 'utf8')),
     }))
   );
 }
