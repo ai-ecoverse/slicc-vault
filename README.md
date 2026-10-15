@@ -24,7 +24,7 @@ The bundles hold this repo's code, `@ai-ecoverse/slicc-scrub`, and `@ai-ecoverse
 
 `GET /embedders.json` is answered by the Worker, not by this tree. It returns `{ "embedders": [...] }`, the same sources as `frame-ancestors`. The vault reads it at start and accepts only those origins. When it's missing or malformed, only `vault.sliccy.ai` falls back to `config.json`; on every other host (`vault-preview.sliccy.ai`, branch previews, local) that means no embedders, so it fails closed. An embedder source is `http(s)://host`, optionally with `:port` or `:*`, matched exactly.
 
-`main` is served at `vault.sliccy.ai`, and every other branch at `vault-<label>.sliccy.ai`. seven embeds only `vault.sliccy.ai`.
+`main` is served at `vault.sliccy.ai`, and every other branch at `vault-<label>.sliccy.ai`. Releases run only on `main`: the release job (semantic-release, npm, and the deploy to `vault.sliccy.ai`) is guarded by `github.ref == 'refs/heads/main'`, also when dispatched by hand, and the branch preview publishes nothing to npm and makes no tag or release; `workflows.test.mjs` keeps it so. seven embeds only `vault.sliccy.ai`.
 
 ## Storage and keys
 
