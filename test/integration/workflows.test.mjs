@@ -114,6 +114,7 @@ test("CI picks the bench pool only for this repo's own code, and a hosted runner
     'ubuntu-latest'
   );
   assert.equal(await run(group, [{ pullRequest: null }]), 'ubuntu-latest');
+  assert.equal(await run(group, []), 'ubuntu-latest');
   assert.equal(await run({ eventName: 'push', ref: 'refs/heads/main' }), 'cloud-run-bench');
   assert.equal(await run({ eventName: 'push', ref: 'refs/heads/x' }), 'ubuntu-latest');
 });

@@ -51,7 +51,7 @@ jobs:
               );
               const entries = q.repository.mergeQueue?.entries?.nodes ?? [];
               const forks = entries.filter((e) => e.pullRequest?.isCrossRepository !== false);
-              return forks.length === 0
+              return entries.length > 0 && forks.length === 0
                 ? await pick(pool, `merge group, ${entries.length} same-repo entries`)
                 : await pick(hosted, `merge group with a fork or unknown PR: ${forks.map((e) => e.pullRequest?.number).join(', ')}`);
             }
