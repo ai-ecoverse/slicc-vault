@@ -68,7 +68,12 @@ test("CI picks the bench pool only for this repo's own code, and a hosted runner
   assert.equal(runner.steps[0].with['sparse-checkout'], '.github/runner.mjs');
   assert.match(runner.steps[1].with.script, /\/\.github\/runner\.mjs/);
   assert.equal(job.needs, 'runner');
-  assert.equal(job.with['runs-on'], '${{ needs.runner.outputs.runner }}');
+  assert.equal(job.with['runs-on'], "${{ needs.runner.outputs.runner || 'ubuntu-latest' }}");
+  assert.equal(job.if, '${{ !cancelled() }}');
+  assert.match(
+    runner.steps[1].with.script,
+    /\.catch\(\s*\(error\) => \(\{ runner: 'ubuntu-latest'/
+  );
   const env = { POOL: 'cloud-run-bench' };
   const repo = { owner: 'ai-ecoverse', repo: 'slicc-vault' };
   const queued = (nodes) => ({
