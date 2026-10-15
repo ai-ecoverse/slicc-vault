@@ -28,7 +28,11 @@ test('only main releases: every job that publishes, tags or releases runs on mai
       if (!RELEASING.test(script(job))) continue;
       const preview = name === 'deploy.yml';
       if (preview) {
-        assert.deepEqual(doc.on.push, { 'branches-ignore': ['main'] }, `${name} ${id}`);
+        assert.deepEqual(
+          doc.on.push,
+          { 'branches-ignore': ['main', 'gh-readonly-queue/**'] },
+          `${name} ${id}`
+        );
         assert.equal(doc.on.workflow_dispatch, undefined, `${name} ${id}`);
         assert.doesNotMatch(
           script(job),
@@ -43,6 +47,14 @@ test('only main releases: every job that publishes, tags or releases runs on mai
     }
   }
   assert.deepEqual(seen.sort(), ['deploy.yml:publish', 'release.yml:release']);
+});
+
+test('CI runs for the merge queue as well as for pull requests and main', async () => {
+  const ci = (await workflows()).find((w) => w.name === 'ci.yml').doc;
+  assert.ok('merge_group' in ci.on);
+  assert.ok('pull_request' in ci.on);
+  assert.deepEqual(ci.on.push, { branches: ['main'] });
+  assert.deepEqual(Object.keys(ci.jobs), ['ci']);
 });
 
 test('the release workflow can still be dispatched, but only main gets past its guard', async () => {
