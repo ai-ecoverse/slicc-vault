@@ -1,4 +1,4 @@
-import { readdirSync, readFileSync } from 'node:fs';
+import { readdirSync, readFileSync, realpathSync } from 'node:fs';
 import { join, relative } from 'node:path';
 import { argv, env, stdout } from 'node:process';
 import { fileURLToPath } from 'node:url';
@@ -59,9 +59,28 @@ export async function publish({ fetcher = fetch, token, dir = root, parallel = 8
     await call(`files/${encoded(file)}`, { method: 'DELETE' });
   }
   const done = await call('manifest', { method: 'PUT', body: JSON.stringify({ files: current }) });
-  return done.url ?? '';
+  if (typeof done.url !== 'string' || !done.url.startsWith('https://')) {
+    throw new Error('manifest: the route answered without the published https URL');
+  }
+  return done.url;
 }
 
-if (argv[1] === fileURLToPath(import.meta.url)) {
-  stdout.write(`${await publish()}\n`);
+export function verdict(url, sha = env.GITHUB_SHA ?? 'local') {
+  if (typeof url !== 'string' || !url.startsWith('https://')) {
+    throw new Error('publish: no https URL to report');
+  }
+  return `publish: PASS ${url} ${sha}`;
+}
+
+export function isMain(script = argv[1], self = fileURLToPath(import.meta.url)) {
+  try {
+    return Boolean(script) && realpathSync(script) === realpathSync(self);
+  } catch {
+    return false;
+  }
+}
+
+if (isMain()) {
+  const url = await publish();
+  stdout.write(`${verdict(url)}\n`);
 }
