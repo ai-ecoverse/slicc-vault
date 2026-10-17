@@ -1,5 +1,8 @@
 import assert from 'node:assert/strict';
-import { readdir, readFile } from 'node:fs/promises';
+import { execFile } from 'node:child_process';
+import { chmod, mkdtemp, readdir, readFile, rm, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { test } from 'node:test';
 import { load } from 'js-yaml';
 import { decide } from '../../.github/runner.mjs';
@@ -139,4 +142,36 @@ test('the release workflow can still be dispatched, but only main gets past its 
   assert.ok('workflow_dispatch' in release.on);
   assert.deepEqual(release.on.push, { branches: ['main'] });
   assert.equal(release.jobs.release.if, MAIN);
+});
+
+async function step(t, run, publish) {
+  const bin = await mkdtemp(join(tmpdir(), 'slicc-vault-step-'));
+  t.after(() => rm(bin, { recursive: true, force: true }));
+  await writeFile(join(bin, 'npm'), '#!/bin/sh\nexit 0\n');
+  await writeFile(join(bin, 'node'), `#!/bin/sh\n${publish}\n`);
+  await chmod(join(bin, 'npm'), 0o755);
+  await chmod(join(bin, 'node'), 0o755);
+  const summary = join(bin, 'summary.md');
+  return new Promise((resolve) => {
+    execFile(
+      'bash',
+      ['--noprofile', '--norc', '-eo', 'pipefail', '-c', run],
+      { env: { PATH: `${bin}:/usr/bin:/bin`, GITHUB_STEP_SUMMARY: summary } },
+      (error) => resolve(error ? error.code : 0)
+    );
+  });
+}
+
+test('a publish step fails unless edge/publish.mjs prints its verdict, even when it exits 0', async (t) => {
+  for (const name of ['release.yml', 'deploy.yml']) {
+    const doc = (await workflows()).find((w) => w.name === name).doc;
+    const job = Object.values(doc.jobs)[0];
+    const publish = job.steps.find((s) => /edge\/publish\.mjs/.test(s.run ?? ''));
+    assert.equal(publish.shell, 'bash', name);
+    const pass = 'echo "publish: PASS https://vault.sliccy.ai/ abc123"';
+    assert.equal(await step(t, publish.run, pass), 0, `${name}: a verdict passes`);
+    assert.notEqual(await step(t, publish.run, 'exit 0'), 0, `${name}: silence fails`);
+    assert.notEqual(await step(t, publish.run, 'echo published'), 0, `${name}: no verdict fails`);
+    assert.notEqual(await step(t, publish.run, `${pass}; exit 1`), 0, `${name}: an error fails`);
+  }
 });

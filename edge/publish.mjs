@@ -1,4 +1,4 @@
-import { readdirSync, readFileSync } from 'node:fs';
+import { readdirSync, readFileSync, realpathSync } from 'node:fs';
 import { join, relative } from 'node:path';
 import { argv, env, stdout } from 'node:process';
 import { fileURLToPath } from 'node:url';
@@ -62,6 +62,11 @@ export async function publish({ fetcher = fetch, token, dir = root, parallel = 8
   return done.url ?? '';
 }
 
-if (argv[1] === fileURLToPath(import.meta.url)) {
-  stdout.write(`${await publish()}\n`);
+export function isMain(script = argv[1], self = fileURLToPath(import.meta.url)) {
+  return Boolean(script) && realpathSync(script) === realpathSync(self);
+}
+
+if (isMain()) {
+  const url = await publish();
+  stdout.write(`publish: PASS ${url} ${env.GITHUB_SHA ?? 'local'}\n`);
 }

@@ -33,6 +33,7 @@ jobs:
       - name: Publish vault-<branch>.sliccy.ai
         env:
           VAULT_VERSION: 0.0.0-${{ github.sha }}
+        shell: bash
         run: |
           npm run build
-          node edge/publish.mjs >> "$GITHUB_STEP_SUMMARY"
+          node edge/publish.mjs | tee -a "$GITHUB_STEP_SUMMARY" | grep '^publish: PASS '
