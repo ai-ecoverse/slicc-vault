@@ -36,4 +36,4 @@ jobs:
         shell: bash
         run: |
           npm run build
-          node edge/publish.mjs | tee -a "$GITHUB_STEP_SUMMARY" | grep '^publish: PASS '
+          node edge/publish.mjs | tee -a "$GITHUB_STEP_SUMMARY" | grep '^publish: PASS https://'

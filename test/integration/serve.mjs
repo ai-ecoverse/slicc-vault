@@ -104,7 +104,17 @@ export async function serveVault({ port = 0, embedders = EMBEDDERS, frameAncesto
   };
 }
 
-if (argv[1] && realpathSync(argv[1]) === realpathSync(fileURLToPath(import.meta.url))) {
+function isMain() {
+  try {
+    return (
+      Boolean(argv[1]) && realpathSync(argv[1]) === realpathSync(fileURLToPath(import.meta.url))
+    );
+  } catch {
+    return false;
+  }
+}
+
+if (isMain()) {
   const served = await serveVault({ port: Number(argv[2] ?? 8790) });
   console.log(`vault:    ${served.vault}/`);
   console.log(`embedder: ${served.origin('seven')}/?vault=${encodeURIComponent(served.vault)}`);

@@ -172,6 +172,10 @@ test('a publish step fails unless edge/publish.mjs prints its verdict, even when
     assert.equal(await step(t, publish.run, pass), 0, `${name}: a verdict passes`);
     assert.notEqual(await step(t, publish.run, 'exit 0'), 0, `${name}: silence fails`);
     assert.notEqual(await step(t, publish.run, 'echo published'), 0, `${name}: no verdict fails`);
+    const empty = 'echo "publish: PASS  abc123"';
+    assert.notEqual(await step(t, publish.run, empty), 0, `${name}: an empty URL fails`);
+    const plain = 'echo "publish: PASS http://vault.sliccy.ai/ abc123"';
+    assert.notEqual(await step(t, publish.run, plain), 0, `${name}: a non-https URL fails`);
     assert.notEqual(await step(t, publish.run, `${pass}; exit 1`), 0, `${name}: an error fails`);
   }
 });

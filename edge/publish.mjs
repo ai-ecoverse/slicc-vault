@@ -59,14 +59,28 @@ export async function publish({ fetcher = fetch, token, dir = root, parallel = 8
     await call(`files/${encoded(file)}`, { method: 'DELETE' });
   }
   const done = await call('manifest', { method: 'PUT', body: JSON.stringify({ files: current }) });
-  return done.url ?? '';
+  if (typeof done.url !== 'string' || !done.url.startsWith('https://')) {
+    throw new Error('manifest: the route answered without the published https URL');
+  }
+  return done.url;
+}
+
+export function verdict(url, sha = env.GITHUB_SHA ?? 'local') {
+  if (typeof url !== 'string' || !url.startsWith('https://')) {
+    throw new Error('publish: no https URL to report');
+  }
+  return `publish: PASS ${url} ${sha}`;
 }
 
 export function isMain(script = argv[1], self = fileURLToPath(import.meta.url)) {
-  return Boolean(script) && realpathSync(script) === realpathSync(self);
+  try {
+    return Boolean(script) && realpathSync(script) === realpathSync(self);
+  } catch {
+    return false;
+  }
 }
 
 if (isMain()) {
   const url = await publish();
-  stdout.write(`publish: PASS ${url} ${env.GITHUB_SHA ?? 'local'}\n`);
+  stdout.write(`${verdict(url)}\n`);
 }
