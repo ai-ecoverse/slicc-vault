@@ -42,11 +42,17 @@ export interface VaultError {
   message: string;
 }
 
+export type SessionProtocol = 'http1' | 'smtp' | 'pg';
+export type SessionPosition = 'auth-plain' | 'auth-login' | 'password-cleartext';
+
 export interface Rule {
   domain: string;
   header: string;
   methods: string[];
   paths: string[];
+  protocol?: SessionProtocol;
+  position?: SessionPosition;
+  port?: number;
 }
 
 export interface RefusedRule {
@@ -138,6 +144,17 @@ export interface ForwardEntry extends AuditBase {
   exit: ExitName;
 }
 
+export interface SessionEntry extends AuditBase {
+  type: 'session';
+  session: string;
+  domain: string;
+  port: number;
+  protocol: SessionProtocol;
+  position: string;
+  rule: number;
+  exit: ExitName;
+}
+
 export interface McpEntry extends AuditBase {
   type: 'mcp';
   server: string;
@@ -187,6 +204,7 @@ export interface PolicyEntry {
 
 export type AuditEntry =
   | ForwardEntry
+  | SessionEntry
   | McpEntry
   | RevealEntry
   | SealEntry
@@ -430,6 +448,21 @@ export type Op =
       cwd: string;
       interpreters: string[];
       trusted: boolean;
+    }
+  | {
+      op: 'sessionMaterialize';
+      stamp: Stamp;
+      session: string;
+      rule: number;
+      host: string;
+      port: number;
+      protocol: SessionProtocol;
+      position: string;
+      verified: boolean;
+      handshakeAt: EpochMs;
+      exit: ExitName;
+      placeholders: string[];
+      head?: { method: string; path: string };
     };
 
 export type AgentOp =
@@ -490,7 +523,8 @@ export type OpReply =
       op: 'materializeConsume';
       values: Record<string, string>;
       placeholders: Record<string, string>;
-    };
+    }
+  | { op: 'sessionMaterialize'; values: Record<string, string> };
 
 export type Request = Op & { v: Protocol; id: number };
 

@@ -383,6 +383,8 @@ export async function answer(
       return forward(vault, ns, request, port);
     case 'materializeConsume':
       return vault.exec.consume(ns, request);
+    case 'sessionMaterialize':
+      return vault.sessions.materialize(ns, request);
     case 'sealed':
       return { reply: await sealed(vault.context(ns), request.req, request.stamp) };
     case 'status':

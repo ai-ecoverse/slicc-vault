@@ -54,7 +54,7 @@ class Refusal extends Error {
 }
 
 const FOUND = /fnox_proxy_[0-9a-f]{24}/g;
-const AMBIGUOUS = /(^|\/)\.\.?(\/|$)|\\|%2e|%2f|%5c|%25/i;
+export const AMBIGUOUS = /(^|\/)\.\.?(\/|$)|\\|%2e|%2f|%5c|%25/i;
 
 function glob(pattern: string, path: string): boolean {
   let source = '';
@@ -179,7 +179,7 @@ class Injector {
 
   rule(record: VaultRecord, header: string): Rule {
     const { policy, exit, traits } = this.input;
-    const rules = rulesFor(record, policy);
+    const rules = rulesFor(record, policy).filter((rule) => rule.protocol === undefined);
     const found = rules.find((rule) => matches(rule, this.method, this.host, this.path, header));
     if (!found) {
       const domains = [...new Set(rules.map((rule) => rule.domain))];

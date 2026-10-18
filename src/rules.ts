@@ -22,6 +22,7 @@ import {
   type McpServer,
   NO_ENDPOINTS,
   type Owned,
+  onHost,
   patterns,
   type Registered,
 } from './refusal.ts';
@@ -54,7 +55,12 @@ export function loadRegistered(db: IDBDatabase, ns: string): Promise<Registered>
 
 export function refuser(registered: Registered) {
   const all = patterns(registered);
-  return (rule: Rule) => all.some((pattern) => contains(pattern, rule.domain, rule.paths));
+  return (rule: Rule) =>
+    all.some((pattern) =>
+      rule.protocol === 'smtp' || rule.protocol === 'pg'
+        ? onHost(pattern, rule.domain)
+        : contains(pattern, rule.domain, rule.paths)
+    );
 }
 
 export async function loadPolicy(db: IDBDatabase, ns: string): Promise<Policy> {
