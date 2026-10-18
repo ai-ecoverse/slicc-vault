@@ -10,6 +10,11 @@ export const MAX_STREAMS = 64;
 const SANITIZED = new Set(['model', 'mcp', 'records', 'grant', 'refresh']);
 const LOCKED = 'vault is locked: unlock it in the vault window to continue';
 
+export function bytesOf(value: unknown): Uint8Array | null {
+  if (!ArrayBuffer.isView(value)) return null;
+  return new Uint8Array(value.buffer, value.byteOffset, value.byteLength);
+}
+
 export class AgentPort {
   readonly vault: Vault;
   readonly ns: string;
@@ -29,11 +34,11 @@ export class AgentPort {
   }
 
   async redact(fields: Fields): Promise<Fields> {
-    const texts = fields.texts;
-    if (
-      !Array.isArray(texts) ||
-      !texts.every((t) => typeof t === 'string' || t instanceof Uint8Array)
-    ) {
+    const given = fields.texts;
+    const texts = Array.isArray(given)
+      ? given.map((t) => (typeof t === 'string' ? t : bytesOf(t)))
+      : [null];
+    if (texts.includes(null)) {
       throw new Refused('EINVAL', 'texts must be a list of strings and bytes');
     }
     const scrubber = await this.scrubber();
@@ -84,8 +89,8 @@ export class AgentPort {
   }
 
   async push(fields: Fields): Promise<Fields> {
-    const chunk = fields.chunk;
-    if (!(chunk instanceof Uint8Array)) throw new Refused('EINVAL', 'chunk must be bytes');
+    const chunk = bytesOf(fields.chunk);
+    if (!chunk) throw new Refused('EINVAL', 'chunk must be bytes');
     return { chunk: (await this.stream(fields)).push(chunk) };
   }
 

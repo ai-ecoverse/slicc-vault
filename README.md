@@ -324,9 +324,9 @@ The vault never injects a secret into a model or MCP endpoint, whatever a rule s
 
 | op | fields | reply |
 |---|---|---|
-| `redact` | `texts`: strings and `Uint8Array`s | `{ texts, hits, version }`: each text scrubbed, in the same order and type; `hits` totals `{ name, form, count }` |
+| `redact` | `texts`: strings and bytes | `{ texts, hits, version }`: each text scrubbed, in the same order, a string for a string and a `Uint8Array` for bytes; `hits` totals `{ name, form, count }` |
 | `redactStream` | `stream` (an id) | `{ stream, idleMs, version }`; at most 64 streams per port (`EAGAIN`) |
-| `push` | `stream`, `chunk` (bytes) | `{ chunk }`: what can be released, scrubbed |
+| `push` | `stream`, `chunk` (bytes) | `{ chunk }`: what can be released, scrubbed, as a `Uint8Array` |
 | `idle` | `stream` | `{ chunk }`: a held tail under 16 bytes, after `idleMs` without input |
 | `end` | `stream` | `{ chunk, hits }`: the rest, and the stream is gone |
 | `drop` | `stream` | `{}` |
@@ -351,6 +351,8 @@ The vault never injects a secret into a model or MCP endpoint, whatever a rule s
 - `oauth.tokenUrl` must be `https:` and the server's registered `tokenUrl` (`EACCES` otherwise). A server or record name that holds a stored value or one of the returned tokens, in any encoded form, is `EINVAL`. The body is checked as for a refresh (an object with a string `access_token`, no `error`, `token_type` Bearer if present, a valid `expires_in`), and every token must be a valid value (`EINVAL` otherwise), before anything is stored.
 - The access token is sealed as an `mcp` record bound to `server`, named `name` or `<SERVER>_ACCESS_TOKEN` (upper-cased, other characters as `_`, `MCP_` in front of a leading digit), with source `oauth:mcp` and `expiresAt` from `expires_in`. A `refresh_token` is sealed as a `grant` named `<name>_GRANT` with `oauth` and the same `server`, and becomes the token's refresh source.
 - Both records are written in one transaction, so `grant` stores all or nothing. The reply's `response` is JSON, a string or bytes like the input, with only `access_token` and `refresh_token` (as their placeholders), any string `token_type`, a numeric `expires_in` that isn't a stored value, and string `scope` scrubbed over every value; every other field, `id_token` included, is dropped. A `grant` whose access-token name is already bound to another server is `EEXIST`, checked in the same transaction.
+
+**Bytes** are any `ArrayBufferView` (`Uint8Array`, `Int8Array`, `DataView`, a `Float32Array`, a Node `Buffer`), read as exactly its own bytes from `byteOffset` for `byteLength`, never the rest of its buffer. Anything else, a bare `ArrayBuffer` included, is `EINVAL` ("chunk must be bytes", or "texts must be a list of strings and bytes").
 
 A stream is compiled against the namespace's values when it opens. If a value is added, rotated or removed while it's open, its next `push`, `idle` or `end` answers `EAGAIN` and the stream is gone: open it again and push the output from its start.
 
