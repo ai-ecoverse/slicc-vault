@@ -6,8 +6,8 @@ import { AMBIGUOUS, matches } from './inject.ts';
 import { decrypt } from './keys.ts';
 import type { Policy } from './policy.ts';
 import { aad, audit, PLACEHOLDER, records, removed, type VaultRecord } from './records.ts';
-import { refusedUrl } from './refusal.ts';
-import { loadRegistered, policyIn } from './rules.ts';
+import { type Registered, refusedUrl } from './refusal.ts';
+import { policyIn } from './rules.ts';
 import { checkStamp } from './sealed.ts';
 import type { Vault } from './vault.ts';
 
@@ -156,11 +156,16 @@ export class Sessions {
     });
   }
 
-  async session(ns: string, ask: Asked): Promise<void> {
+  timely(ask: Asked, now: number): void {
+    if (ask.handshakeAt > now || now - ask.handshakeAt > SESSION_DEADLINE) {
+      fail('the session is past its 60 s deadline');
+    }
+  }
+
+  endpoint(ask: Asked, registered: Registered): void {
     if (!ask.head) return;
     const raw = ask.head.target.split(/[?#]/)[0];
     if (AMBIGUOUS.test(raw)) fail(`ambiguous path ${raw}`);
-    const registered = await loadRegistered(this.vault.db, ns);
     if (refusedUrl(registered, new URL(`https://${ask.host}${ask.head.path}`))) {
       fail(`${ask.host} is a model or MCP endpoint; the vault never injects there`);
     }
@@ -201,13 +206,13 @@ export class Sessions {
     const now = this.vault.now();
     await this.burn(ns, ask, now);
     if (!ask.verified) fail("the kernel didn't verify the session's host");
-    if (ask.handshakeAt > now || now - ask.handshakeAt > SESSION_DEADLINE) {
-      fail('the session is past its 60 s deadline');
-    }
+    this.timely(ask, now);
     const key = this.vault.keyring.key;
     if (!key) throw new Refused('EACCES', 'vault is locked: unlock it in the vault window');
-    await this.session(ns, ask);
-    const policy = await this.vault.loadPolicy(ns);
+    const { policy, registered } = await transact(this.vault.db, ['meta'], 'readonly', (tx) =>
+      policyIn(tx, ns)
+    );
+    this.endpoint(ask, registered);
     const held = new Map((await records(this.vault.db, ns)).map((r) => [r.placeholder, r]));
     const handed: Handed[] = [];
     const reasons: string[] = [];
@@ -223,7 +228,7 @@ export class Sessions {
         reasons.push(error.message);
       }
     }
-    const kept = await this.record(ns, ask, handed, key, now);
+    const kept = await this.record(ns, ask, handed, key);
     if (!kept.length) {
       throw new Refused(
         'EACCES',
@@ -233,16 +238,13 @@ export class Sessions {
     return { values: Object.fromEntries(kept.map((h) => [h.record.placeholder, h.value])) };
   }
 
-  async record(
-    ns: string,
-    ask: Asked,
-    handed: Handed[],
-    key: CryptoKey,
-    now: number
-  ): Promise<Handed[]> {
+  async record(ns: string, ask: Asked, handed: Handed[], key: CryptoKey): Promise<Handed[]> {
     const kept: Handed[] = [];
     await transact(this.vault.db, ['meta', 'records', 'audit'], 'readwrite', async (tx) => {
-      const policy = await policyIn(tx, ns);
+      const { policy, registered } = await policyIn(tx, ns);
+      const now = this.vault.now();
+      this.timely(ask, now);
+      this.endpoint(ask, registered);
       const store = tx.objectStore('records');
       for (const entry of handed) {
         const { record } = entry;
