@@ -227,6 +227,22 @@ test('NEGATIVE second use: a second request for the same session gets nothing, i
   );
 });
 
+test('a malformed attestation is EINVAL and does not burn the session', async (t) => {
+  const { page, placeholders } = await ready(t);
+  const good = smtp(placeholders);
+  for (const change of [
+    { protocol: 'http2' },
+    { position: 'password-cleartext' },
+    { session: 'short' },
+    { placeholders: [] },
+    { exit: 'nowhere' },
+  ]) {
+    const reply = await ask(page, { ...good, ...change });
+    assert.equal(reply.error.code, 'EINVAL');
+  }
+  assert.deepEqual((await ask(page, good)).values, { [placeholders.SMTP_PASS]: VALUES.SMTP_PASS });
+});
+
 test('NEGATIVE wrong host or certificate, and plaintext: a session the kernel did not verify gets nothing', async (t) => {
   const { page, placeholders } = await ready(t);
   await refused(

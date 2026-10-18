@@ -63,9 +63,17 @@ export function refuser(registered: Registered) {
     );
 }
 
-export async function loadPolicy(db: IDBDatabase, ns: string): Promise<Policy> {
-  const [stored, registered] = await Promise.all([loadStored(db, ns), loadRegistered(db, ns)]);
-  return build(stored.accepted, refuser(registered));
+export async function policyIn(tx: IDBTransaction, ns: string): Promise<Policy> {
+  const meta = tx.objectStore('meta');
+  const [stored, registered] = (await Promise.all([
+    request(meta.get(`policy:${ns}`)),
+    request(meta.get(`endpoints:${ns}`)),
+  ])) as [Stored | undefined, Registered | undefined];
+  return build((stored ?? EMPTY_STORE).accepted, refuser(registered ?? NO_ENDPOINTS));
+}
+
+export function loadPolicy(db: IDBDatabase, ns: string): Promise<Policy> {
+  return transact(db, ['meta'], 'readonly', (tx) => policyIn(tx, ns));
 }
 
 function servers(value: unknown): McpServer[] {

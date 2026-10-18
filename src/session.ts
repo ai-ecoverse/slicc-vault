@@ -7,7 +7,7 @@ import { decrypt } from './keys.ts';
 import type { Policy } from './policy.ts';
 import { aad, audit, PLACEHOLDER, records, removed, type VaultRecord } from './records.ts';
 import { refusedUrl } from './refusal.ts';
-import { loadRegistered } from './rules.ts';
+import { loadRegistered, policyIn } from './rules.ts';
 import { checkStamp } from './sealed.ts';
 import type { Vault } from './vault.ts';
 
@@ -18,6 +18,11 @@ const ID = /^[A-Za-z0-9_-]{16,128}$/;
 const HOST = /^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]*[a-z0-9])?)+$/;
 const METHOD = /^[!#$%&'*+.^_`|~0-9A-Za-z-]+$/;
 const TARGET = /^\/[\x21-\x7e]*$/;
+const POSITIONS: Record<string, RegExp> = {
+  http1: /^header:[!#$%&'*+.^_`|~0-9a-z-]+$/,
+  smtp: /^(?:auth-plain|auth-login)$/,
+  pg: /^password-cleartext$/,
+};
 
 interface Asked {
   stamp: Stamp;
@@ -73,8 +78,12 @@ export function asked(req: Fields): Asked {
   const host = typeof req.host === 'string' ? req.host.toLowerCase().replace(/\.$/, '') : '';
   if (!HOST.test(host)) invalid('host must be the host name the kernel verified');
   if (!integer(req.port, 1, 65535)) invalid('port must be from 1 to 65535');
-  if (typeof req.protocol !== 'string' || typeof req.position !== 'string') {
-    invalid('protocol and position must be strings');
+  const protocol = req.protocol;
+  if (protocol !== 'http1' && protocol !== 'smtp' && protocol !== 'pg') {
+    invalid('protocol must be http1, smtp or pg');
+  }
+  if (typeof req.position !== 'string' || !POSITIONS[protocol].test(req.position)) {
+    invalid(`position isn't a ${protocol} position`);
   }
   if (typeof req.verified !== 'boolean') invalid('verified must be a boolean');
   if (!integer(req.handshakeAt, 0, Number.MAX_SAFE_INTEGER)) invalid('handshakeAt must be a time');
@@ -90,7 +99,7 @@ export function asked(req: Fields): Asked {
     session: req.session,
     host,
     port: req.port,
-    protocol: req.protocol,
+    protocol,
     position: req.position,
     verified: req.verified,
     handshakeAt: req.handshakeAt,
@@ -179,6 +188,14 @@ export class Sessions {
     return found.index;
   }
 
+  still(stored: VaultRecord | undefined, policy: Policy, ask: Asked, now: number): number | null {
+    try {
+      return this.pick(stored, policy, ask, now);
+    } catch {
+      return null;
+    }
+  }
+
   async materialize(ns: string, req: Fields): Promise<Fields> {
     const ask = asked(req);
     const now = this.vault.now();
@@ -206,27 +223,35 @@ export class Sessions {
         reasons.push(error.message);
       }
     }
-    const kept = await this.record(ns, ask, handed, now);
-    if (this.vault.keyring.key !== key) {
-      throw new Refused('EACCES', 'vault is locked: unlock it in the vault window');
-    }
+    const kept = await this.record(ns, ask, handed, key, now);
     if (!kept.length) {
-      throw new Refused('EACCES', reasons[0] ?? 'session refused: the secret changed meanwhile');
+      throw new Refused(
+        'EACCES',
+        reasons[0] ?? 'session refused: the secret or its rule changed meanwhile'
+      );
     }
     return { values: Object.fromEntries(kept.map((h) => [h.record.placeholder, h.value])) };
   }
 
-  async record(ns: string, ask: Asked, handed: Handed[], now: number): Promise<Handed[]> {
+  async record(
+    ns: string,
+    ask: Asked,
+    handed: Handed[],
+    key: CryptoKey,
+    now: number
+  ): Promise<Handed[]> {
     const kept: Handed[] = [];
-    await transact(this.vault.db, ['records', 'audit'], 'readwrite', async (tx) => {
+    await transact(this.vault.db, ['meta', 'records', 'audit'], 'readwrite', async (tx) => {
+      const policy = await policyIn(tx, ns);
       const store = tx.objectStore('records');
       for (const entry of handed) {
         const { record } = entry;
         const stored = (await request(store.get([ns, 'secret', record.name]))) as
           | VaultRecord
           | undefined;
-        if (!current(stored, record, now)) continue;
-        kept.push(entry);
+        const index = current(stored, record, now) ? this.still(stored, policy, ask, now) : null;
+        if (index === null) continue;
+        kept.push({ ...entry, index });
         await request(store.put({ ...stored, usedAt: now }));
         await audit(tx, ns, {
           type: 'session',
@@ -236,12 +261,15 @@ export class Sessions {
           port: ask.port,
           protocol: ask.protocol,
           position: ask.position,
-          rule: entry.index,
+          rule: index,
           exit: ask.exit,
           uid: ask.stamp.uid,
           tag: ask.stamp.tag,
           at: now,
         });
+      }
+      if (this.vault.keyring.key !== key) {
+        throw new Refused('EACCES', 'vault is locked: unlock it in the vault window');
       }
     });
     if (kept.length) await this.vault.changed(ns, ['secrets', 'audit']);
