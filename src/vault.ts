@@ -11,6 +11,7 @@ import { pending, waiting } from './requests.ts';
 import { loadPolicy, loadStored } from './rules.ts';
 import { Scrubbers } from './scrubbers.ts';
 import type { Context } from './sealed.ts';
+import { Sessions } from './session.ts';
 
 export type Listener = (ns: string, parts: Part[]) => void | Promise<void>;
 
@@ -31,6 +32,7 @@ export interface Vault {
   scrub(ns: string): Promise<ScrubState>;
   scrubbers: Scrubbers;
   exec: Exec;
+  sessions: Sessions;
   refresher: Refresher;
   status(ns: string): Promise<VaultStatus>;
 }
@@ -56,6 +58,7 @@ export async function start(options: Options = {}): Promise<Vault> {
   const vault: Vault = {
     scrubbers: undefined as unknown as Scrubbers,
     exec: undefined as unknown as Exec,
+    sessions: undefined as unknown as Sessions,
     refresher: undefined as unknown as Refresher,
     db,
     config,
@@ -129,6 +132,7 @@ export async function start(options: Options = {}): Promise<Vault> {
   });
   vault.scrubbers = new Scrubbers(vault);
   vault.exec = new Exec(vault);
+  vault.sessions = new Sessions(vault);
   vault.refresher = new Refresher(vault);
   const reload = async (ns: string, parts: Part[]) => {
     if (parts.includes('exits') && policies.has(ns)) await vault.loadPolicy(ns);

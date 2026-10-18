@@ -2,7 +2,7 @@
 
 The separate-origin vault at `vault.sliccy.ai`. It holds the sealed secrets, OAuth tokens, and model and MCP credentials of SLICC seven, so that no value ever reaches the model provider. The design is `secrets-tokens-design.md` (revision 4) in slicc-agent-plan. This README is the spec of what is built.
 
-- **Built:** the key store, records, origin namespacing, auto-unlock with an optional passkey or passphrase lock, the embedding API with its `page` and `agent` roles, the page's `put`, `seal`, `remove`, `restore`, `cancel` and `lock`, the scrub state, the lock button and its popup, the attested policy (rules, `[exec]`, `[exits]`, `[limits]`), the injector and `forward` with the response scrub (S1), the agent's `redact`, `redactStream`, `endpoints`, `model` and `mcp` (S3, S4), `records`, `grant` and `refresh`, the model and MCP refusal, exec tickets (`materialize` and `materializeConsume`), `import` (backups, KeePass, six's `secrets.env`) and `export`, sign-in tokens with their grants and refresh through `egress`, and the vault side of the `/dev/sealed` ops `seal`, `placeholder`, `list`, `test`, `request`, `status`, `cancel` and `materialize`.
+- **Built:** the key store, records, origin namespacing, auto-unlock with an optional passkey or passphrase lock, the embedding API with its `page` and `agent` roles, the page's `put`, `seal`, `remove`, `restore`, `cancel` and `lock`, the scrub state, the lock button and its popup, the attested policy (rules, `[exec]`, `[exits]`, `[limits]`), the injector and `forward` with the response scrub (S1), the agent's `redact`, `redactStream`, `endpoints`, `model` and `mcp` (S3, S4), `records`, `grant` and `refresh`, the model and MCP refusal, exec tickets (`materialize` and `materializeConsume`), `sessionMaterialize` for kernel-verified TLS sessions, `import` (backups, KeePass, six's `secrets.env`) and `export`, sign-in tokens with their grants and refresh through `egress`, and the vault side of the `/dev/sealed` ops `seal`, `placeholder`, `list`, `test`, `request`, `status`, `cancel` and `materialize`.
 - **The vault has no network stack.** It never fetches anything but its own `config.json` and `embedders.json`: bios sends every request the vault prepares.
 
 ## Documents and hosting
@@ -102,13 +102,17 @@ The vault trusts a file only when:
 - `onRootFs` is true, and `users` is `enforce`;
 - `bytes` is UTF-8 and parses.
 
-Otherwise the vault keeps the policy it last accepted for that file, so the rules it would have changed stay as they were (new ones stay inert), and warns, e.g. `rules not trusted: /etc/fnox/config.toml: kernel users must be enforce`. The reply is `{ accepted, files: [{ path, sha256, accepted, warnings }], rules: [{ secret, domain, header, methods, paths }], warnings }`, with `rules` the rules now in effect. `status.policy` repeats `files` from the last `policy` call, so Settings can show why rules aren't trusted.
+Otherwise the vault keeps the policy it last accepted for that file, so the rules it would have changed stay as they were (new ones stay inert), and warns, e.g. `rules not trusted: /etc/fnox/config.toml: kernel users must be enforce`. The reply is `{ accepted, files: [{ path, sha256, accepted, warnings }], rules: [{ secret, domain, header, methods, paths, protocol?, position?, port? }], warnings }`, with `rules` the rules now in effect. `status.policy` repeats `files` from the last `policy` call, so Settings can show why rules aren't trusted.
 
 **The KS-7 conformance fixtures** are `test/integration/fixtures/attest/*.json`: `{ description, trusted, reason?, attestation }`, with `bytes` as base64, written by `make.mjs` next to them. `good-*` must be trusted, and every `bad-*` must be refused with a warning containing `reason`. The vault's own tests run them through the `policy` op, and the kernel's tests can check that `kernel.attest` produces the good shape.
 
 **`/etc/fnox/config.toml`**, the injection policy, read the way fnox reads it:
 - `[secrets]`: entries whose `provider` (or the file's `default_provider`) is `seven`, and whose `value` is a placeholder.
-- `[[proxy.rules]]`: `secret` (a seven entry of `[secrets]`), `domain` (one exact host, lower-cased), `header` (lower-cased, default `authorization`), `methods` (upper-cased; empty means any) and `paths` (each starting with `/`; empty means any). A rule that breaks any of this is dropped with a warning; the rest of the file still counts.
+- `[[proxy.rules]]`: `secret` (a seven entry of `[secrets]`), `domain` (one exact host, lower-cased), `header` (lower-cased, default `authorization`), `methods` (upper-cased; empty means any) and `paths` (each starting with `/`; empty means any). A rule that breaks any of this is dropped with a warning; the rest of the file still counts. Rules are numbered from 1 in file order, dropped ones included; a `session` audit entry names its rule by that number.
+- **Session rules** (§3.19) add `protocol` and `port` (an integer from 1 to 65535), and are used only by `sessionMaterialize`, never by `forward`; a rule without `protocol` is used only by `forward`:
+  - `protocol = "http1"`: `header`, `methods` and `paths` as above; the position is the header. A `position` is a warning.
+  - `protocol = "smtp"`, with `position = "auth-plain"` or `"auth-login"`, or `protocol = "pg"`, with `position = "password-cleartext"`: no `header`, `methods` or `paths` (a warning otherwise). Its `header` reads `''`.
+  - `port` or `position` without `protocol`, another `protocol`, or a missing or wrong `port` or `position` is a warning, and the rule is dropped.
 - A record of kind `secret` is `active` when the file's `[secrets]` entry of its name holds the record's own placeholder and at least one rule names it. A placeholder from another vault or an old record doesn't activate anything.
 - Nothing else in the file counts: no imports, profiles or other providers.
 
@@ -160,7 +164,7 @@ iframe.contentWindow.postMessage({ type: 'slicc-vault', v: 1, op: 'hello', role:
 - On `port2` it answers `{ v: 1, op: 'welcome', role, status }`, or `{ v: 1, op: 'refused', error }` for another protocol version or an unknown role.
 - Everything after that goes over the port. The namespace and the role are fixed by the hello. Requests are `{ v: 1, id, op, ...fields }`; replies are `{ v: 1, id, op, ...fields }` or `{ v: 1, id, error: { code, message } }`. Each port is answered in order (FIFO).
 - **Roles:** `page` (the default) is bios and spectrum. bios may hand spectrum a page port of its own, or relay; the messages are the same. `agent` is the port bios hands the agent worker: it may use only `redact`, `redactStream`, `push`, `idle`, `end`, `drop`, `endpoints`, `model`, `mcp`, `records`, `grant` and `refresh`, and anything else is `EACCES`. The agent port gets no events. Its ops are below (The agent's ops).
-- **Values:** only `forward` (inside the head it returns, where an accepted rule allows it), `materializeConsume` (for an `[exec]` grant) and `egress` (a refresh request) put a value into the page. On the agent port only `model` and `mcp` do: their reply's prepared request carries the provider's or server's credential in its headers or URL, only for that provider's or server's own URLs, for the agent worker's transport to send at once. It must never be logged, stored, retried from storage or shown. No other op, event or reply carries a value, and no value ever reaches the model.
+- **Values:** only `forward` (inside the head it returns, where an accepted rule allows it), `materializeConsume` (for an `[exec]` grant), `sessionMaterialize` (for a session rule, to the kernel's TLS writer, §3.19) and `egress` (a refresh request) put a value into the page. On the agent port only `model` and `mcp` do: their reply's prepared request carries the provider's or server's credential in its headers or URL, only for that provider's or server's own URLs, for the agent worker's transport to send at once. It must never be logged, stored, retried from storage or shown. No other op, event or reply carries a value, and no value ever reaches the model.
 
 | op (page role) | fields | reply |
 |---|---|---|
@@ -180,6 +184,7 @@ iframe.contentWindow.postMessage({ type: 'slicc-vault', v: 1, op: 'hello', role:
 | `policy` | `files` | the attested policy files, below (Policy) |
 | `forward` | `head`, `body?`, `owner`, `exit`, `rawTraits`, with a `MessagePort` transferred alongside | the injected head, below (Forward) |
 | `materializeConsume` | `ticket`, `stamp`, `path`, `resolved`, `argv`, `cwd`, `interpreters`, `trusted` | the values for the child's environment, below (Exec) |
+| `sessionMaterialize` | `stamp`, `session`, `host`, `port`, `protocol`, `position`, `verified`, `handshakeAt`, `exit`, `placeholders`, `head?` | `{ values }` for a kernel-verified TLS session, below (Sessions) |
 | `import` | `kind`, `bytes`, `password?`, `pick?` | below (Import and export) |
 | `export` | `passphrase` | `{ bundle, count }`, below |
 | anything else | | `ENOTSUP` |
@@ -310,12 +315,41 @@ port.postMessage({ v: 1, id, op: 'forward', head, body, owner, exit, rawTraits }
 - **Injected:** each placeholder is replaced inside the rule's header value, so `Bearer …` and `token …` templates work. In `Authorization: Basic`, the credential is decoded, the user and password parts substituted (a substituted user may not contain `:`), and re-encoded. A Basic value that holds a placeholder but isn't valid base64 of UTF-8 is refused.
 - **Audited:** each injection adds a `forward` audit entry `{ name, domain, method, path, rule, exit, uid, tag }` and sets the record's `usedAt`. Never headers, bodies or values.
 
+## Sessions
+
+**`sessionMaterialize`** (§3.19, a page op that bios relays unchanged from the kernel) hands the kernel's TLS writer the secrets for one kernel-terminated TLS session (A2), for protocols `forward` can't carry: an http1 header on a kernel-made connection, SMTP AUTH, or pg's cleartext password. The kernel asks only after its own handshake verified the host (SNI, chain and hostname, whatever the caller's flags), never on a plaintext leg; it substitutes only at the position, uses each value once within 60 s, keeps it out of every process, fd, file, log and telemetry, and scrubs the session's read side (S2) for the values and their encodings. The vault picks the rules, so the kernel never parses `/etc/fnox/config.toml`.
+
+```js
+port.postMessage({ v: 1, id, op: 'sessionMaterialize', stamp, session, host, port: 587, protocol: 'smtp', position: 'auth-plain', verified: true, handshakeAt, exit, placeholders });
+```
+
+The fields are the kernel's session attestation:
+- `stamp`: the kernel's stamp of the process that owns the socket; `users` must be `enforce` (else `EACCES` "kernel users must be enforce").
+- `session`: the kernel's session id, 16 to 128 characters of `A-Z`, `a-z`, `0-9`, `_` and `-`.
+- `host`: the name the kernel verified the leaf against, compared lower-cased without one trailing dot; `port`; `protocol` (`http1`, `smtp` or `pg`).
+- `position`: `header:<name>` (lower-cased) for http1, else `auth-plain`, `auth-login` or `password-cleartext`.
+- `verified`: the kernel's own verdict on the chain and the name; `handshakeAt`: when the handshake finished (epoch ms).
+- `exit`: the exit the session leaves by (`page`, `proxy`, `tailscale` or `device:<name>`).
+- `placeholders`: 1 to 16 placeholders, every one found at the position, in one request. `head` (http1 only, required there): `{ method, path }`, the request line's method and target.
+- A malformed field is `EINVAL`, and so is a `protocol` other than these or a `position` that isn't one of its protocol's; neither burns the session.
+
+Once the fields check out, the vault burns the session in IndexedDB, in one transaction, so no vault frame of the namespace, now or after a reload, answers it again until 60 s after the later of the request and `handshakeAt`. Then it refuses the whole request with `EACCES` "session refused: …" when:
+- the session already had a request, answered or refused: "this session already had its request";
+- `verified` isn't true: "the kernel didn't verify the session's host";
+- `handshakeAt` is in the future or more than 60 s ago: "the session is past its 60 s deadline";
+- the vault is locked (`EACCES` "vault is locked: …"), at the start or by the point of release (below);
+- for http1: an ambiguous path (as in Forward), or a URL under a model or MCP endpoint (Model and MCP endpoints).
+
+Each placeholder then gets its value only when it is a `secret` record's, holding the placeholder `[secrets]` names, neither removed nor expired, with a session rule of that secret whose `protocol`, `domain`, `port` and position are the session's (and, for http1, whose `methods` and `paths` allow `head`), and whose `[exits]` line, if any, lists `exit`. A session can carry several secrets this way, each by its own rule. Just before answering, the records, the accepted policy and the registered endpoints are read again, at a fresh clock, in the transaction that audits the values. A value whose record was removed, expired or rotated meanwhile, or whose rule or `[exits]` line no longer allows it, is withheld. A session past its deadline by then, or an http1 URL now under a registered endpoint, refuses the whole request. That transaction is the point of release: if the vault locked before it, it writes nothing and refuses (`vault is locked`).
+
+It answers `{ values: { [placeholder]: value } }` for those, and leaves the others out, so the kernel sends them as written. When none gets a value, it's `EACCES` with the first placeholder's reason: "NAME isn't a secret", "a placeholder of no record of this vault", "NAME's placeholder isn't the one /etc/fnox/config.toml names", "NAME was removed", "NAME expired", "no session rule in /etc/fnox/config.toml lets NAME be used", "no session rule lets NAME at PROTOCOL POSITION on HOST:PORT" (with " for METHOD PATH" for http1), "NAME isn't allowed on EXIT", or "the secret or its rule changed meanwhile". Each value handed out adds a `session` audit entry `{ name, session, domain, port, protocol, position, rule, exit, uid, tag }`, `rule` being the number of the rule that allowed it, and sets the record's `usedAt`. It never includes the value. Stored values never hold CR, LF or NUL (Records), so a value can't break out of its position.
+
 ## Model and MCP endpoints
 
 The vault never injects a secret into a model or MCP endpoint, whatever a rule says.
 - **The built-in list** is generated at build time (`scripts/endpoints.mjs`, into the gitignored `src/endpoints.json`) from every provider base URL in pi-ai's catalog (`@earendil-works/pi-ai`, pinned in `devDependencies`), plus `bedrock-runtime.*` and `bedrock-runtime-fips.*.amazonaws.com`, Azure OpenAI and AI services, and Adobe's LLM proxy. Each entry is a host (with `*` for one label) and a path prefix (`*` for one segment, from templated segments).
 - **Registered endpoints:** the agent's `endpoints` op adds model base URLs and MCP servers for its namespace. They only ever add.
-- **At policy parse:** a rule that can reach only refused URLs (its domain matches, and the endpoint has no path prefix or every path of the rule lies under it) is dropped and listed in `list.refused` with the reason `NAME: host is a model or MCP endpoint; the vault never injects there`. Other rules on the same host stay.
+- **At policy parse:** a rule that can reach only refused URLs (its domain matches, and the endpoint has no path prefix or every path of the rule lies under it), and an `smtp` or `pg` session rule whose domain matches any endpoint's host, is dropped and listed in `list.refused` with the reason `NAME: host is a model or MCP endpoint; the vault never injects there`. Other rules on the same host stay.
 - **At request time:** `forward` refuses any URL under the refused set, before rules: `403 host is a model or MCP endpoint; the vault never injects there`.
 - **Kernel programs calling a registered MCP server (§3.16.1):** a `forward` whose URL lies under a registered MCP server isn't refused but handled for that server only. Only `mcp` records the server lists in `names` are filled in; a `secret`, `grant` or `model` placeholder is refused ("secrets are never sent to model or MCP endpoints"). The reply carries `body`, the request body scrubbed over every value, which bios sends instead of its own copy; the response is scrubbed as above; each call is audited as `mcp` with `server`, uid and tag.
 - **`http://<port>.kernel.localhost/<path>`** (port 1–65535, never 9222, no explicit port) is the one `http:` form an MCP server may have (§3.16.3). Everything else must be `https:` on 443.
@@ -411,13 +445,13 @@ The button writes its intent to `intents` under a random 128-bit nonce and opens
 The npm package `@ai-ecoverse/slicc-vault` holds only TypeScript types, built from `src/contract.ts`: the port API (`Hello`, `Greeting`, `Request`, `Reply`, `VaultEvent`, `Role`), the button (`ButtonConfig`, `ButtonMessage`, `ButtonEvent`), the popup (`PopupIntent`, `PopupState`), the page's results (`SealResult`, `ImportResult`), and the data Settings shows (`SecretView`, `VaultStatus`, `ScrubState`, `PendingRequest`, `AuditEntry`, `ExitPolicyView`, `VaultList`). `Availability` (`connecting`, `waiting`, `locked`, `ready`) is for bios to tell spectrum "waiting for the vault" and "unlock the vault to continue". They mean:
 
 - **`EpochMs`**: milliseconds since the epoch. **`DeviceId`**: the same id bios uses for linked devices and trays, in `sourceDevice`, `device:<id>` exits and `ExitPolicyView.devices[].device`.
-- **`Rule`**: `domain` is an exact lower-case host; `header` a lower-case header name; **empty `methods` or `paths` mean any**.
+- **`Rule`**: `domain` is an exact lower-case host; `header` a lower-case header name; **empty `methods` or `paths` mean any**. A rule with `protocol` (`http1`, `smtp`, `pg`) is a session rule, with its `port` and, for smtp and pg, its `position`; show it as "PROTOCOL on host:port".
 - **`exec`**: `false` means the value is never revealed to a program; `any`, `argv` (with `execArgv`, the allowed argv prefixes) and `shell` are the `[exec]` modes under which `fnox exec` may hand it to a program.
 - **`exits`** is present only when `/etc/slicc/secrets-policy.toml` restricts that secret; absent means every exit (`page`, `proxy`, `tailscale`, `device:<id>`).
 - **Bindings in `list`:** read under one scrub version (retried, then `EAGAIN`), `provider`, `server` and `settings` are scrubbed over every value (a setting whose name holds one is dropped), and left out while the vault is locked before its first unlock.
 - **`kind`**: `secret` (a credential programs use through rules), **`grant`** (a sign-in's refresh token, never injected; show it as "Sign-in"), `model` (a model provider key), `mcp` (an MCP server credential). `provider` and `account` name the service and the signed-in account where one is known; a `model` record always has its `provider`, an `mcp` record may have its `server`, and either may carry non-secret `settings`.
-- **Who did it:** `uid` and `tag` are the kernel stamp for entries a program or the agent caused (`/dev/sealed` seals, `forward`, `mcp`, `materialize`). Every entry from a page-role op (`put`, `seal`, `remove`, `restore`, `import`, `policy`) and from the vault itself (`refresh`) has `uid: null, tag: null`, older entries included. Spectrum shows page ops as "by you", `refresh` as "automatically", and `policy` entries with no "by …".
-- **`AuditEntry`**: `forward` is a use of a value in a request, with the exit that carried it; `mcp` a kernel program's call to a registered MCP server; **`materialize` is shown as "Revealed to a program"**; `seal`, `remove`, `restore` and `policy` (with its `changes`) record changes. Every entry has a `seq` for paging.
+- **Who did it:** `uid` and `tag` are the kernel stamp for entries a program or the agent caused (`/dev/sealed` seals, `forward`, `mcp`, `materialize`, `session`). Every entry from a page-role op (`put`, `seal`, `remove`, `restore`, `import`, `policy`) and from the vault itself (`refresh`) has `uid: null, tag: null`, older entries included. Spectrum shows page ops as "by you", `refresh` as "automatically", and `policy` entries with no "by …".
+- **`AuditEntry`**: `forward` is a use of a value in a request, with the exit that carried it; `mcp` a kernel program's call to a registered MCP server; `session` a value handed to the kernel for a verified TLS session (show it as "Sent over PROTOCOL to host"); **`materialize` is shown as "Revealed to a program"**; `seal`, `remove`, `restore` and `policy` (with its `changes`) record changes. Every entry has a `seq` for paging.
 - **`VaultList.refused`** lists rules the vault dropped because they name a model or MCP endpoint.
 - **`PendingRequest.prompt`** is untrusted, agent-written text of at most 200 characters.
 - **`ExitPolicyView`** is read-only: the secrets `/etc/slicc/secrets-policy.toml` restricts to certain exits.

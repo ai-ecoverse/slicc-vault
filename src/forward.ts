@@ -40,7 +40,7 @@ export function checkTraits(value: unknown): Traits {
   };
 }
 
-function checkExit(value: unknown): ExitName {
+export function checkExit(value: unknown): ExitName {
   if (typeof value !== 'string' || !EXIT.test(value)) {
     throw new Refused('EINVAL', 'exit must be page, proxy, tailscale or device:<name>');
   }

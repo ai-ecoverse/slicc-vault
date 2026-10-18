@@ -6,6 +6,7 @@ import type {
   PolicyFile,
   RefusedRule,
   Rule,
+  SessionProtocol,
 } from './contract.ts';
 import { PLACEHOLDER } from './records.ts';
 import { parseToml, type TomlTable, type TomlValue } from './toml.ts';
@@ -18,6 +19,7 @@ export interface Policy {
   refused(): RefusedRule[];
   placeholder(name: string): string | null;
   rules(name: string): Rule[];
+  sessionRules(name: string): { index: number; rule: Rule }[];
   exec(name: string): ExecMode;
   argv(name: string): string[][] | null;
   exits(name: string): ExitName[] | null;
@@ -40,7 +42,7 @@ export const LIMITS: Limits = {
 
 export interface ConfigPolicy {
   secrets: Record<string, string>;
-  rules: { secret: string; rule: Rule }[];
+  rules: { secret: string; rule: Rule; index?: number }[];
 }
 
 export interface ExtraPolicy {
@@ -59,6 +61,10 @@ export const NONE: Accepted = { config: null, extra: null };
 const DOMAIN = /^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]*[a-z0-9])?)+$/;
 const TOKEN = /^[!#$%&'*+.^_`|~0-9A-Za-z-]+$/;
 const EXIT = /^(?:page|proxy|tailscale|device:[A-Za-z0-9._-]+)$/;
+const POSITIONS: Record<string, string[]> = {
+  smtp: ['auth-plain', 'auth-login'],
+  pg: ['password-cleartext'],
+};
 
 function isTable(value: TomlValue | undefined): value is TomlTable {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
@@ -68,6 +74,43 @@ function strings(value: TomlValue | undefined): string[] | null {
   if (value === undefined) return [];
   if (!Array.isArray(value) || !value.every((item) => typeof item === 'string')) return null;
   return value as string[];
+}
+
+function sessionFields(entry: TomlTable, where: string, warnings: string[]): Partial<Rule> | null {
+  const { protocol, position, port } = entry;
+  if (protocol === undefined) {
+    if (position === undefined && port === undefined) return {};
+    warnings.push(`${where}: port and position need a protocol`);
+    return null;
+  }
+  if (protocol !== 'http1' && protocol !== 'smtp' && protocol !== 'pg') {
+    warnings.push(`${where}: protocol must be http1, smtp or pg`);
+    return null;
+  }
+  if (typeof port !== 'number' || !Number.isInteger(port) || port < 1 || port > 65535) {
+    warnings.push(`${where}: a ${protocol} rule needs a port from 1 to 65535`);
+    return null;
+  }
+  if (protocol === 'http1') {
+    if (position === undefined) return { protocol, port };
+    warnings.push(`${where}: an http1 rule's position is its header`);
+    return null;
+  }
+  if (entry.header !== undefined || entry.methods !== undefined || entry.paths !== undefined) {
+    warnings.push(`${where}: a ${protocol} rule has no header, methods or paths`);
+    return null;
+  }
+  const allowed = POSITIONS[protocol];
+  if (typeof position !== 'string' || !allowed.includes(position)) {
+    warnings.push(`${where}: a ${protocol} rule needs position ${allowed.join(' or ')}`);
+    return null;
+  }
+  return {
+    protocol: protocol as SessionProtocol,
+    position: position as Rule['position'],
+    port,
+    header: '',
+  };
 }
 
 export function parseRule(entry: TomlValue, index: number, warnings: string[]) {
@@ -100,7 +143,15 @@ export function parseRule(entry: TomlValue, index: number, warnings: string[]) {
     warnings.push(`${where}: paths must be a list of paths starting with /`);
     return null;
   }
-  const rule: Rule = { domain, header, methods: methods.map((m) => m.toUpperCase()), paths };
+  const session = sessionFields(entry, where, warnings);
+  if (!session) return null;
+  const rule: Rule = {
+    domain,
+    header,
+    methods: methods.map((m) => m.toUpperCase()),
+    paths,
+    ...session,
+  };
   return { secret: entry.secret, rule };
 }
 
@@ -127,7 +178,7 @@ export function parseConfig(text: string, warnings: string[]): ConfigPolicy {
       warnings.push(`proxy rule ${index + 1}: ${parsed.secret} isn't a seven secret in [secrets]`);
       return;
     }
-    rules.push(parsed);
+    rules.push({ ...parsed, index: index + 1 });
   });
   return { secrets, rules };
 }
@@ -182,7 +233,8 @@ export function parseExtra(text: string, warnings: string[]): ExtraPolicy {
 }
 
 function ruleKey(secret: string, rule: Rule): string {
-  return JSON.stringify([secret, rule.domain, rule.header, rule.methods, rule.paths]);
+  const { domain, header, methods, paths, protocol, position, port } = rule;
+  return JSON.stringify([secret, domain, header, methods, paths, protocol, position, port]);
 }
 
 export function diffConfig(before: ConfigPolicy | null, after: ConfigPolicy): PolicyChange[] {
@@ -245,6 +297,10 @@ export function build(accepted: Accepted, refuse: Refuse = () => false): Policy 
     refused: () => refused,
     placeholder: (name) => (Object.hasOwn(config.secrets, name) ? config.secrets[name] : null),
     rules: (name) => kept.filter((entry) => entry.secret === name).map((entry) => entry.rule),
+    sessionRules: (name) =>
+      kept
+        .filter((entry) => entry.secret === name && entry.rule.protocol !== undefined)
+        .map((entry) => ({ index: entry.index as number, rule: entry.rule })),
     exec: (name) => (Object.hasOwn(extra.exec, name) ? extra.exec[name].mode : false),
     argv: (name) => (Object.hasOwn(extra.exec, name) ? (extra.exec[name].argv ?? null) : null),
     exits: (name) => (Object.hasOwn(extra.exits, name) ? extra.exits[name] : null),

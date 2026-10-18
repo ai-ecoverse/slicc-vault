@@ -98,6 +98,10 @@ export function refusedUrl(registered: Registered, url: URL): boolean {
   return patterns(registered).some((pattern) => covers(pattern, host, url.pathname));
 }
 
+export function onHost(pattern: Endpoint, host: string): boolean {
+  return hostPattern(pattern.host).test(host);
+}
+
 function plain(url: URL, port: string): boolean {
   return !url.username && !url.password && url.port === port;
 }
