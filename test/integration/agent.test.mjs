@@ -93,6 +93,80 @@ test('redactStream holds back a split value', async (t) => {
   assert.equal(out.dropped, undefined);
 });
 
+test('push and redact take any byte view, as exactly its own bytes', async (t) => {
+  const { page, a } = await ready(t);
+  const out = await page.evaluate(async (value) => {
+    const h = window.harness;
+    const dec = (bytes) => new TextDecoder().decode(bytes);
+    const text = `out: ${value} done`;
+    const pool = new Uint8Array(8192).fill(0x41);
+    pool.set(new TextEncoder().encode(text), 100);
+    const at = (start) => 100 + start;
+    const views = [
+      ['Int8Array', new Int8Array(pool.buffer, at(0), 7)],
+      ['DataView', new DataView(pool.buffer, at(7), 4)],
+      ['Float32Array', new Float32Array(pool.buffer.slice(at(11), at(19)))],
+      ['Uint8Array subarray', pool.subarray(at(19), at(22))],
+      ['Buffer pool slice', new Uint8Array(pool.buffer, at(22), text.length - 22)],
+    ];
+    await h.ask('redactStream', { stream: 'views' });
+    let streamed = '';
+    const types = [];
+    for (const [name, chunk] of views) {
+      const reply = await h.ask('push', { stream: 'views', chunk });
+      types.push([name, reply.chunk?.constructor.name ?? reply.error.code]);
+      streamed += dec(reply.chunk);
+    }
+    const end = await h.ask('end', { stream: 'views' });
+    streamed += dec(end.chunk);
+    const batch = await h.ask('redact', { texts: views.map(([, view]) => view) });
+    const whole = await h.ask('redact', {
+      texts: [
+        new Int8Array(pool.buffer, at(0), text.length),
+        new DataView(pool.buffer, at(5), value.length),
+      ],
+    });
+    await h.ask('redactStream', { stream: 'bad' });
+    const bad = [];
+    for (const chunk of [new ArrayBuffer(4), { 0: 65, length: 1 }, 7, 'text']) {
+      bad.push((await h.ask('push', { stream: 'bad', chunk })).error);
+    }
+    bad.push((await h.ask('redact', { texts: ['ok', new ArrayBuffer(4)] })).error);
+    bad.push((await h.ask('redact', { texts: [{ 0: 65, length: 1 }] })).error);
+    return {
+      streamed,
+      types,
+      hits: end.hits,
+      batch: batch.texts.map((x) => `${x.constructor.name}:${x.byteLength}`),
+      whole: whole.texts.map(dec),
+      bad,
+    };
+  }, VALUE_A);
+  assert.equal(out.streamed, `out: ${a} done`);
+  assert.ok(!out.streamed.includes('fake-value'));
+  assert.deepEqual(out.hits, [{ name: 'TOKEN_A', form: 'raw', count: 1 }]);
+  assert.deepEqual(
+    out.types.map(([, type]) => type),
+    ['Uint8Array', 'Uint8Array', 'Uint8Array', 'Uint8Array', 'Uint8Array']
+  );
+  assert.deepEqual(out.batch, [
+    'Uint8Array:7',
+    'Uint8Array:4',
+    'Uint8Array:8',
+    'Uint8Array:3',
+    'Uint8Array:8',
+  ]);
+  assert.deepEqual(out.whole, [`out: ${a} done`, a]);
+  assert.deepEqual(
+    out.bad.slice(0, 4).map((e) => e.message),
+    new Array(4).fill('chunk must be bytes')
+  );
+  assert.deepEqual(
+    out.bad.slice(4).map((e) => [e.code, e.message]),
+    new Array(2).fill(['EINVAL', 'texts must be a list of strings and bytes'])
+  );
+});
+
 test('registered endpoints are refused for secrets, at parse and at request time', async (t) => {
   const { page, a } = await ready(t);
   const text = config({ TOKEN_A: a }, [
