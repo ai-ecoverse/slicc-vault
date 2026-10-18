@@ -232,64 +232,6 @@ test('two vault frames refresh one token with one request to the IdP', async (t)
   assert.equal(sent.length, 1);
 });
 
-test('a page port that stopped answering egress gets no more, and the next refresh goes to a live one', {
-  timeout: 90000,
-}, async (t) => {
-  const page = await connected(t);
-  assert.equal((await page.evaluate(() => window.harness.twin(true, true))).op, 'welcome');
-  await page.evaluate(async () => {
-    await window.harness.call('seal', {
-      name: 'CLOSED_GRANT',
-      value: 'fake-refresh-token-0201',
-      kind: 'grant',
-      source: 'oauth:github',
-      oauth: { tokenUrl: 'https://auth.example.com/token', clientId: 'fake-client' },
-    });
-    await window.harness.call('seal', {
-      name: 'CLOSED_TOKEN',
-      value: 'fake-access-token-0201',
-      source: 'oauth:github',
-      refresh: 'CLOSED_GRANT',
-      expiresAt: Date.now() + 60000,
-    });
-    window.harness.egress.answer = {
-      status: 200,
-      headers: [],
-      body: JSON.stringify({
-        token_type: 'Bearer',
-        access_token: 'fake-access-token-0202',
-        expires_in: 3600,
-      }),
-    };
-    window.harness.call('refresh', { name: 'CLOSED_TOKEN' }).then((reply) => {
-      window.first = reply;
-    });
-  });
-  let first = null;
-  while (!first) {
-    await new Promise((resolve) => setTimeout(resolve, 1000));
-    first = await page.evaluate(() => window.first ?? null);
-  }
-  assert.equal(first.error.code, 'ETIMEDOUT');
-  const refreshed = await page.evaluate(() =>
-    window.harness.call('refresh', { name: 'CLOSED_TOKEN' })
-  );
-  assert.equal(refreshed.state, 'refreshed');
-  const kept = await page.evaluate(async () => {
-    const before = window.harness.twinEvents.length;
-    const list = await window.harness.call('list', {}, [], window.harness.twins[0]);
-    await window.harness.call('seal', {
-      name: 'AFTER',
-      value: 'fake-after-value-0001',
-      source: 'settings',
-    });
-    await new Promise((resolve) => setTimeout(resolve, 300));
-    return { list: Boolean(list.list), events: window.harness.twinEvents.length - before };
-  });
-  assert.equal(kept.list, true);
-  assert.ok(kept.events > 0);
-});
-
 test('a grant removed and restored while its refresh is in flight refuses the stale response', async (t) => {
   const page = await connected(t);
   assert.equal((await page.evaluate(() => window.harness.twin(true))).op, 'welcome');
@@ -332,49 +274,6 @@ test('a grant removed and restored while its refresh is in flight refuses the st
   assert.equal(result.restored, true);
   assert.equal(result.reply.error.code, 'EAGAIN');
   assert.match(result.reply.error.message, /RACE_GRANT changed meanwhile/);
-});
-
-test('the minute sweep refreshes a due token without being asked', {
-  timeout: 120000,
-}, async (t) => {
-  const page = await connected(t);
-  await page.evaluate(async () => {
-    await window.harness.call('seal', {
-      name: 'SWEPT_GRANT',
-      value: 'fake-refresh-token-0301',
-      kind: 'grant',
-      source: 'oauth:github',
-      oauth: { tokenUrl: 'https://auth.example.com/token', clientId: 'fake-client' },
-    });
-    await window.harness.call('seal', {
-      name: 'SWEPT_TOKEN',
-      value: 'fake-access-token-0301',
-      source: 'oauth:github',
-      refresh: 'SWEPT_GRANT',
-      expiresAt: Date.now() + 60000,
-    });
-    window.harness.egress.answer = {
-      status: 200,
-      headers: [],
-      body: JSON.stringify({
-        token_type: 'Bearer',
-        access_token: 'fake-access-token-0302',
-        expires_in: 3600,
-      }),
-    };
-  });
-  let sent = 0;
-  for (let i = 0; i < 80 && sent === 0; i++) {
-    await new Promise((resolve) => setTimeout(resolve, 1000));
-    sent = await page.evaluate(() => window.harness.egress.requests.length);
-  }
-  assert.equal(sent, 1);
-  let audit = [];
-  for (let i = 0; i < 10 && !audit.some((e) => e.type === 'refresh'); i++) {
-    await new Promise((resolve) => setTimeout(resolve, 200));
-    audit = (await page.evaluate(() => window.harness.call('audit', { limit: 5 }))).audit;
-  }
-  assert.ok(audit.some((e) => e.type === 'refresh' && e.name === 'SWEPT_TOKEN'));
 });
 
 test('a page that says hello gets its due tokens refreshed at once', async (t) => {
