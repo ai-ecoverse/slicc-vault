@@ -1,9 +1,10 @@
 import type { ExitName, Rule, Stamp } from './contract.ts';
-import { all, request, transact } from './db.ts';
+import { request, transact } from './db.ts';
 import { Refused } from './errors.ts';
 import { checkExit } from './forward.ts';
 import { AMBIGUOUS, matches } from './inject.ts';
 import { decrypt } from './keys.ts';
+import type { Policy } from './policy.ts';
 import { aad, audit, PLACEHOLDER, records, removed, type VaultRecord } from './records.ts';
 import { refusedUrl } from './refusal.ts';
 import { loadRegistered } from './rules.ts';
@@ -21,7 +22,6 @@ const TARGET = /^\/[\x21-\x7e]*$/;
 interface Asked {
   stamp: Stamp;
   session: string;
-  rule: number;
   host: string;
   port: number;
   protocol: string;
@@ -30,7 +30,13 @@ interface Asked {
   handshakeAt: number;
   exit: ExitName;
   placeholders: string[];
-  head: { method: string; target: string } | null;
+  head: { method: string; target: string; path: string } | null;
+}
+
+interface Handed {
+  record: VaultRecord;
+  index: number;
+  value: string;
 }
 
 function invalid(message: string): never {
@@ -45,7 +51,7 @@ function integer(value: unknown, min: number, max: number): value is number {
   return typeof value === 'number' && Number.isInteger(value) && value >= min && value <= max;
 }
 
-function head(req: Fields): Asked['head'] {
+function head(req: Fields, host: string): Asked['head'] {
   if (req.protocol !== 'http1') return null;
   const given = (req.head ?? {}) as Fields;
   const method = given.method;
@@ -54,7 +60,8 @@ function head(req: Fields): Asked['head'] {
   if (typeof target !== 'string' || !TARGET.test(target)) {
     invalid('head.path must be the request target, starting with /');
   }
-  return { method: method.toUpperCase(), target };
+  const path = new URL(`https://${host}${target}`).pathname;
+  return { method: method.toUpperCase(), target, path };
 }
 
 export function asked(req: Fields): Asked {
@@ -63,7 +70,6 @@ export function asked(req: Fields): Asked {
   if (typeof req.session !== 'string' || !ID.test(req.session)) {
     invalid('session must be 16 to 128 characters of A-Z, a-z, 0-9, _ and -');
   }
-  if (!integer(req.rule, 1, 1e6)) invalid('rule must be a rule number');
   const host = typeof req.host === 'string' ? req.host.toLowerCase().replace(/\.$/, '') : '';
   if (!HOST.test(host)) invalid('host must be the host name the kernel verified');
   if (!integer(req.port, 1, 65535)) invalid('port must be from 1 to 65535');
@@ -82,7 +88,6 @@ export function asked(req: Fields): Asked {
   return {
     stamp,
     session: req.session,
-    rule: req.rule,
     host,
     port: req.port,
     protocol: req.protocol,
@@ -91,7 +96,7 @@ export function asked(req: Fields): Asked {
     handshakeAt: req.handshakeAt,
     exit: checkExit(req.exit),
     placeholders: [...new Set(list as string[])],
-    head: head(req),
+    head: head(req, host),
   };
 }
 
@@ -103,112 +108,143 @@ function expired(record: VaultRecord, now: number): boolean {
   return record.expiresAt !== undefined && record.expiresAt <= now;
 }
 
+function fits(rule: Rule, ask: Asked): boolean {
+  const same =
+    rule.protocol === ask.protocol &&
+    rule.domain === ask.host &&
+    rule.port === ask.port &&
+    positionOf(rule) === ask.position;
+  if (!same || !ask.head) return same;
+  return matches(rule, ask.head.method, ask.host, ask.head.path, rule.header);
+}
+
+function current(stored: VaultRecord | undefined, seen: VaultRecord, now: number): boolean {
+  return (
+    stored !== undefined &&
+    stored.placeholder === seen.placeholder &&
+    stored.updatedAt === seen.updatedAt &&
+    !removed(stored) &&
+    !expired(stored, now)
+  );
+}
+
 export class Sessions {
   readonly vault: Vault;
-  readonly used = new Map<string, number>();
 
   constructor(vault: Vault) {
     this.vault = vault;
   }
 
-  sweep(now: number): void {
-    for (const [key, until] of this.used) if (now >= until) this.used.delete(key);
+  async burn(ns: string, ask: Asked, now: number): Promise<void> {
+    await transact(this.vault.db, ['meta'], 'readwrite', async (tx) => {
+      const meta = tx.objectStore('meta');
+      const key = `sessions:${ns}`;
+      const stored = ((await request(meta.get(key))) ?? {}) as Record<string, number>;
+      const used = Object.fromEntries(Object.entries(stored).filter(([, until]) => until >= now));
+      if (Object.hasOwn(used, ask.session)) fail('this session already had its request');
+      used[ask.session] = Math.max(now, ask.handshakeAt) + SESSION_DEADLINE;
+      await request(meta.put(used, key));
+    });
   }
 
-  burn(ns: string, ask: Asked, now: number): void {
-    const key = JSON.stringify([ns, ask.session]);
-    if (this.used.has(key)) fail('this session already had its request');
-    this.used.set(key, now + SESSION_DEADLINE);
+  async session(ns: string, ask: Asked): Promise<void> {
+    if (!ask.head) return;
+    const raw = ask.head.target.split(/[?#]/)[0];
+    if (AMBIGUOUS.test(raw)) fail(`ambiguous path ${raw}`);
+    const registered = await loadRegistered(this.vault.db, ns);
+    if (refusedUrl(registered, new URL(`https://${ask.host}${ask.head.path}`))) {
+      fail(`${ask.host} is a model or MCP endpoint; the vault never injects there`);
+    }
   }
 
-  async allowed(ns: string, ask: Asked) {
-    const policy = await this.vault.loadPolicy(ns);
-    const found = policy.rule(ask.rule);
-    if (!found) fail(`rule ${ask.rule} of /etc/fnox/config.toml isn't in effect`);
-    const { secret, rule } = found;
+  pick(record: VaultRecord | undefined, policy: Policy, ask: Asked, now: number): number {
+    if (!record) fail('a placeholder of no record of this vault');
+    const name = record.name;
+    if (record.kind !== 'secret') fail(`${name} isn't a secret`);
+    if (policy.placeholder(name) !== record.placeholder) {
+      fail(`${name}'s placeholder isn't the one /etc/fnox/config.toml names`);
+    }
+    if (removed(record)) fail(`${name} was removed`);
+    if (expired(record, now)) fail(`${name} expired`);
+    const rules = policy.sessionRules(name);
+    if (!rules.length) fail(`no session rule in /etc/fnox/config.toml lets ${name} be used`);
+    const found = rules.find((entry) => fits(entry.rule, ask));
     const where = `${ask.protocol} ${ask.position} on ${ask.host}:${ask.port}`;
-    if (
-      rule.protocol !== ask.protocol ||
-      rule.domain !== ask.host ||
-      rule.port !== ask.port ||
-      positionOf(rule) !== ask.position
-    ) {
-      fail(`rule ${ask.rule} doesn't allow ${secret} at ${where}`);
-    }
-    if (ask.head) {
-      const registered = await loadRegistered(this.vault.db, ns);
-      const raw = ask.head.target.split(/[?#]/)[0];
-      if (AMBIGUOUS.test(raw)) fail(`ambiguous path ${raw}`);
-      const url = new URL(`https://${ask.host}${ask.head.target}`);
-      if (refusedUrl(registered, url)) {
-        fail(`${ask.host} is a model or MCP endpoint; the vault never injects there`);
-      }
-      if (!matches(rule, ask.head.method, ask.host, url.pathname, rule.header)) {
-        fail(`rule ${ask.rule} doesn't allow ${secret} for ${ask.head.method} ${url.pathname}`);
-      }
-    }
-    const exits = policy.exits(secret);
+    const what = ask.head ? ` for ${ask.head.method} ${ask.head.path}` : '';
+    if (!found) fail(`no session rule lets ${name} at ${where}${what}`);
+    const exits = policy.exits(name);
     if (exits && !exits.includes(ask.exit)) {
-      fail(`${secret} isn't allowed on ${ask.exit} (/etc/slicc/secrets-policy.toml)`);
+      fail(`${name} isn't allowed on ${ask.exit} (/etc/slicc/secrets-policy.toml)`);
     }
-    return { ...found, policy };
+    return found.index;
   }
 
   async materialize(ns: string, req: Fields): Promise<Fields> {
     const ask = asked(req);
     const now = this.vault.now();
-    this.sweep(now);
-    this.burn(ns, ask, now);
+    await this.burn(ns, ask, now);
     if (!ask.verified) fail("the kernel didn't verify the session's host");
     if (ask.handshakeAt > now || now - ask.handshakeAt > SESSION_DEADLINE) {
       fail('the session is past its 60 s deadline');
     }
     const key = this.vault.keyring.key;
     if (!key) throw new Refused('EACCES', 'vault is locked: unlock it in the vault window');
-    const { secret, rule, policy } = await this.allowed(ns, ask);
-    const values: Record<string, string> = Object.create(null);
-    for (const record of await records(this.vault.db, ns)) {
-      const wanted =
-        record.kind === 'secret' &&
-        record.name === secret &&
-        ask.placeholders.includes(record.placeholder) &&
-        policy.placeholder(secret) === record.placeholder;
-      if (!wanted || removed(record) || expired(record, now)) continue;
-      values[record.placeholder] = await decrypt(
-        key,
-        record.sealed,
-        aad(record.ns, record.kind, record.name)
-      );
+    await this.session(ns, ask);
+    const policy = await this.vault.loadPolicy(ns);
+    const held = new Map((await records(this.vault.db, ns)).map((r) => [r.placeholder, r]));
+    const handed: Handed[] = [];
+    const reasons: string[] = [];
+    for (const placeholder of ask.placeholders) {
+      const record = held.get(placeholder);
+      try {
+        const index = this.pick(record, policy, ask, now);
+        const seen = record as VaultRecord;
+        const value = await decrypt(key, seen.sealed, aad(seen.ns, seen.kind, seen.name));
+        handed.push({ record: seen, index, value });
+      } catch (error) {
+        if (!(error instanceof Refused)) throw error;
+        reasons.push(error.message);
+      }
     }
-    await this.record(ns, ask, secret, rule, Object.keys(values).length > 0, now);
-    return { values: Object.fromEntries(Object.entries(values)) };
+    const kept = await this.record(ns, ask, handed, now);
+    if (this.vault.keyring.key !== key) {
+      throw new Refused('EACCES', 'vault is locked: unlock it in the vault window');
+    }
+    if (!kept.length) {
+      throw new Refused('EACCES', reasons[0] ?? 'session refused: the secret changed meanwhile');
+    }
+    return { values: Object.fromEntries(kept.map((h) => [h.record.placeholder, h.value])) };
   }
 
-  async record(ns: string, ask: Asked, secret: string, rule: Rule, used: boolean, now: number) {
+  async record(ns: string, ask: Asked, handed: Handed[], now: number): Promise<Handed[]> {
+    const kept: Handed[] = [];
     await transact(this.vault.db, ['records', 'audit'], 'readwrite', async (tx) => {
-      const history = await all<{ type: string; session?: string }>(tx, 'audit', ns);
-      if (history.some((entry) => entry.type === 'session' && entry.session === ask.session)) {
-        fail('this session already had its request');
-      }
-      if (!used) return;
       const store = tx.objectStore('records');
-      const stored = (await request(store.get([ns, 'secret', secret]))) as VaultRecord;
-      await request(store.put({ ...stored, usedAt: now }));
-      await audit(tx, ns, {
-        type: 'session',
-        name: secret,
-        session: ask.session,
-        domain: ask.host,
-        port: ask.port,
-        protocol: rule.protocol,
-        position: ask.position,
-        rule: ask.rule,
-        exit: ask.exit,
-        uid: ask.stamp.uid,
-        tag: ask.stamp.tag,
-        at: now,
-      });
+      for (const entry of handed) {
+        const { record } = entry;
+        const stored = (await request(store.get([ns, 'secret', record.name]))) as
+          | VaultRecord
+          | undefined;
+        if (!current(stored, record, now)) continue;
+        kept.push(entry);
+        await request(store.put({ ...stored, usedAt: now }));
+        await audit(tx, ns, {
+          type: 'session',
+          name: record.name,
+          session: ask.session,
+          domain: ask.host,
+          port: ask.port,
+          protocol: ask.protocol,
+          position: ask.position,
+          rule: entry.index,
+          exit: ask.exit,
+          uid: ask.stamp.uid,
+          tag: ask.stamp.tag,
+          at: now,
+        });
+      }
     });
-    if (used) await this.vault.changed(ns, ['secrets', 'audit']);
+    if (kept.length) await this.vault.changed(ns, ['secrets', 'audit']);
+    return kept;
   }
 }

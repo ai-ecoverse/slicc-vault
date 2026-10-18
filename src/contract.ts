@@ -453,7 +453,6 @@ export type Op =
       op: 'sessionMaterialize';
       stamp: Stamp;
       session: string;
-      rule: number;
       host: string;
       port: number;
       protocol: SessionProtocol;

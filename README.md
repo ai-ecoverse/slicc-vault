@@ -108,7 +108,7 @@ Otherwise the vault keeps the policy it last accepted for that file, so the rule
 
 **`/etc/fnox/config.toml`**, the injection policy, read the way fnox reads it:
 - `[secrets]`: entries whose `provider` (or the file's `default_provider`) is `seven`, and whose `value` is a placeholder.
-- `[[proxy.rules]]`: `secret` (a seven entry of `[secrets]`), `domain` (one exact host, lower-cased), `header` (lower-cased, default `authorization`), `methods` (upper-cased; empty means any) and `paths` (each starting with `/`; empty means any). A rule that breaks any of this is dropped with a warning; the rest of the file still counts. Rules are numbered from 1 in file order, dropped ones included; the number is the rule id of `sessionMaterialize`.
+- `[[proxy.rules]]`: `secret` (a seven entry of `[secrets]`), `domain` (one exact host, lower-cased), `header` (lower-cased, default `authorization`), `methods` (upper-cased; empty means any) and `paths` (each starting with `/`; empty means any). A rule that breaks any of this is dropped with a warning; the rest of the file still counts. Rules are numbered from 1 in file order, dropped ones included; a `session` audit entry names its rule by that number.
 - **Session rules** (§3.19) add `protocol` and `port` (an integer from 1 to 65535), and are used only by `sessionMaterialize`, never by `forward`; a rule without `protocol` is used only by `forward`:
   - `protocol = "http1"`: `header`, `methods` and `paths` as above; the position is the header. A `position` is a warning.
   - `protocol = "smtp"`, with `position = "auth-plain"` or `"auth-login"`, or `protocol = "pg"`, with `position = "password-cleartext"`: no `header`, `methods` or `paths` (a warning otherwise). Its `header` reads `''`.
@@ -184,7 +184,7 @@ iframe.contentWindow.postMessage({ type: 'slicc-vault', v: 1, op: 'hello', role:
 | `policy` | `files` | the attested policy files, below (Policy) |
 | `forward` | `head`, `body?`, `owner`, `exit`, `rawTraits`, with a `MessagePort` transferred alongside | the injected head, below (Forward) |
 | `materializeConsume` | `ticket`, `stamp`, `path`, `resolved`, `argv`, `cwd`, `interpreters`, `trusted` | the values for the child's environment, below (Exec) |
-| `sessionMaterialize` | `stamp`, `session`, `rule`, `host`, `port`, `protocol`, `position`, `verified`, `handshakeAt`, `exit`, `placeholders`, `head?` | `{ values }` for a kernel-verified TLS session, below (Sessions) |
+| `sessionMaterialize` | `stamp`, `session`, `host`, `port`, `protocol`, `position`, `verified`, `handshakeAt`, `exit`, `placeholders`, `head?` | `{ values }` for a kernel-verified TLS session, below (Sessions) |
 | `import` | `kind`, `bytes`, `password?`, `pick?` | below (Import and export) |
 | `export` | `passphrase` | `{ bundle, count }`, below |
 | anything else | | `ENOTSUP` |
@@ -317,34 +317,32 @@ port.postMessage({ v: 1, id, op: 'forward', head, body, owner, exit, rawTraits }
 
 ## Sessions
 
-**`sessionMaterialize`** (§3.19, a page op that bios relays unchanged from the kernel) hands the kernel's TLS writer one secret for one kernel-terminated TLS session (A2), for a protocol `forward` can't carry: an http1 header on a kernel-made connection, SMTP AUTH, or pg's cleartext password. The kernel asks only after its own handshake verified the rule's host (SNI, chain and hostname, whatever the caller's flags), never on a plaintext leg; it substitutes only at the rule's position, uses the value once within 60 s, keeps it out of every process, fd, file, log and telemetry, and scrubs the session's read side (S2) for the value and its encodings.
+**`sessionMaterialize`** (§3.19, a page op that bios relays unchanged from the kernel) hands the kernel's TLS writer the secrets for one kernel-terminated TLS session (A2), for protocols `forward` can't carry: an http1 header on a kernel-made connection, SMTP AUTH, or pg's cleartext password. The kernel asks only after its own handshake verified the host (SNI, chain and hostname, whatever the caller's flags), never on a plaintext leg; it substitutes only at the position, uses each value once within 60 s, keeps it out of every process, fd, file, log and telemetry, and scrubs the session's read side (S2) for the values and their encodings. The vault picks the rules, so the kernel never parses `/etc/fnox/config.toml`.
 
 ```js
-port.postMessage({ v: 1, id, op: 'sessionMaterialize', stamp, session, rule, host, port: 587, protocol: 'smtp', position: 'auth-plain', verified: true, handshakeAt, exit, placeholders });
+port.postMessage({ v: 1, id, op: 'sessionMaterialize', stamp, session, host, port: 587, protocol: 'smtp', position: 'auth-plain', verified: true, handshakeAt, exit, placeholders });
 ```
 
 The fields are the kernel's session attestation:
 - `stamp`: the kernel's stamp of the process that owns the socket; `users` must be `enforce` (else `EACCES` "kernel users must be enforce").
 - `session`: the kernel's session id, 16 to 128 characters of `A-Z`, `a-z`, `0-9`, `_` and `-`.
-- `rule`: the rule id, the number of the session rule in `/etc/fnox/config.toml` (Policy).
 - `host`: the name the kernel verified the leaf against, compared lower-cased without one trailing dot; `port`; `protocol` (`http1`, `smtp` or `pg`).
 - `position`: `header:<name>` (lower-cased) for http1, else `auth-plain`, `auth-login` or `password-cleartext`.
 - `verified`: the kernel's own verdict on the chain and the name; `handshakeAt`: when the handshake finished (epoch ms).
 - `exit`: the exit the session leaves by (`page`, `proxy`, `tailscale` or `device:<name>`).
-- `placeholders`: 1 to 16 placeholders found at the position. `head` (http1 only, required there): `{ method, path }`, the request line's method and target.
+- `placeholders`: 1 to 16 placeholders, every one found at the position, in one request. `head` (http1 only, required there): `{ method, path }`, the request line's method and target.
 - A malformed field is `EINVAL`.
 
-Once the fields check out, the vault burns the session, then refuses with `EACCES` "session refused: …" when:
-- the session already had a request, in this vault frame or another (the audit log is checked in the same transaction that writes the entry): "this session already had its request";
+Once the fields check out, the vault burns the session in IndexedDB, in one transaction, so no vault frame of the namespace, now or after a reload, answers it again until 60 s after the later of the request and `handshakeAt`. Then it refuses the whole request with `EACCES` "session refused: …" when:
+- the session already had a request, answered or refused: "this session already had its request";
 - `verified` isn't true: "the kernel didn't verify the session's host";
 - `handshakeAt` is in the future or more than 60 s ago: "the session is past its 60 s deadline";
-- the vault is locked (`EACCES` "vault is locked: …");
-- rule `rule` isn't a session rule in effect (dropped, refused as a model or MCP endpoint, or absent): "rule N of /etc/fnox/config.toml isn't in effect";
-- its `protocol`, `domain`, `port` or position isn't the session's: "rule N doesn't allow NAME at PROTOCOL POSITION on HOST:PORT";
-- for http1: an ambiguous path (as in Forward), a URL under a model or MCP endpoint, or a method or path the rule's `methods` and `paths` don't allow;
-- the secret's `[exits]` line doesn't list `exit`.
+- the vault is locked (`EACCES` "vault is locked: …"), at the start or when it answers;
+- for http1: an ambiguous path (as in Forward), or a URL under a model or MCP endpoint (Model and MCP endpoints).
 
-Then it answers `{ values: { [placeholder]: value } }` for the placeholders that are the rule's own secret's: a `secret` record, holding the placeholder `[secrets]` names, neither removed nor expired. Any other placeholder (another secret's, a `model`, `mcp` or `grant` record's, or an unknown one) is left out, with no reason, so the kernel leaves it as written. A request that hands out a value adds one `session` audit entry `{ name, session, domain, port, protocol, position, rule, exit, uid, tag }` and sets the record's `usedAt`. It never includes the value. Stored values never hold CR, LF or NUL (Records), so a value can't break out of its position.
+Each placeholder then gets its value only when it is a `secret` record's, holding the placeholder `[secrets]` names, neither removed nor expired, with a session rule of that secret whose `protocol`, `domain`, `port` and position are the session's (and, for http1, whose `methods` and `paths` allow `head`), and whose `[exits]` line, if any, lists `exit`. A session can carry several secrets this way, each by its own rule. Just before answering, each record is read again in the transaction that audits it: one removed, expired or rotated meanwhile is withheld.
+
+It answers `{ values: { [placeholder]: value } }` for those, and leaves the others out, so the kernel sends them as written. When none gets a value, it's `EACCES` with the first placeholder's reason: "NAME isn't a secret", "a placeholder of no record of this vault", "NAME's placeholder isn't the one /etc/fnox/config.toml names", "NAME was removed", "NAME expired", "no session rule in /etc/fnox/config.toml lets NAME be used", "no session rule lets NAME at PROTOCOL POSITION on HOST:PORT" (with " for METHOD PATH" for http1), "NAME isn't allowed on EXIT", or "the secret changed meanwhile". Each value handed out adds a `session` audit entry `{ name, session, domain, port, protocol, position, rule, exit, uid, tag }`, `rule` being the number of the rule that allowed it, and sets the record's `usedAt`. It never includes the value. Stored values never hold CR, LF or NUL (Records), so a value can't break out of its position.
 
 ## Model and MCP endpoints
 

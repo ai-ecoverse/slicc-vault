@@ -10,6 +10,7 @@ const VALUES = {
   SMTP_PASS: 'fake-session-smtp-0002',
   PG_PASS: 'fake-session-pg-0003',
   DEAD: 'fake-session-dead-0004',
+  SMTP_USER: 'fake-session-user-0007',
 };
 const STAMP = { pid: 70, ppid: 1, uid: 1000, gid: 1000, tag: 'cone', users: 'enforce' };
 
@@ -60,6 +61,13 @@ domain = "dead.example.com"
 protocol = "smtp"
 position = "auth-plain"
 port = 587
+
+[[proxy.rules]]
+secret = "SMTP_USER"
+domain = "smtp.example.com"
+protocol = "smtp"
+position = "auth-plain"
+port = 587
 `;
 
 function configText(placeholders) {
@@ -98,7 +106,6 @@ function smtp(placeholders, fields = {}) {
   return {
     stamp: STAMP,
     session: `smtp-session-${process.pid}-${counter}-0000`,
-    rule: 2,
     host: 'smtp.example.com',
     port: 587,
     protocol: 'smtp',
@@ -135,7 +142,6 @@ test('a kernel-verified session gets its rule secret at the rule position, audit
   const pg = await ask(
     page,
     smtp(placeholders, {
-      rule: 3,
       host: 'db.example.com',
       port: 5432,
       protocol: 'pg',
@@ -148,7 +154,6 @@ test('a kernel-verified session gets its rule secret at the rule position, audit
   const http = await ask(
     page,
     smtp(placeholders, {
-      rule: 1,
       host: 'API.example.com.',
       port: 8443,
       protocol: 'http1',
@@ -181,12 +186,45 @@ test('a kernel-verified session gets its rule secret at the rule position, audit
   assert.ok(!JSON.stringify(audit).includes('fake-session'));
 });
 
-test('NEGATIVE second use: a second request for the same session gets nothing', async (t) => {
+test('one session request carries every placeholder found at its position, each by its own rule', async (t) => {
+  const { page, placeholders } = await ready(t);
+  const both = await ask(
+    page,
+    smtp(placeholders, { placeholders: [placeholders.SMTP_USER, placeholders.SMTP_PASS] })
+  );
+  assert.deepEqual(both.values, {
+    [placeholders.SMTP_USER]: VALUES.SMTP_USER,
+    [placeholders.SMTP_PASS]: VALUES.SMTP_PASS,
+  });
+  const audit = (await page.evaluate(() => window.harness.call('audit'))).audit;
+  assert.deepEqual(
+    audit
+      .filter((entry) => entry.type === 'session')
+      .map((entry) => [entry.name, entry.rule])
+      .sort(),
+    [
+      ['SMTP_PASS', 2],
+      ['SMTP_USER', 8],
+    ]
+  );
+});
+
+test('NEGATIVE second use: a second request for the same session gets nothing, in any vault frame', async (t) => {
   const { page, placeholders } = await ready(t);
   const first = smtp(placeholders);
   assert.equal(Object.keys((await ask(page, first)).values).length, 1);
   await refused(page, first, /^session refused: this session already had its request$/);
   await refused(page, { ...first, handshakeAt: Date.now() }, /already had its request/);
+  await page.reload();
+  await page.evaluate(() => window.harness.connect());
+  await refused(page, { ...first, handshakeAt: Date.now() }, /already had its request/);
+  const empty = smtp(placeholders, { placeholders: [placeholders.API_KEY] });
+  await refused(page, empty, /no session rule lets API_KEY/);
+  await refused(
+    page,
+    { ...empty, placeholders: [placeholders.SMTP_PASS] },
+    /already had its request/
+  );
 });
 
 test('NEGATIVE wrong host or certificate, and plaintext: a session the kernel did not verify gets nothing', async (t) => {
@@ -203,9 +241,13 @@ test('NEGATIVE wrong host: a session to a host its rule does not name gets nothi
   await refused(
     page,
     smtp(placeholders, { host: 'smtp.evil.example' }),
-    /rule 2 doesn't allow SMTP_PASS at smtp auth-plain on smtp.evil.example:587/
+    /^session refused: no session rule lets SMTP_PASS at smtp auth-plain on smtp.evil.example:587$/
   );
-  await refused(page, smtp(placeholders, { port: 25 }), /rule 2 doesn't allow SMTP_PASS/);
+  await refused(
+    page,
+    smtp(placeholders, { port: 25 }),
+    /no session rule lets SMTP_PASS at smtp auth-plain on smtp.example.com:25/
+  );
 });
 
 test('NEGATIVE after the deadline: a session older than 60 s gets nothing', async (t) => {
@@ -227,15 +269,14 @@ test('NEGATIVE wrong position: a protocol, position, header, method or path the 
   await refused(
     page,
     smtp(placeholders, { position: 'auth-login' }),
-    /rule 2 doesn't allow SMTP_PASS at smtp auth-login/
+    /no session rule lets SMTP_PASS at smtp auth-login/
   );
   await refused(
     page,
     smtp(placeholders, { protocol: 'pg', position: 'password-cleartext' }),
-    /rule 2 doesn't allow/
+    /no session rule lets SMTP_PASS at pg password-cleartext/
   );
   const http = {
-    rule: 1,
     host: 'api.example.com',
     port: 8443,
     protocol: 'http1',
@@ -249,17 +290,17 @@ test('NEGATIVE wrong position: a protocol, position, header, method or path the 
       position: 'header:authorization',
       head: { method: 'GET', path: '/v1/x' },
     }),
-    /rule 1 doesn't allow API_KEY at http1 header:authorization/
+    /no session rule lets API_KEY at http1 header:authorization on api.example.com:8443 for GET \/v1\/x/
   );
   await refused(
     page,
     smtp(placeholders, { ...http, head: { method: 'POST', path: '/v1/x' } }),
-    /doesn't allow API_KEY for POST \/v1\/x/
+    /no session rule lets API_KEY at http1 header:x-api-key on api.example.com:8443 for POST \/v1\/x/
   );
   await refused(
     page,
     smtp(placeholders, { ...http, head: { method: 'GET', path: '/admin' } }),
-    /doesn't allow API_KEY for GET \/admin/
+    /no session rule lets API_KEY .* for GET \/admin/
   );
   await refused(
     page,
@@ -269,7 +310,6 @@ test('NEGATIVE wrong position: a protocol, position, header, method or path the 
   await refused(
     page,
     smtp(placeholders, {
-      rule: 6,
       host: 'forward.example.com',
       port: 443,
       protocol: 'http1',
@@ -277,12 +317,11 @@ test('NEGATIVE wrong position: a protocol, position, header, method or path the 
       placeholders: [placeholders.API_KEY],
       head: { method: 'GET', path: '/' },
     }),
-    /rule 6 doesn't allow API_KEY/
+    /no session rule lets API_KEY at http1 header:authorization on forward.example.com:443 for GET \//
   );
   await refused(
     page,
     smtp(placeholders, {
-      rule: 3,
       host: 'db.example.com',
       port: 5432,
       protocol: 'pg',
@@ -322,26 +361,27 @@ test('NEGATIVE non-secret record: only the live secret its rule names is handed 
       kind: 'mcp',
     })
   );
-  const other = await ask(
-    page,
-    smtp(placeholders, {
-      placeholders: [
-        model.placeholder,
-        mcp.placeholder,
-        placeholders.API_KEY,
-        'fnox_proxy_ffffffffffffffffffffffff',
-      ],
-    })
-  );
-  assert.deepEqual(other.values, {});
+  const one = (placeholder) => smtp(placeholders, { placeholders: [placeholder] });
+  await refused(page, one(model.placeholder), /^session refused: OPENAI_KEY isn't a secret$/);
+  await refused(page, one(mcp.placeholder), /^session refused: DOCS_MCP isn't a secret$/);
+  await refused(page, one(placeholders.API_KEY), /no session rule lets API_KEY at smtp auth-plain/);
+  await refused(page, one('fnox_proxy_ffffffffffffffffffffffff'), /a placeholder of no record/);
   await page.evaluate(() => window.harness.call('remove', { name: 'DEAD' }));
-  const dead = await ask(
+  await refused(
     page,
-    smtp(placeholders, { rule: 7, host: 'dead.example.com', placeholders: [placeholders.DEAD] })
+    smtp(placeholders, { host: 'dead.example.com', placeholders: [placeholders.DEAD] }),
+    /^session refused: DEAD was removed$/
   );
-  assert.deepEqual(dead.values, {});
+  const mixed = await ask(
+    page,
+    smtp(placeholders, { placeholders: [model.placeholder, placeholders.SMTP_PASS] })
+  );
+  assert.deepEqual(mixed.values, { [placeholders.SMTP_PASS]: VALUES.SMTP_PASS });
   const audit = (await page.evaluate(() => window.harness.call('audit'))).audit;
-  assert.equal(audit.filter((entry) => entry.type === 'session').length, 0);
+  assert.deepEqual(
+    audit.filter((entry) => entry.type === 'session').map((entry) => entry.name),
+    ['SMTP_PASS']
+  );
 });
 
 test('NEGATIVE §3.16 endpoint: a model or MCP endpoint never gets a session value, whatever the rule says', async (t) => {
@@ -349,7 +389,6 @@ test('NEGATIVE §3.16 endpoint: a model or MCP endpoint never gets a session val
   await refused(
     page,
     smtp(placeholders, {
-      rule: 4,
       host: 'api.openai.com',
       port: 443,
       protocol: 'http1',
@@ -361,8 +400,8 @@ test('NEGATIVE §3.16 endpoint: a model or MCP endpoint never gets a session val
   );
   await refused(
     page,
-    smtp(placeholders, { rule: 5, host: 'api.openai.com', port: 25, position: 'auth-login' }),
-    /rule 5 of \/etc\/fnox\/config.toml isn't in effect/
+    smtp(placeholders, { host: 'api.openai.com', port: 25, position: 'auth-login' }),
+    /no session rule lets SMTP_PASS at smtp auth-login on api.openai.com:25/
   );
   const list = (await page.evaluate(() => window.harness.call('list'))).list;
   assert.deepEqual(

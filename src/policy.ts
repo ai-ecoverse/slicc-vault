@@ -19,7 +19,7 @@ export interface Policy {
   refused(): RefusedRule[];
   placeholder(name: string): string | null;
   rules(name: string): Rule[];
-  rule(index: number): { secret: string; rule: Rule } | null;
+  sessionRules(name: string): { index: number; rule: Rule }[];
   exec(name: string): ExecMode;
   argv(name: string): string[][] | null;
   exits(name: string): ExitName[] | null;
@@ -297,10 +297,10 @@ export function build(accepted: Accepted, refuse: Refuse = () => false): Policy 
     refused: () => refused,
     placeholder: (name) => (Object.hasOwn(config.secrets, name) ? config.secrets[name] : null),
     rules: (name) => kept.filter((entry) => entry.secret === name).map((entry) => entry.rule),
-    rule: (index) => {
-      const found = kept.find((entry) => entry.index === index);
-      return found ? { secret: found.secret, rule: found.rule } : null;
-    },
+    sessionRules: (name) =>
+      kept
+        .filter((entry) => entry.secret === name && entry.rule.protocol !== undefined)
+        .map((entry) => ({ index: entry.index as number, rule: entry.rule })),
     exec: (name) => (Object.hasOwn(extra.exec, name) ? extra.exec[name].mode : false),
     argv: (name) => (Object.hasOwn(extra.exec, name) ? (extra.exec[name].argv ?? null) : null),
     exits: (name) => (Object.hasOwn(extra.exits, name) ? extra.exits[name] : null),
