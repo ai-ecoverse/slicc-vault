@@ -30,7 +30,12 @@ const call = (url, placeholder) => ({
 const pins = async (page) =>
   (await page.evaluate(() => window.harness.call('audit'))).audit
     .filter((entry) => entry.type === 'endpoints')
-    .map(({ pinned, unpinned, adopted }) => ({ pinned, unpinned, adopted }));
+    .map(({ name, pinned, unpinned, adopted }) => ({
+      ...(name ? { name } : {}),
+      pinned,
+      unpinned,
+      adopted,
+    }));
 
 test('a typed-in MCP token pins to the agent server URL of its first fill, and an agent retarget after the pin, or after a rotation, is refused', async (t) => {
   const { page, ask, token } = await ready(t);
@@ -42,7 +47,7 @@ test('a typed-in MCP token pins to the agent server URL of its first fill, and a
   assert.deepEqual(first.request.headers, [['authorization', `Bearer ${TOKEN}`]]);
   assert.deepEqual(await pins(page), [
     {
-      pinned: { server: 'notes', host: 'notes.example.com' },
+      pinned: { name: 'NOTES_MCP', server: 'notes', host: 'notes.example.com' },
       unpinned: undefined,
       adopted: undefined,
     },
@@ -165,7 +170,7 @@ test('a kernel forward pins a typed-in token at its first 2xx, never at a failur
   }
   assert.deepEqual(
     found.map((entry) => entry.pinned),
-    [{ server: 'notes', host: 'notes.example.com' }]
+    [{ name: 'NOTES_MCP', server: 'notes', host: 'notes.example.com' }]
   );
 });
 

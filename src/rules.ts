@@ -310,7 +310,7 @@ async function unpinIn(tx: IDBTransaction, ns: string, names: string[], now: num
     const host = clean(new URL(record.url as string).hostname);
     await audit(tx, ns, {
       type: 'endpoints',
-      unpinned: { server: clean(record.server as string), host },
+      unpinned: { name: clean(name), server: clean(record.server as string), host },
       uid: null,
       tag: null,
       at: now,
@@ -383,7 +383,7 @@ export function pin(
       const host = clean(new URL(url).hostname);
       await audit(tx, ns, {
         type: 'endpoints',
-        pinned: { server: clean(server.server), host },
+        pinned: { name: clean(name), server: clean(server.server), host },
         uid: null,
         tag: null,
         at: now,

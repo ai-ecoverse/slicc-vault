@@ -253,8 +253,8 @@ export interface EndpointsEntry {
   tag: null;
   purged?: { provider: string; host: string }[];
   adopted?: { server: string; host: string }[];
-  pinned?: { server: string; host: string };
-  unpinned?: { server: string; host: string };
+  pinned?: { name: string; server: string; host: string };
+  unpinned?: { name: string; server: string; host: string };
 }
 
 export type AuditEntry =
