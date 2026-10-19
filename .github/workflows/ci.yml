@@ -48,4 +48,5 @@ jobs:
     if: ${{ !cancelled() }}
     uses: ai-ecoverse/slicc-shared-web/.github/workflows/node-ci.yml@v1.24.2
     with:
+      node-version: '26'
       runs-on: ${{ needs.runner.outputs.runner || 'ubuntu-latest' }}
