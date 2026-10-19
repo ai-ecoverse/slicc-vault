@@ -99,6 +99,32 @@ test('NEGATIVE an MCP credential is never filled on a model endpoint or, unless 
     request: call('https://api.openai.com/v1/mcp', token),
   });
   assert.match(model.error.message, /is sent only to llm's own endpoints/);
+  const llmToken = await page.evaluate(() =>
+    window.harness.call('put', {
+      name: 'LLM_MCP',
+      value: 'fake-llm-mcp-0406',
+      kind: 'mcp',
+      server: 'llm',
+    })
+  );
+  await ask('endpoints', {
+    mcp: [{ server: 'llm', url: 'https://api.openai.com/v1/mcp', names: ['LLM_MCP'] }],
+  });
+  const forwarded = await page.evaluate((f) => window.harness.forward(f), {
+    head: {
+      method: 'POST',
+      url: 'https://api.openai.com/v1/mcp',
+      headers: [['Authorization', `Bearer ${llmToken.placeholder}`]],
+    },
+    body: '{}',
+    owner: OWNER,
+    exit: 'page',
+    rawTraits: {},
+  });
+  assert.match(
+    forwarded.reply.refused.reason,
+    /api.openai.com is a model endpoint; MCP credentials never go there/
+  );
   const kern = await page.evaluate(() =>
     window.harness.call('put', {
       name: 'KERN_MCP',

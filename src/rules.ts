@@ -329,7 +329,7 @@ export function registerPage(
   unpin?: unknown,
   now = 0,
   clean: Clean = (text) => text
-): Promise<{ registered: Registered; changed: number }> {
+): Promise<{ registered: Registered; changed: number; unpins: number }> {
   const models = pageModelsOf(model);
   const mcps = mcp === undefined ? [] : serversOf(mcp);
   const removal = removalOf(remove);
@@ -352,8 +352,8 @@ export function registerPage(
     const fresh = before === NO_ENDPOINTS ? { migrated: true } : {};
     const registered = { ...before, ...fresh, page: next };
     if (changed) await request(tx.objectStore('meta').put(registered, `endpoints:${ns}`));
-    const pins = await unpinIn(tx, ns, unpinned, now, clean);
-    return { registered, changed: (changed ? 1 : 0) + pins };
+    const unpins = await unpinIn(tx, ns, unpinned, now, clean);
+    return { registered, changed: changed ? 1 : 0, unpins };
   });
 }
 
@@ -366,14 +366,19 @@ export function pin(
   server: McpServer,
   now: number,
   clean: Clean
-): Promise<number> {
+): Promise<{ pinned: number; elsewhere: string[] }> {
   const url = new URL(server.url).href;
   return transact(db, ['records', 'audit'], 'readwrite', async (tx) => {
     const store = tx.objectStore('records');
     let pinned = 0;
+    const elsewhere: string[] = [];
     for (const name of names) {
       const record = (await request(store.get([ns, 'mcp', name]))) as VaultRecord | undefined;
-      if (!record || removed(record) || record.url !== undefined) continue;
+      if (!record || removed(record)) continue;
+      if (record.url !== undefined) {
+        if (record.url !== url) elsewhere.push(name);
+        continue;
+      }
       await request(store.put({ ...record, url, pinned: true }));
       const host = clean(new URL(url).hostname);
       await audit(tx, ns, {
@@ -385,7 +390,7 @@ export function pin(
       });
       pinned += 1;
     }
-    return pinned;
+    return { pinned, elsewhere };
   });
 }
 

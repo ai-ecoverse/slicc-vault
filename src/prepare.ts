@@ -303,8 +303,20 @@ export class Preparer {
         const scrubber = await this.scrubber();
         const clean = (text: string) => scrubber.text(text).text;
         const names = fresh.map((r) => r.name);
-        if (await pin(this.vault.db, this.ns, names, entry as McpServer, this.vault.now(), clean)) {
-          await this.vault.changed(this.ns, ['secrets', 'audit']);
+        const done = await pin(
+          this.vault.db,
+          this.ns,
+          names,
+          entry as McpServer,
+          this.vault.now(),
+          clean
+        );
+        if (done.pinned) await this.vault.changed(this.ns, ['secrets', 'audit']);
+        if (done.elsewhere.length) {
+          throw new Refused(
+            'EACCES',
+            `${done.elsewhere[0]} was pinned to another URL meanwhile; it is sent only there`
+          );
         }
       },
     };

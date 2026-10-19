@@ -7,6 +7,7 @@ import {
   hostOf,
   type McpServer,
   mcpServer,
+  modelRefused,
   type Registered,
   refusedUrl,
 } from './refusal.ts';
@@ -284,6 +285,9 @@ class Injector {
     const refused = refusedUrl(this.input.registered, this.url);
     if (refused && !this.server) {
       throw new Refusal(`${this.host} is a model or MCP endpoint; the vault never injects there`);
+    }
+    if (this.server && modelRefused(this.input.registered, this.url)) {
+      throw new Refusal(`${this.host} is a model endpoint; MCP credentials never go there`);
     }
     const headers = await this.headers(this.server ? 'mcp' : 'secret');
     const head = { ...this.input.head, headers };

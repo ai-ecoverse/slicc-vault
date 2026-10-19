@@ -175,8 +175,8 @@ export async function forward(
   const clean = (text: string) => scrubber.text(text).text;
   const succeeded = () => {
     if (!names.length) return;
-    void pin(vault.db, ns, names, server as McpServer, vault.now(), clean).then((n) =>
-      n ? vault.changed(ns, ['secrets', 'audit']) : undefined
+    void pin(vault.db, ns, names, server as McpServer, vault.now(), clean).then((done) =>
+      done.pinned ? vault.changed(ns, ['secrets', 'audit']) : undefined
     );
   };
   if (port) relay(port, scrubber, succeeded);

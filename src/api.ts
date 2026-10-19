@@ -427,7 +427,7 @@ export async function answer(
         throw new Refused('EACCES', 'vault is locked: unlock it in the vault window');
       }
       const clean = (text: string) => (scrubber ? scrubber.text(text).text : text);
-      const { changed } = await registerPage(
+      const { changed, unpins } = await registerPage(
         vault.db,
         ns,
         request.model,
@@ -438,7 +438,9 @@ export async function answer(
         clean
       );
       await vault.loadPolicy(ns);
-      if (changed) await vault.changed(ns, ['secrets', 'exits']);
+      if (changed || unpins) {
+        await vault.changed(ns, unpins ? ['secrets', 'exits', 'audit'] : ['secrets', 'exits']);
+      }
       return { ok: true };
     }
     case 'policy': {
