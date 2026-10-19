@@ -38,7 +38,21 @@ interface Asked {
   placeholders: string[];
   head: { method: string; target: string; path: string } | null;
   scram: Scram | null;
+  verifiedBy: 'roots' | 'anchored';
+  anchor: string | null;
+  ids: Map<string, string>;
 }
+
+interface Target {
+  stamp: Stamp;
+  session: string;
+  host: string;
+  port: number;
+  protocol: 'http1' | 'smtp' | 'pg';
+  exit: ExitName;
+}
+
+const PIN = /^[A-Za-z0-9+/]{43}=$/;
 
 interface Handed {
   record: VaultRecord;
@@ -71,7 +85,7 @@ function head(req: Fields, host: string): Asked['head'] {
   return { method: method.toUpperCase(), target, path };
 }
 
-export function asked(req: Fields): Asked {
+export function target(req: Fields): Target {
   const stamp = checkStamp(req.stamp);
   if (stamp.users !== 'enforce') throw new Refused('EACCES', 'kernel users must be enforce');
   if (typeof req.session !== 'string' || !ID.test(req.session)) {
@@ -84,6 +98,24 @@ export function asked(req: Fields): Asked {
   if (protocol !== 'http1' && protocol !== 'smtp' && protocol !== 'pg') {
     invalid('protocol must be http1, smtp or pg');
   }
+  return { stamp, session: req.session, host, port: req.port, protocol, exit: checkExit(req.exit) };
+}
+
+function trustOf(req: Fields): Pick<Asked, 'verifiedBy' | 'anchor'> {
+  const verifiedBy = req.verifiedBy ?? 'roots';
+  if (verifiedBy === 'roots') {
+    if (req.anchor !== undefined) invalid('only an anchored session names its anchor');
+    return { verifiedBy, anchor: null };
+  }
+  if (verifiedBy !== 'anchored') invalid("verifiedBy must be 'roots' or 'anchored'");
+  if (typeof req.anchor !== 'string' || !PIN.test(req.anchor)) {
+    invalid('anchor must be base64 of the 32-byte SHA-256 of the anchor or pin used');
+  }
+  return { verifiedBy, anchor: req.anchor };
+}
+
+export function asked(req: Fields): Asked {
+  const { stamp, host, protocol, exit } = target(req);
   if (typeof req.position !== 'string' || !POSITIONS[protocol].test(req.position)) {
     invalid(`position isn't a ${protocol} position`);
   }
@@ -103,14 +135,16 @@ export function asked(req: Fields): Asked {
   }
   return {
     stamp,
-    session: req.session,
+    session: req.session as string,
     host,
-    port: req.port,
+    port: req.port as number,
     protocol,
     position: req.position,
     verified: req.verified,
     handshakeAt: req.handshakeAt,
-    exit: checkExit(req.exit),
+    exit,
+    ...trustOf(req),
+    ids: new Map(),
     placeholders: [...new Set(list as string[])],
     head: head(req, host),
     scram,
@@ -133,6 +167,19 @@ function fits(rule: Rule, ask: Asked): boolean {
     positionOf(rule) === ask.position;
   if (!same || !ask.head) return same;
   return matches(rule, ask.head.method, ask.host, ask.head.path, rule.header);
+}
+
+function trusts(rule: Rule, ask: Asked): boolean {
+  const anchored = rule.anchors !== undefined || rule.pins !== undefined;
+  if (ask.verifiedBy === 'roots') return !anchored || rule.roots === true;
+  const ids = [...(rule.pins ?? []), ...(rule.anchors ?? []).map((der) => ask.ids.get(der))];
+  return ids.includes(ask.anchor as string);
+}
+
+async function digest(der: string): Promise<string> {
+  const bytes = Uint8Array.from(atob(der), (char) => char.charCodeAt(0));
+  const hash = new Uint8Array(await crypto.subtle.digest('SHA-256', bytes));
+  return btoa(String.fromCharCode(...hash));
 }
 
 function current(stored: VaultRecord | undefined, seen: VaultRecord, now: number): boolean {
@@ -191,10 +238,15 @@ export class Sessions {
     if (expired(record, now)) fail(`${name} expired`);
     const rules = policy.sessionRules(name);
     if (!rules.length) fail(`no session rule in /etc/fnox/config.toml lets ${name} be used`);
-    const found = rules.find((entry) => fits(entry.rule, ask));
+    const fitting = rules.filter((entry) => fits(entry.rule, ask));
     const where = `${ask.protocol} ${ask.position} on ${ask.host}:${ask.port}`;
     const what = ask.head ? ` for ${ask.head.method} ${ask.head.path}` : '';
-    if (!found) fail(`no session rule lets ${name} at ${where}${what}`);
+    if (!fitting.length) fail(`no session rule lets ${name} at ${where}${what}`);
+    const found = fitting.find((entry) => trusts(entry.rule, ask));
+    if (!found && ask.verifiedBy === 'roots') {
+      fail(`${name}'s session rule accepts only its anchors and pins, not public roots`);
+    }
+    if (!found) fail(`the anchor that verified the session isn't one of ${name}'s session rule`);
     const exits = policy.exits(name);
     if (exits && !exits.includes(ask.exit)) {
       fail(`${name} isn't allowed on ${ask.exit} (/etc/slicc/secrets-policy.toml)`);
@@ -232,6 +284,22 @@ export class Sessions {
     return found;
   }
 
+  async anchors(ns: string, req: Fields): Promise<Fields> {
+    const want = target(req);
+    const policy = await this.vault.loadPolicy(ns);
+    const anchors = new Set<string>();
+    const pins = new Set<string>();
+    for (const { secret, rule } of policy.everySessionRule()) {
+      const exits = policy.exits(secret);
+      const same =
+        rule.protocol === want.protocol && rule.domain === want.host && rule.port === want.port;
+      if (!same || (exits && !exits.includes(want.exit))) continue;
+      for (const der of rule.anchors ?? []) anchors.add(der);
+      for (const pin of rule.pins ?? []) pins.add(pin);
+    }
+    return { anchors: [...anchors], pins: [...pins] };
+  }
+
   async materialize(ns: string, req: Fields): Promise<Fields> {
     const ask = asked(req);
     const now = this.vault.now();
@@ -244,6 +312,9 @@ export class Sessions {
       policyIn(tx, ns)
     );
     this.endpoint(ask, registered);
+    for (const { rule } of policy.everySessionRule()) {
+      for (const der of rule.anchors ?? []) ask.ids.set(der, await digest(der));
+    }
     const held = new Map((await records(this.vault.db, ns)).map((r) => [r.placeholder, r]));
     if (ask.scram) ask.placeholders = await this.prover(held, policy, ask, now);
     const handed: Handed[] = [];

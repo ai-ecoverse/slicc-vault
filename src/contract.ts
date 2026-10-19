@@ -90,6 +90,9 @@ export interface Rule {
   protocol?: SessionProtocol;
   position?: SessionPosition;
   port?: number;
+  anchors?: string[];
+  pins?: string[];
+  roots?: boolean;
 }
 
 export interface RefusedRule {
@@ -495,7 +498,17 @@ export type Op =
       verified: boolean;
       handshakeAt: EpochMs;
       exit: ExitName;
-    } & SessionTarget);
+    } & SessionTarget &
+      ({ verifiedBy?: 'roots'; anchor?: never } | { verifiedBy: 'anchored'; anchor: string }))
+  | {
+      op: 'sessionAnchors';
+      stamp: Stamp;
+      session: string;
+      host: string;
+      port: number;
+      protocol: SessionProtocol;
+      exit: ExitName;
+    };
 
 export type AgentOp =
   | { op: 'redact'; texts: (string | Uint8Array)[] }
@@ -556,7 +569,8 @@ export type OpReply =
       values: Record<string, string>;
       placeholders: Record<string, string>;
     }
-  | { op: 'sessionMaterialize'; values: Record<string, string> };
+  | { op: 'sessionMaterialize'; values: Record<string, string> }
+  | { op: 'sessionAnchors'; anchors: string[]; pins: string[] };
 
 export type Request = Op & { v: Protocol; id: number };
 
