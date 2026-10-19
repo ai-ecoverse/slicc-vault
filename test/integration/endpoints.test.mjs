@@ -301,4 +301,21 @@ test('NEGATIVE a page base URL must be a plain https URL of a live model record,
     const reply = await page.evaluate((m) => window.harness.call('endpoints', { model: m }), model);
     assert.equal(reply.error?.code, 'EINVAL', JSON.stringify(model));
   }
+  await page.evaluate(() =>
+    window.harness.call('endpoints', {
+      model: [{ name: 'OPENAI_API_KEY', url: 'https://gw.example.com/openai/v1' }],
+    })
+  );
+  const overlap = await page.evaluate(() =>
+    window.harness.call('endpoints', {
+      mcp: [{ server: 'gw', url: 'https://gw.example.com/openai' }],
+    })
+  );
+  assert.match(overlap.error.message, /is an MCP server, never a model endpoint/);
+  const servers = await page.evaluate(() =>
+    window.harness.call('endpoints', {
+      mcp: [{ server: 'gw', url: 'https://gw.example.com/other' }],
+    })
+  );
+  assert.equal(servers.ok, true);
 });

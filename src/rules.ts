@@ -348,6 +348,12 @@ export function registerPage(
       mcp: mcpNext.filter((s) => !removal.servers.has(`${s.server} ${s.url}`)),
       custom: [...byKey.values()].filter((c) => !removal.bound.has(`${c.name} ${c.url}`)),
     };
+    const overlap = next.custom.find((c) =>
+      next.mcp.some((server) => under(server.url, new URL(c.url)))
+    );
+    if (overlap) {
+      throw new Refused('EINVAL', `${overlap.url} is an MCP server, never a model endpoint`);
+    }
     const changed = JSON.stringify(next) !== JSON.stringify(page);
     const fresh = before === NO_ENDPOINTS ? { migrated: true } : {};
     const registered = { ...before, ...fresh, page: next };
