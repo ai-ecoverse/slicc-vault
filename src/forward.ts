@@ -148,6 +148,7 @@ export async function forward(
   const early = await vault.scrubbers.get(ns);
   const tidy = early ? (text: string) => early.text(text).text : null;
   if (tidy && (await migrate(vault.db, ns, vault.now(), tidy))) {
+    await vault.loadPolicy(ns);
     await vault.changed(ns, ['secrets', 'audit', 'exits']);
   }
   const [held, registered] = await Promise.all([

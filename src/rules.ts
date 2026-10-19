@@ -416,7 +416,8 @@ export function migrate(db: IDBDatabase, ns: string, now: number, clean: Clean):
         typeof r.server === 'string' &&
         !owned.has(r.server)
     );
-    const wanted = new Set(held.map((r) => r.server as string));
+    const tombstones = new Set(before.held ?? []);
+    const wanted = new Set(held.map((r) => r.server as string).filter((n) => !tombstones.has(n)));
     const urls = (name: string) => before.mcp.filter((server) => server.server === name).length;
     const adopted = before.mcp.filter(
       (server) => wanted.has(server.server) && urls(server.server) === 1
@@ -427,7 +428,9 @@ export function migrate(db: IDBDatabase, ns: string, now: number, clean: Clean):
       mcp: before.mcp.filter((server) => !adopted.includes(server)),
       page: { ...page, mcp: [...page.mcp, ...adopted] },
       migrated: true,
-      ...(ambiguous.length ? { held: ambiguous } : {}),
+      ...(ambiguous.length || tombstones.size
+        ? { held: [...new Set([...tombstones, ...ambiguous])] }
+        : {}),
     };
     delete next.owned;
     await request(meta.put(next, `endpoints:${ns}`));

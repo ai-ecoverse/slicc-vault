@@ -294,6 +294,7 @@ export class Preparer {
     const scrubber = await this.scrubber();
     const clean = (text: string) => scrubber.text(text).text;
     if (await migrate(this.vault.db, this.ns, this.vault.now(), clean)) {
+      await this.vault.loadPolicy(this.ns);
       await this.vault.changed(this.ns, ['secrets', 'audit', 'exits']);
     }
     return this.prepare(request, () => this.mcpTarget(server, url));

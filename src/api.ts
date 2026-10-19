@@ -561,6 +561,7 @@ export class Server {
     const scrubber = await this.vault.scrubbers.get(session.ns);
     const clean = scrubber ? (text: string) => scrubber.text(text).text : null;
     if (clean && (await migrate(this.vault.db, session.ns, this.vault.now(), clean))) {
+      await this.vault.loadPolicy(session.ns);
       await this.vault.changed(session.ns, ['secrets', 'audit', 'exits']);
     }
     await this.vault.loadPolicy(session.ns);
