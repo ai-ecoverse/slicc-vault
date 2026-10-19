@@ -294,7 +294,7 @@ async function unpinIn(tx: IDBTransaction, ns: string, names: string[], now: num
   for (const name of names) {
     const record = (await request(store.get([ns, 'mcp', name]))) as VaultRecord | undefined;
     if (!record?.pinned) continue;
-    const next: VaultRecord = { ...record };
+    const next: VaultRecord = { ...record, unpins: (record.unpins ?? 0) + 1 };
     delete next.url;
     delete next.pinned;
     await request(store.put(next));

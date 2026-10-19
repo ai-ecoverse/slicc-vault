@@ -233,7 +233,9 @@ export class Preparer {
     const now = new Map(live.map((r) => [r.placeholder, r]));
     const moved = seen.filled.some((r) => {
       const found = now.get(r.placeholder);
-      return !found || removed(found) || found.updatedAt !== r.updatedAt;
+      return (
+        !found || removed(found) || found.updatedAt !== r.updatedAt || found.unpins !== r.unpins
+      );
     });
     if (moved) {
       throw new Refused(

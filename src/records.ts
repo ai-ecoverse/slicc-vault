@@ -38,6 +38,7 @@ export interface VaultRecord {
   settings?: Record<string, string>;
   url?: string;
   pinned?: boolean;
+  unpins?: number;
   sealedBy?: number;
   removedAt?: number;
   removedWith?: string;
