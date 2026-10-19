@@ -565,6 +565,13 @@ export type AgentOp =
       oauth: OAuthConfig;
       name?: string;
     }
+  | {
+      op: 'grant';
+      provider: 'xai' | 'kimi-coding' | 'openai-codex';
+      name: string;
+      response: string | Uint8Array;
+      settings?: Record<string, string>;
+    }
   | { op: 'refresh'; server: string; name?: string }
   | { op: 'refresh'; provider: string; name?: string };
 
@@ -580,6 +587,11 @@ export type AgentReply =
   | {
       op: 'grant';
       response: string | Uint8Array;
+      records: { kind: RecordKind; name: string; placeholder: string }[];
+      expiresAt?: EpochMs;
+    }
+  | {
+      op: 'grant';
       records: { kind: RecordKind; name: string; placeholder: string }[];
       expiresAt?: EpochMs;
     }

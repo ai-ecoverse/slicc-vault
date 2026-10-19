@@ -201,6 +201,23 @@ test("NEGATIVE a sign-in never writes a returned token into its name or settings
     response: response(),
   });
   assert.equal(inherited.error.code, 'EINVAL');
+  const stored = await ask('grant', {
+    provider: 'xai',
+    name: 'XAI_STORED',
+    response: response(),
+    settings: { OLD: 'fake-xai-noted-0817' },
+  });
+  assert.equal(stored.error.code, 'EINVAL');
+  const viewed = await page.evaluate(
+    (text) =>
+      window.harness.ask('grant', {
+        provider: 'xai',
+        name: 'XAI_VIEW',
+        response: new Int8Array(new TextEncoder().encode(text).buffer),
+      }),
+    response({ access_token: 'fake-xai-view-0818', refresh_token: 'fake-xai-view-0819' })
+  );
+  assert.equal(viewed.records.length, 2);
   const named = await ask('grant', {
     provider: 'xai',
     name: 'FAKE_TOKEN_NAME_0809',

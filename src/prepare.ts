@@ -1,5 +1,5 @@
 import { compile, type Hit, type Scrubber } from '@ai-ecoverse/slicc-scrub';
-import { text } from './bytes.ts';
+import { bytesOf, text } from './bytes.ts';
 import { all as every, transact } from './db.ts';
 import { Refused } from './errors.ts';
 import { decrypt } from './keys.ts';
@@ -427,18 +427,6 @@ export class Preparer {
     };
   }
 
-  async free(name: string, grantName: string, source: string): Promise<boolean> {
-    const held = await records(this.vault.db, this.ns);
-    const grant = held.find((r) => r.kind === 'grant' && r.name === grantName && !removed(r));
-    if (!grant) return false;
-    const owner = held.find((r) => r.kind === 'model' && r.name === name && !removed(r));
-    if (grant.source === source && owner?.refresh === grantName) return true;
-    throw new Refused(
-      'EEXIST',
-      `${grantName} belongs to another credential; sign in under another name`
-    );
-  }
-
   async signIn(fields: Fields): Promise<Fields> {
     const provider = fields.provider as string;
     const response = fields.response;
@@ -450,9 +438,8 @@ export class Preparer {
         'a provider sign-in takes no server or oauth: the vault knows them'
       );
     }
-    if (typeof response !== 'string' && !(response instanceof Uint8Array)) {
-      throw new Refused('EINVAL', 'response must be the token response body');
-    }
+    const bytes = typeof response === 'string' ? response : bytesOf(response);
+    if (bytes === null) throw new Refused('EINVAL', 'response must be the token response body');
     const name = fields.name;
     if (typeof name !== 'string' || !NAME.test(name) || `${name}_GRANT`.length > 128) {
       throw new Refused('EINVAL', "name must be the account's record name");
@@ -461,7 +448,7 @@ export class Preparer {
     if (scrubber.text(name).hits.length > 0) throw new Refused('EINVAL', 'the name holds a value');
     const bound = binding('model', { provider, settings: fields.settings });
     const now = this.vault.now();
-    const got = await tokens({ status: 200, headers: [], body: response }, scrubber, now, true);
+    const got = await tokens({ status: 200, headers: [], body: bytes }, scrubber, now, true);
     checkValue(got.access);
     if (got.refresh !== null) checkValue(got.refresh);
     const grantName = `${name}_GRANT`;
@@ -478,10 +465,11 @@ export class Preparer {
     );
     const settings = bound.settings ?? current?.settings ?? {};
     const meta = [name, grantName, ...Object.entries(settings).flat()];
-    if (meta.some((t) => returned.text(t).hits.some((hit) => hit.form !== 'fragment'))) {
-      throw new Refused('EINVAL', 'the name or settings hold a returned token');
+    const holds = (s: Scrubber) => (t: string) =>
+      s.text(t).hits.some((hit) => hit.form !== 'fragment');
+    if (meta.some(holds(returned)) || meta.some(holds(scrubber))) {
+      throw new Refused('EINVAL', 'the name or settings hold a token or a stored value');
     }
-    const owned = await this.free(name, grantName, `oauth:${provider}`);
     const common = { ns: this.ns, source: `oauth:${provider}` as const, uid: null, tag: null, now };
     const access: SealInput = {
       ...common,
@@ -490,7 +478,7 @@ export class Preparer {
       value: got.access,
       ...bound,
       stash: true,
-      ...(owned && got.refresh === null ? { retire: grantName } : {}),
+      claim: { grant: grantName, retire: got.refresh === null },
       ...(got.expires === null ? {} : { expiresAt: now + got.expires * 1000 }),
       ...(got.refresh !== null ? { refresh: grantName } : {}),
     };

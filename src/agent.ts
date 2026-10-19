@@ -1,4 +1,5 @@
 import type { Hit, Scrubber, Stream } from '@ai-ecoverse/slicc-scrub';
+import { bytesOf } from './bytes.ts';
 import { Refused } from './errors.ts';
 import { Preparer } from './prepare.ts';
 import { register } from './rules.ts';
@@ -9,11 +10,6 @@ type Fields = Record<string, unknown>;
 export const MAX_STREAMS = 64;
 const SANITIZED = new Set(['model', 'mcp', 'records', 'grant', 'refresh']);
 const LOCKED = 'vault is locked: unlock it in the vault window to continue';
-
-export function bytesOf(value: unknown): Uint8Array | null {
-  if (!ArrayBuffer.isView(value)) return null;
-  return new Uint8Array(value.buffer, value.byteOffset, value.byteLength);
-}
 
 export class AgentPort {
   readonly vault: Vault;

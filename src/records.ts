@@ -131,7 +131,7 @@ export interface SealInput {
   url?: string;
   exclusive?: boolean;
   stash?: boolean;
-  retire?: string;
+  claim?: { grant: string; retire: boolean };
   placeholder?: string;
   answers?: Answers;
   now: number;
@@ -399,13 +399,8 @@ async function write(tx: IDBTransaction, input: SealInput, sealed: Sealed): Prom
   } else if (input.stash && live?.replaced) {
     record.replaced = live.replaced;
   }
+  if (input.claim) await claim(store, input, input.claim, live);
   await request(store.put(record));
-  if (input.retire) {
-    const old = (await request(store.get([input.ns, 'grant', input.retire]))) as VaultRecord;
-    const gone: VaultRecord = { ...old, removedAt: input.now };
-    delete gone.removedWith;
-    await request(store.put(gone));
-  }
   if (input.answers) await answered(tx, input.ns, input.answers, record.placeholder, input.now);
   await bump(tx, input.ns);
   const rotated = existing !== undefined && !removed(existing);
@@ -685,6 +680,28 @@ async function mark(
     });
     return record;
   });
+}
+
+async function claim(
+  store: IDBObjectStore,
+  input: SealInput,
+  wanted: { grant: string; retire: boolean },
+  live: VaultRecord | undefined
+): Promise<void> {
+  const grant = (await request(store.get([input.ns, 'grant', wanted.grant]))) as
+    | VaultRecord
+    | undefined;
+  if (!grant || removed(grant)) return;
+  if (grant.source !== input.source || live?.refresh !== wanted.grant) {
+    throw new Refused(
+      'EEXIST',
+      `${wanted.grant} belongs to another credential; sign in under another name`
+    );
+  }
+  if (!wanted.retire) return;
+  const gone: VaultRecord = { ...grant, removedAt: input.now };
+  delete gone.removedWith;
+  await request(store.put(gone));
 }
 
 async function swap(
