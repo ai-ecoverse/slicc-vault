@@ -419,14 +419,19 @@ export function migrate(db: IDBDatabase, ns: string, now: number, clean: Clean):
     const tombstones = new Set(before.held ?? []);
     const wanted = new Set(held.map((r) => r.server as string).filter((n) => !tombstones.has(n)));
     const urls = (name: string) => before.mcp.filter((server) => server.server === name).length;
-    const adopted = before.mcp.filter(
-      (server) => wanted.has(server.server) && urls(server.server) === 1
+    const single = (server: McpServer) =>
+      wanted.has(server.server) && urls(server.server) === 1 && !server.url.includes('*');
+    const adopted = before.mcp.filter(single);
+    const ambiguous = [...wanted].filter(
+      (name) => !adopted.some((server) => server.server === name)
     );
-    const ambiguous = [...wanted].filter((name) => urls(name) > 1);
     const next: Registered = {
       ...before,
       mcp: before.mcp.filter((server) => !adopted.includes(server)),
-      page: { ...page, mcp: [...page.mcp, ...adopted] },
+      page: {
+        ...page,
+        mcp: [...page.mcp, ...adopted.map(({ server, url }) => ({ server, url, names: [] }))],
+      },
       migrated: true,
       ...(ambiguous.length || tombstones.size
         ? { held: [...new Set([...tombstones, ...ambiguous])] }
