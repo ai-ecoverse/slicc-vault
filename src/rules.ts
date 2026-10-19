@@ -49,13 +49,15 @@ export function loadStored(db: IDBDatabase, ns: string): Promise<Stored> {
   });
 }
 
+export async function endpointsIn(tx: IDBTransaction, ns: string): Promise<Registered> {
+  const stored = (await request(tx.objectStore('meta').get(`endpoints:${ns}`))) as
+    | Registered
+    | undefined;
+  return stored ?? NO_ENDPOINTS;
+}
+
 export function loadRegistered(db: IDBDatabase, ns: string): Promise<Registered> {
-  return transact(db, ['meta'], 'readonly', async (tx) => {
-    const stored = (await request(tx.objectStore('meta').get(`endpoints:${ns}`))) as
-      | Registered
-      | undefined;
-    return stored ?? NO_ENDPOINTS;
-  });
+  return transact(db, ['meta'], 'readonly', (tx) => endpointsIn(tx, ns));
 }
 
 export function refuser(registered: Registered) {
@@ -419,8 +421,15 @@ export function migrate(db: IDBDatabase, ns: string, now: number, clean: Clean):
     const tombstones = new Set(before.held ?? []);
     const wanted = new Set(held.map((r) => r.server as string).filter((n) => !tombstones.has(n)));
     const urls = (name: string) => before.mcp.filter((server) => server.server === name).length;
+    const clash = (server: McpServer) =>
+      page.custom.some(
+        (c) => under(server.url, new URL(c.url)) || under(c.url, new URL(server.url))
+      );
     const single = (server: McpServer) =>
-      wanted.has(server.server) && urls(server.server) === 1 && !server.url.includes('*');
+      wanted.has(server.server) &&
+      urls(server.server) === 1 &&
+      !server.url.includes('*') &&
+      !clash(server);
     const adopted = before.mcp.filter(single);
     const ambiguous = [...wanted].filter(
       (name) => !adopted.some((server) => server.server === name)

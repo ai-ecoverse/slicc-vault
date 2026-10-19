@@ -1,11 +1,11 @@
 import type { Scrubber, Stream } from '@ai-ecoverse/slicc-scrub';
 import type { ExitName } from './contract.ts';
-import { request, transact } from './db.ts';
+import { all, request, transact } from './db.ts';
 import { Refused } from './errors.ts';
 import { type Head, type Prepared, prepare, type Traits } from './inject.ts';
 import { audit, records, type VaultRecord } from './records.ts';
 import { holds, type McpServer, mcpServer, modelRefused, refusedUrl, tofu } from './refusal.ts';
-import { loadRegistered, migrate, pin } from './rules.ts';
+import { endpointsIn, loadRegistered, migrate, pin } from './rules.ts';
 import { checkStamp } from './sealed.ts';
 import type { Vault } from './vault.ts';
 
@@ -170,12 +170,13 @@ export async function forward(
   if (!prepared.ok) return { refused: { status: prepared.status, reason: prepared.reason } };
   const scrubber = (await vault.scrubbers.get(ns)) as Scrubber;
   const current = async () => {
-    const fresh = await loadRegistered(vault.db, ns);
+    const [fresh, live] = await transact(vault.db, ['meta', 'records'], 'readonly', (tx) =>
+      Promise.all([endpointsIn(tx, ns), all<VaultRecord>(tx, 'records', ns)])
+    );
     const url = new URL(head.url);
     const server = prepared.server;
     if (!server) return !refusedUrl(fresh, url);
     const now = mcpServer(fresh, url);
-    const live = await records(vault.db, ns);
     return (
       now?.server === server.server &&
       now.url === server.url &&

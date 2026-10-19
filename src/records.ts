@@ -440,10 +440,12 @@ export async function bump(tx: IDBTransaction, ns: string): Promise<number> {
   return next;
 }
 
+export async function scrubIn(tx: IDBTransaction, ns: string): Promise<number> {
+  return ((await request(tx.objectStore('meta').get(`scrub:${ns}`))) as number | undefined) ?? 0;
+}
+
 export function scrubVersion(db: IDBDatabase, ns: string): Promise<number> {
-  return transact(db, ['meta'], 'readonly', async (tx) => {
-    return ((await request(tx.objectStore('meta').get(`scrub:${ns}`))) as number | undefined) ?? 0;
-  });
+  return transact(db, ['meta'], 'readonly', (tx) => scrubIn(tx, ns));
 }
 
 export interface Backup {

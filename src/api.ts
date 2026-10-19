@@ -1,3 +1,4 @@
+import type { Scrubber } from '@ai-ecoverse/slicc-scrub';
 import { AgentPort } from './agent.ts';
 import type { Part } from './channel.ts';
 import { embedded } from './config.ts';
@@ -94,7 +95,7 @@ export async function audit(
   const more = older.length > page.length;
   const scrubber = page.some((e) => e.type === 'endpoints') ? await vault.scrubbers.get(ns) : null;
   const scrub = (value: unknown): unknown => {
-    if (typeof value === 'string') return scrubber ? scrubber.text(value).text : value;
+    if (typeof value === 'string') return (scrubber as Scrubber).text(value).text;
     if (Array.isArray(value)) return value.map(scrub);
     return Object.fromEntries(
       Object.entries(value as object).map(([key, item]) => [key, scrub(item)])
@@ -104,7 +105,9 @@ export async function audit(
     const shown =
       entry.type === 'endpoints'
         ? Object.fromEntries(
-            Object.entries(entry).map(([key, item]) => [key, PAYLOAD.has(key) ? scrub(item) : item])
+            Object.entries(entry)
+              .filter(([key]) => scrubber || !PAYLOAD.has(key))
+              .map(([key, item]) => [key, PAYLOAD.has(key) ? scrub(item) : item])
           )
         : entry;
     const known = shown as AuditEntry & {

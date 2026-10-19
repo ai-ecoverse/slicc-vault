@@ -1,6 +1,6 @@
 import { compile, type Hit, type Scrubber } from '@ai-ecoverse/slicc-scrub';
 import { text } from './bytes.ts';
-import { all as every, request as idb, transact } from './db.ts';
+import { all as every, transact } from './db.ts';
 import { Refused } from './errors.ts';
 import { decrypt } from './keys.ts';
 import {
@@ -10,6 +10,7 @@ import {
   records,
   removed,
   type SealInput,
+  scrubIn,
   sealAll,
   type VaultRecord,
 } from './records.ts';
@@ -20,7 +21,6 @@ import {
   type McpServer,
   modelFor,
   modelRefused,
-  NO_ENDPOINTS,
   pageServer,
   type Registered,
   serverFor,
@@ -28,7 +28,7 @@ import {
   tofu,
   under,
 } from './refusal.ts';
-import { loadRegistered, migrate, pin } from './rules.ts';
+import { endpointsIn, loadRegistered, migrate, pin } from './rules.ts';
 import type { Vault } from './vault.ts';
 
 type Fields = Record<string, unknown>;
@@ -233,18 +233,23 @@ export class Preparer {
         "the vault's values changed meanwhile; prepare the request again"
       );
     }
-    const [registered, live] = await transact(
+    const [registered, live, version] = await transact(
       this.vault.db,
       ['meta', 'records'],
       'readonly',
       (tx) =>
         Promise.all([
-          idb(tx.objectStore('meta').get(`endpoints:${this.ns}`)).then(
-            (found) => (found as Registered | undefined) ?? NO_ENDPOINTS
-          ),
+          endpointsIn(tx, this.ns),
           every<VaultRecord>(tx, 'records', this.ns),
+          scrubIn(tx, this.ns),
         ])
     );
+    if (version !== scrubber.version) {
+      throw new Refused(
+        'EAGAIN',
+        "the vault's values changed meanwhile; prepare the request again"
+      );
+    }
     const last = await make(registered);
     still(last, seen.filled);
     const now = new Map(live.map((r) => [r.placeholder, r]));
