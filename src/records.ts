@@ -37,6 +37,8 @@ export interface VaultRecord {
   server?: string;
   settings?: Record<string, string>;
   url?: string;
+  pinned?: boolean;
+  unpins?: number;
   sealedBy?: number;
   removedAt?: number;
   removedWith?: string;
@@ -180,6 +182,8 @@ function shownBinding(record: VaultRecord, clean: Clean): Partial<SecretView> {
   const out: Partial<SecretView> = {};
   if (record.provider !== undefined) out.provider = clean(record.provider);
   if (record.server !== undefined) out.server = clean(record.server);
+  if (record.kind === 'mcp' && record.url !== undefined) out.url = clean(record.url);
+  if (record.pinned) out.pinned = true;
   if (record.settings !== undefined) {
     out.settings = Object.fromEntries(
       Object.entries(record.settings)
@@ -290,6 +294,15 @@ function bound(existing: VaultRecord | undefined, input: SealInput): Partial<Vau
   const settings = input.settings ?? existing?.settings;
   const bridge = input.source === 'process' && input.kind === 'mcp';
   if (input.url !== undefined) out.url = input.url;
+  const kept =
+    existing?.pinned === true &&
+    input.url === undefined &&
+    server === existing.server &&
+    input.source !== 'oauth:mcp';
+  if (kept) {
+    out.url = existing.url;
+    out.pinned = true;
+  }
   if (bridge) out.sealedBy = input.uid as number;
   if (provider !== undefined) out.provider = provider;
   if (server !== undefined) out.server = server;
@@ -427,10 +440,12 @@ export async function bump(tx: IDBTransaction, ns: string): Promise<number> {
   return next;
 }
 
+export async function scrubIn(tx: IDBTransaction, ns: string): Promise<number> {
+  return ((await request(tx.objectStore('meta').get(`scrub:${ns}`))) as number | undefined) ?? 0;
+}
+
 export function scrubVersion(db: IDBDatabase, ns: string): Promise<number> {
-  return transact(db, ['meta'], 'readonly', async (tx) => {
-    return ((await request(tx.objectStore('meta').get(`scrub:${ns}`))) as number | undefined) ?? 0;
-  });
+  return transact(db, ['meta'], 'readonly', (tx) => scrubIn(tx, ns));
 }
 
 export interface Backup {

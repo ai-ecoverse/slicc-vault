@@ -8,6 +8,7 @@ const MODEL_KEY = 'fake-model-key-0101';
 const OTHER_KEY = 'fake-model-key-0102';
 const SECRET = 'fake-secret-value-0103';
 const BRIDGE = 'fake-bridge-token-0104';
+const LOOP = 'fake-loop-token-0140';
 
 async function ready(t) {
   const page = await embedder(t);
@@ -30,8 +31,13 @@ async function ready(t) {
   const bridge = await put({ name: 'BRIDGE', value: BRIDGE, kind: 'mcp', server: 'bridge' });
   assert.equal((await page.evaluate(() => window.harness.agent())).role, 'agent');
   const ask = (op, fields) => page.evaluate((o, f) => window.harness.ask(o, f), op, fields);
+  const custom = await page.evaluate(() =>
+    window.harness.call('endpoints', {
+      model: [{ name: 'OPENAI_API_KEY', url: 'https://llm.example.com/v1' }],
+    })
+  );
+  assert.equal(custom.ok, true);
   const registered = await ask('endpoints', {
-    model: [{ provider: 'openai', url: 'https://llm.example.com/v1' }],
     mcp: [
       { server: 'bridge', url: 'http://8080.kernel.localhost/mcp' },
       {
@@ -133,8 +139,25 @@ test('model prepares a request with its provider key and the body scrubbed', asy
   assert.match(named.error.message, /head carries a value/);
 });
 
-test('mcp fills its server credential on the kernel loopback, and never sends one elsewhere', async (t) => {
-  const { ask, bridge, model } = await ready(t);
+test('mcp fills a kernel bridge token on its loopback, and never sends one elsewhere', async (t) => {
+  const { page, ask, model } = await ready(t);
+  const bridge = await page.evaluate(
+    (value) =>
+      window.harness.sealed(
+        {
+          v: 1,
+          op: 'seal',
+          name: 'LOOP',
+          value,
+          kind: 'mcp',
+          server: 'bridge',
+          url: 'http://8080.kernel.localhost/mcp',
+        },
+        { pid: 76, ppid: 1, uid: 1000, gid: 1000, tag: null }
+      ),
+    LOOP
+  );
+  assert.match(bridge.placeholder, /^fnox_proxy_/, JSON.stringify(bridge));
   const got = await ask('mcp', {
     server: 'bridge',
     request: req(
@@ -143,7 +166,11 @@ test('mcp fills its server credential on the kernel loopback, and never sends on
       `{"args":"${SECRET}"}`
     ),
   });
-  assert.deepEqual(got.request.headers, [['authorization', `Bearer ${BRIDGE}`]]);
+  assert.deepEqual(
+    got.request?.headers,
+    [['authorization', `Bearer ${LOOP}`]],
+    JSON.stringify(got)
+  );
   assert.ok(!got.request.body.includes(SECRET));
   const cdp = await ask('mcp', {
     server: 'bridge',
@@ -483,7 +510,10 @@ test('a kernel bridge seals its own loopback token, which only that server gets'
       ['authorization', `Bearer ${sealed.placeholder}`],
     ]),
   });
-  assert.match(exfil.error.message, /isn't a credential of bridge/);
+  assert.match(
+    exfil.error.message,
+    /isn't a credential of bridge|is sent only to bridge's own endpoints/
+  );
   const elsewhere = await ask('mcp', {
     server: 'docs',
     request: req('https://docs.example.com/mcp', [

@@ -1,6 +1,6 @@
 import { verify } from './attest.ts';
 import type { PolicyChange, PolicyFile, PolicyFileState, PolicyResult, Rule } from './contract.ts';
-import { request, transact } from './db.ts';
+import { all, request, transact } from './db.ts';
 import { Refused } from './errors.ts';
 import {
   type Accepted,
@@ -15,16 +15,22 @@ import {
   parseConfig,
   parseExtra,
 } from './policy.ts';
-import { audit, NAME, PROVIDER } from './records.ts';
+import { audit, NAME, PROVIDER, removed, type VaultRecord } from './records.ts';
 import {
+  servers as allServers,
+  type Custom,
   contains,
+  coveredByBuiltIn,
   endpoint,
   type McpServer,
   NO_ENDPOINTS,
+  NO_PAGE,
   type Owned,
   onHost,
+  pageSealed,
   patterns,
   type Registered,
+  under,
 } from './refusal.ts';
 
 export interface Stored {
@@ -44,13 +50,15 @@ export function loadStored(db: IDBDatabase, ns: string): Promise<Stored> {
   });
 }
 
+export async function endpointsIn(tx: IDBTransaction, ns: string): Promise<Registered> {
+  const stored = (await request(tx.objectStore('meta').get(`endpoints:${ns}`))) as
+    | Registered
+    | undefined;
+  return stored ?? NO_ENDPOINTS;
+}
+
 export function loadRegistered(db: IDBDatabase, ns: string): Promise<Registered> {
-  return transact(db, ['meta'], 'readonly', async (tx) => {
-    const stored = (await request(tx.objectStore('meta').get(`endpoints:${ns}`))) as
-      | Registered
-      | undefined;
-    return stored ?? NO_ENDPOINTS;
-  });
+  return transact(db, ['meta'], 'readonly', (tx) => endpointsIn(tx, ns));
 }
 
 export function refuser(registered: Registered) {
@@ -77,7 +85,7 @@ export async function loadPolicy(db: IDBDatabase, ns: string): Promise<Policy> {
   return (await transact(db, ['meta'], 'readonly', (tx) => policyIn(tx, ns))).policy;
 }
 
-function servers(value: unknown): McpServer[] {
+function serversOf(value: unknown): McpServer[] {
   if (!Array.isArray(value)) throw new Refused('EINVAL', 'mcp must be a list');
   return value.map((entry) => {
     const item = typeof entry === 'string' ? { server: entry, url: entry, names: [] } : entry;
@@ -96,12 +104,33 @@ function servers(value: unknown): McpServer[] {
   });
 }
 
-export function register(
-  db: IDBDatabase,
-  ns: string,
-  model: unknown,
-  mcp: unknown
-): Promise<{ registered: Registered; added: number }> {
+function mergeServers(stored: McpServer[], given: McpServer[], all: McpServer[]): McpServer[] {
+  const byUrl = new Map(stored.map((server) => [`${server.server} ${server.url}`, server]));
+  const firstToken = new Map<string, string>();
+  for (const entry of [...all, ...given]) {
+    if (entry.tokenUrl && !firstToken.has(entry.server))
+      firstToken.set(entry.server, entry.tokenUrl);
+  }
+  for (const entry of given) {
+    const token = firstToken.get(entry.server);
+    const server = token ? { ...entry, tokenUrl: token } : entry;
+    const key = `${server.server} ${server.url}`;
+    const known = byUrl.get(key);
+    byUrl.set(
+      key,
+      known
+        ? { ...server, ...known, names: [...new Set([...known.names, ...server.names])] }
+        : server
+    );
+  }
+  return [...byUrl.values()];
+}
+
+function count(model: string[], mcp: McpServer[], custom: Owned[] = []): number {
+  return model.length + custom.length + mcp.reduce((sum, s) => sum + s.names.length + 1, 0);
+}
+
+function modelsOf(model: unknown): string[] {
   const given = model === undefined ? [] : model;
   const ownedOf = (entry: unknown) =>
     entry && typeof entry === 'object' ? (entry as Partial<Owned>) : null;
@@ -119,46 +148,338 @@ export function register(
   if (!Array.isArray(given) || !given.every(okEntry)) {
     throw new Refused('EINVAL', 'model must be a list of https base URLs or { provider, url }');
   }
-  const models = given.map((entry) => (typeof entry === 'string' ? entry : (entry as Owned).url));
-  const owned = given.filter((entry) => typeof entry !== 'string') as Owned[];
-  const mcps = mcp === undefined ? [] : servers(mcp);
-  return transact(db, ['meta'], 'readwrite', async (tx) => {
-    const meta = tx.objectStore('meta');
-    const stored =
-      ((await request(meta.get(`endpoints:${ns}`))) as Registered | undefined) ?? NO_ENDPOINTS;
-    const modelUrls = [...new Set([...stored.model, ...models])];
-    const ownedBy = new Map(
-      [...(stored.owned ?? []), ...owned].map((o) => [
-        `${o.provider} ${o.url}`,
-        { provider: o.provider, url: o.url },
-      ])
+  return given.map((entry) => (typeof entry === 'string' ? entry : (entry as Owned).url));
+}
+
+interface Bound {
+  name: string;
+  url: string;
+}
+
+function bound(item: unknown): item is Bound {
+  return (
+    !!item &&
+    typeof item === 'object' &&
+    typeof (item as Bound).name === 'string' &&
+    typeof (item as Bound).url === 'string'
+  );
+}
+
+interface PageModels {
+  plain: string[];
+  bound: Bound[];
+}
+
+function pageModelsOf(model: unknown): PageModels {
+  const given = model === undefined ? [] : model;
+  const ok = (item: unknown) =>
+    (typeof item === 'string' && endpoint(item, false) !== null) ||
+    (bound(item) &&
+      NAME.test(item.name) &&
+      endpoint(item.url, false) !== null &&
+      !/[*{}]/.test(item.url));
+  if (!Array.isArray(given) || !given.every(ok)) {
+    throw new Refused(
+      'EINVAL',
+      'model must be a list of https base URLs or { name, url } for a model record'
     );
-    const byUrl = new Map(stored.mcp.map((server) => [`${server.server} ${server.url}`, server]));
-    const firstToken = new Map<string, string>();
-    for (const entry of [...stored.mcp, ...mcps]) {
-      if (entry.tokenUrl && !firstToken.has(entry.server))
-        firstToken.set(entry.server, entry.tokenUrl);
+  }
+  return {
+    plain: given.filter((item) => typeof item === 'string') as string[],
+    bound: (given.filter((item) => typeof item !== 'string') as Bound[]).map(({ name, url }) => ({
+      name,
+      url,
+    })),
+  };
+}
+
+interface Removal {
+  urls: Set<string>;
+  bound: Set<string>;
+  servers: Set<string>;
+}
+
+const REMOVE = 'remove must be { model?: (url | { name, url })[], mcp?: { server, url }[] }';
+
+function removalOf(remove: unknown): Removal {
+  if (remove !== undefined && (!remove || typeof remove !== 'object' || Array.isArray(remove))) {
+    throw new Refused('EINVAL', REMOVE);
+  }
+  const given = (remove ?? {}) as { model?: unknown; mcp?: unknown };
+  const model = given.model ?? [];
+  const mcp = given.mcp ?? [];
+  const entry = (item: unknown) => typeof item === 'string' || bound(item);
+  const server = (item: unknown) =>
+    !!item &&
+    typeof item === 'object' &&
+    typeof (item as McpServer).server === 'string' &&
+    typeof (item as McpServer).url === 'string';
+  if (!Array.isArray(model) || !model.every(entry) || !Array.isArray(mcp) || !mcp.every(server)) {
+    throw new Refused('EINVAL', REMOVE);
+  }
+  return {
+    urls: new Set(model.filter((item) => typeof item === 'string')),
+    bound: new Set((model.filter(bound) as Bound[]).map((b) => `${b.name} ${b.url}`)),
+    servers: new Set((mcp as McpServer[]).map((s) => `${s.server} ${s.url}`)),
+  };
+}
+
+async function customFor(tx: IDBTransaction, ns: string, given: Bound[]): Promise<Custom[]> {
+  const store = tx.objectStore('records');
+  const out: Custom[] = [];
+  for (const { name, url } of given) {
+    const record = (await request(store.get([ns, 'model', name]))) as VaultRecord | undefined;
+    if (!record || removed(record) || typeof record.provider !== 'string') {
+      throw new Refused('EINVAL', `${name} isn't a model record of this vault`);
     }
-    for (const given of mcps) {
-      const token = firstToken.get(given.server);
-      const server = token ? { ...given, tokenUrl: token } : given;
-      const key = `${server.server} ${server.url}`;
-      const known = byUrl.get(key);
-      byUrl.set(
-        key,
-        known
-          ? { ...server, ...known, names: [...new Set([...known.names, ...server.names])] }
-          : server
-      );
-    }
-    const registered = { model: modelUrls, mcp: [...byUrl.values()], owned: [...ownedBy.values()] };
+    out.push({ provider: record.provider, name, url });
+  }
+  return out;
+}
+
+export function dropCustom(db: IDBDatabase, ns: string, name: string): Promise<boolean> {
+  return transact(db, ['meta'], 'readwrite', async (tx) => {
+    const before = await stored(tx, ns);
+    const page = before.page ?? NO_PAGE;
+    const custom = page.custom.filter((entry) => entry.name !== name);
+    if (custom.length === page.custom.length) return false;
+    await request(
+      tx.objectStore('meta').put({ ...before, page: { ...page, custom } }, `endpoints:${ns}`)
+    );
+    return true;
+  });
+}
+
+function stored(tx: IDBTransaction, ns: string): Promise<Registered> {
+  return request(tx.objectStore('meta').get(`endpoints:${ns}`)).then(
+    (found) => (found as Registered | undefined) ?? NO_ENDPOINTS
+  );
+}
+
+export function register(
+  db: IDBDatabase,
+  ns: string,
+  model: unknown,
+  mcp: unknown
+): Promise<{ registered: Registered; added: number }> {
+  const models = modelsOf(model);
+  const given = mcp === undefined ? [] : serversOf(mcp);
+  return transact(db, ['meta', 'records'], 'readwrite', async (tx) => {
+    const before = await stored(tx, ns);
+    const owned = new Set((before.page ?? NO_PAGE).mcp.map((server) => server.server));
+    const bound = new Set(
+      (await all<VaultRecord>(tx, 'records', ns))
+        .filter((r) => r.kind === 'mcp' && pageSealed(r) && typeof r.server === 'string')
+        .map((r) => r.server as string)
+    );
+    const mcps = given.filter((server) => !owned.has(server.server));
+    const legacy = before !== NO_ENDPOINTS && !before.migrated;
+    const prior = legacy ? (before.later ?? []) : before.mcp;
+    const keep = (server: McpServer): McpServer => {
+      if (!bound.has(server.server)) return server;
+      const was = prior.find((p) => p.server === server.server && p.url === server.url);
+      const out = { ...server };
+      if (was?.tokenUrl) out.tokenUrl = was.tokenUrl;
+      else delete out.tokenUrl;
+      return out;
+    };
+    const merged = mergeServers(prior, mcps, allServers(before)).map(keep);
+    const registered = {
+      ...before,
+      ...(before === NO_ENDPOINTS ? { migrated: true } : {}),
+      model: [...new Set([...before.model, ...models])],
+      ...(legacy ? { later: merged } : { mcp: merged }),
+    };
     const added =
-      registered.model.length -
-      stored.model.length +
-      registered.mcp.reduce((sum, s) => sum + s.names.length + 1, 0) -
-      stored.mcp.reduce((sum, s) => sum + s.names.length + 1, 0);
-    await request(meta.put(registered, `endpoints:${ns}`));
+      count(registered.model, [...registered.mcp, ...(registered.later ?? [])]) -
+      count(before.model, [...before.mcp, ...(before.later ?? [])]);
+    await request(tx.objectStore('meta').put(registered, `endpoints:${ns}`));
     return { registered, added };
+  });
+}
+
+function unpinOf(unpin: unknown): string[] {
+  const given = unpin === undefined ? [] : unpin;
+  if (
+    !Array.isArray(given) ||
+    !given.every((name) => typeof name === 'string' && NAME.test(name))
+  ) {
+    throw new Refused('EINVAL', 'unpin must be a list of mcp record names');
+  }
+  return given;
+}
+
+async function unpinIn(tx: IDBTransaction, ns: string, names: string[], now: number, clean: Clean) {
+  const store = tx.objectStore('records');
+  let count = 0;
+  for (const name of names) {
+    const record = (await request(store.get([ns, 'mcp', name]))) as VaultRecord | undefined;
+    if (!record?.pinned) continue;
+    const next: VaultRecord = { ...record, unpins: (record.unpins ?? 0) + 1 };
+    delete next.url;
+    delete next.pinned;
+    await request(store.put(next));
+    const host = clean(new URL(record.url as string).hostname);
+    await audit(tx, ns, {
+      type: 'endpoints',
+      unpinned: { name: clean(name), server: clean(record.server as string), host },
+      uid: null,
+      tag: null,
+      at: now,
+    });
+    count += 1;
+  }
+  return count;
+}
+
+export function registerPage(
+  db: IDBDatabase,
+  ns: string,
+  model: unknown,
+  mcp: unknown,
+  remove?: unknown,
+  unpin?: unknown,
+  now = 0,
+  clean: Clean = (text) => text
+): Promise<{ registered: Registered; changed: number; unpins: number }> {
+  const models = pageModelsOf(model);
+  const mcps = mcp === undefined ? [] : serversOf(mcp);
+  const removal = removalOf(remove);
+  const unpinned = unpinOf(unpin);
+  return transact(db, ['meta', 'records', 'audit'], 'readwrite', async (tx) => {
+    const before = await stored(tx, ns);
+    const page = before.page ?? NO_PAGE;
+    const mcpNext = mergeServers(page.mcp, mcps, page.mcp);
+    const custom = await customFor(tx, ns, models.bound);
+    const byKey = new Map([...page.custom, ...custom].map((c) => [`${c.name} ${c.url}`, c]));
+    const next = {
+      model: [...new Set([...page.model, ...models.plain])].filter((url) => !removal.urls.has(url)),
+      mcp: mcpNext.filter((s) => !removal.servers.has(`${s.server} ${s.url}`)),
+      custom: [...byKey.values()].filter((c) => !removal.bound.has(`${c.name} ${c.url}`)),
+    };
+    const overlap = next.custom.find((c) =>
+      next.mcp.some(
+        (server) => under(server.url, new URL(c.url)) || under(c.url, new URL(server.url))
+      )
+    );
+    if (overlap) {
+      throw new Refused('EINVAL', `${overlap.url} is an MCP server, never a model endpoint`);
+    }
+    const changed = JSON.stringify(next) !== JSON.stringify(page);
+    const fresh = before === NO_ENDPOINTS ? { migrated: true } : {};
+    const gone = page.mcp
+      .map((server) => server.server)
+      .filter((name) => !next.mcp.some((server) => server.server === name));
+    const held = [...new Set([...(before.held ?? []), ...gone])];
+    const registered = { ...before, ...fresh, page: next, ...(held.length ? { held } : {}) };
+    if (changed) await request(tx.objectStore('meta').put(registered, `endpoints:${ns}`));
+    const unpins = await unpinIn(tx, ns, unpinned, now, clean);
+    return { registered, changed: changed ? 1 : 0, unpins };
+  });
+}
+
+export type Clean = (text: string) => string;
+
+export function pin(
+  db: IDBDatabase,
+  ns: string,
+  names: string[],
+  server: McpServer,
+  now: number,
+  clean: Clean
+): Promise<{ pinned: number; elsewhere: string[] }> {
+  const url = new URL(server.url).href;
+  return transact(db, ['records', 'audit'], 'readwrite', async (tx) => {
+    const store = tx.objectStore('records');
+    let pinned = 0;
+    const elsewhere: string[] = [];
+    for (const name of names) {
+      const record = (await request(store.get([ns, 'mcp', name]))) as VaultRecord | undefined;
+      if (!record || removed(record)) continue;
+      if (record.url !== undefined) {
+        if (record.url !== url) elsewhere.push(name);
+        continue;
+      }
+      await request(store.put({ ...record, url, pinned: true }));
+      const host = clean(new URL(url).hostname);
+      await audit(tx, ns, {
+        type: 'endpoints',
+        pinned: { name: clean(name), server: clean(server.server), host },
+        uid: null,
+        tag: null,
+        at: now,
+      });
+      pinned += 1;
+    }
+    return { pinned, elsewhere };
+  });
+}
+
+function hostOfUrl(url: string): string {
+  return URL.parse(url)?.hostname ?? '';
+}
+
+export function migrate(db: IDBDatabase, ns: string, now: number, clean: Clean): Promise<boolean> {
+  return transact(db, ['meta', 'records', 'audit'], 'readwrite', async (tx) => {
+    const meta = tx.objectStore('meta');
+    const before = (await request(meta.get(`endpoints:${ns}`))) as Registered | undefined;
+    if (!before || before.migrated) return false;
+    const purged = (before.owned ?? [])
+      .filter((entry) => !coveredByBuiltIn(entry.provider, entry.url))
+      .map((entry) => ({ provider: clean(entry.provider), host: clean(hostOfUrl(entry.url)) }));
+    const page = before.page ?? NO_PAGE;
+    const owned = new Set(page.mcp.map((server) => server.server));
+    const held = (await all<VaultRecord>(tx, 'records', ns)).filter(
+      (r) =>
+        r.kind === 'mcp' &&
+        r.url === undefined &&
+        r.source !== 'oauth:mcp' &&
+        typeof r.server === 'string' &&
+        !owned.has(r.server)
+    );
+    const tombstones = new Set(before.held ?? []);
+    const wanted = new Set(held.map((r) => r.server as string).filter((n) => !tombstones.has(n)));
+    const urls = (name: string) => before.mcp.filter((server) => server.server === name).length;
+    const clash = (server: McpServer) =>
+      page.custom.some(
+        (c) => under(server.url, new URL(c.url)) || under(c.url, new URL(server.url))
+      );
+    const single = (server: McpServer) =>
+      wanted.has(server.server) &&
+      urls(server.server) === 1 &&
+      !server.url.includes('*') &&
+      !clash(server);
+    const adopted = before.mcp.filter(single);
+    const ambiguous = [...wanted].filter(
+      (name) => !adopted.some((server) => server.server === name)
+    );
+    const kept = before.mcp.filter((server) => !adopted.includes(server));
+    const next: Registered = {
+      ...before,
+      mcp: mergeServers(kept, before.later ?? [], kept),
+      page: {
+        ...page,
+        mcp: [...page.mcp, ...adopted.map(({ server, url }) => ({ server, url, names: [] }))],
+      },
+      migrated: true,
+      ...(ambiguous.length || tombstones.size
+        ? { held: [...new Set([...tombstones, ...ambiguous])] }
+        : {}),
+    };
+    delete next.owned;
+    delete next.later;
+    await request(meta.put(next, `endpoints:${ns}`));
+    const shown = adopted.map((s) => ({ server: clean(s.server), host: clean(hostOfUrl(s.url)) }));
+    if (!purged.length && !shown.length) return false;
+    await audit(tx, ns, {
+      type: 'endpoints',
+      ...(purged.length ? { purged } : {}),
+      ...(shown.length ? { adopted: shown } : {}),
+      uid: null,
+      tag: null,
+      at: now,
+    });
+    return true;
   });
 }
 

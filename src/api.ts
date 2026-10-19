@@ -1,3 +1,4 @@
+import type { Scrubber } from '@ai-ecoverse/slicc-scrub';
 import { AgentPort } from './agent.ts';
 import type { Part } from './channel.ts';
 import { embedded } from './config.ts';
@@ -40,7 +41,7 @@ import {
   JERK,
 } from './refresh.ts';
 import { current, get, type HumanRequest, respond, settle } from './requests.ts';
-import { apply } from './rules.ts';
+import { apply, dropCustom, migrate, registerPage } from './rules.ts';
 import { sealed } from './sealed.ts';
 import { exporter, importer } from './transfer.ts';
 import type { Vault } from './vault.ts';
@@ -76,6 +77,8 @@ interface Session {
 
 type StoredAudit = AuditEntry & { ns: string };
 
+const PAYLOAD = new Set(['purged', 'adopted', 'pinned', 'unpinned']);
+
 export async function audit(
   vault: Vault,
   ns: string,
@@ -90,8 +93,27 @@ export async function audit(
     .sort((a, b) => b.seq - a.seq);
   const page = older.slice(0, limit);
   const more = older.length > page.length;
+  const scrubber = page.some((e) => e.type === 'endpoints') ? await vault.scrubbers.get(ns) : null;
+  const scrub = (value: unknown): unknown => {
+    if (typeof value === 'string') return (scrubber as Scrubber).text(value).text;
+    if (Array.isArray(value)) return value.map(scrub);
+    return Object.fromEntries(
+      Object.entries(value as object).map(([key, item]) => [key, scrub(item)])
+    );
+  };
   const entries = page.map(({ ns: _ns, ...entry }) => {
-    const known = entry as AuditEntry & { uid?: number | null; tag?: string | null };
+    const shown =
+      entry.type === 'endpoints'
+        ? Object.fromEntries(
+            Object.entries(entry)
+              .filter(([key]) => scrubber || !PAYLOAD.has(key))
+              .map(([key, item]) => [key, PAYLOAD.has(key) ? scrub(item) : item])
+          )
+        : entry;
+    const known = shown as AuditEntry & {
+      uid?: number | null;
+      tag?: string | null;
+    };
     return { ...known, uid: known.uid ?? null, tag: known.tag ?? null } as AuditEntry;
   });
   return { audit: entries, more, ...(more ? { next: page[page.length - 1].seq } : {}) };
@@ -361,7 +383,9 @@ async function mark(vault: Vault, ns: string, request: Fields, removing: boolean
   const kind = (request.kind ?? 'secret') as RecordKind;
   if (!KINDS.has(kind)) throw new Refused('EINVAL', 'kind must be secret, grant, model or mcp');
   const record = await (removing ? remove : restore)(vault.db, ns, name, vault.now(), kind);
-  await vault.changed(ns, ['secrets', 'audit']);
+  const dropped = removing && kind === 'model' && (await dropCustom(vault.db, ns, name));
+  if (dropped) await vault.loadPolicy(ns);
+  await vault.changed(ns, dropped ? ['secrets', 'audit', 'exits'] : ['secrets', 'audit']);
   return { ...result(vault, ns, record) };
 }
 
@@ -419,6 +443,28 @@ export async function answer(
     case 'lock':
       vault.keyring.lock();
       return {};
+    case 'endpoints': {
+      const scrubber = request.unpin === undefined ? null : await vault.scrubbers.get(ns);
+      if (request.unpin !== undefined && !scrubber) {
+        throw new Refused('EACCES', 'vault is locked: unlock it in the vault window');
+      }
+      const clean = (text: string) => (scrubber ? scrubber.text(text).text : text);
+      const { changed, unpins } = await registerPage(
+        vault.db,
+        ns,
+        request.model,
+        request.mcp,
+        request.remove,
+        request.unpin,
+        vault.now(),
+        clean
+      );
+      await vault.loadPolicy(ns);
+      if (changed || unpins) {
+        await vault.changed(ns, unpins ? ['secrets', 'exits', 'audit'] : ['secrets', 'exits']);
+      }
+      return { ok: true };
+    }
     case 'policy': {
       const { result, changed } = await apply(vault.db, ns, request.files, vault.now());
       await vault.loadPolicy(ns);
@@ -515,8 +561,13 @@ export class Server {
   }
 
   async welcome(session: Session): Promise<void> {
+    const scrubber = await this.vault.scrubbers.get(session.ns);
+    const clean = scrubber ? (text: string) => scrubber.text(text).text : null;
+    if (clean && (await migrate(this.vault.db, session.ns, this.vault.now(), clean))) {
+      await this.vault.loadPolicy(session.ns);
+      await this.vault.changed(session.ns, ['secrets', 'audit', 'exits']);
+    }
     await this.vault.loadPolicy(session.ns);
-    await this.vault.scrubbers.get(session.ns);
     const status = await this.vault.status(session.ns);
     session.port.postMessage({ v: 1, op: 'welcome', role: session.role, status });
   }

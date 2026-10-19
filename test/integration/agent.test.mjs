@@ -7,6 +7,7 @@ const { embedder } = await setup();
 
 const VALUE_A = 'fake-value-0001-aaaa';
 const VALUE_M = 'fake-mcp-cred-0003-mmmm';
+const VALUE_LOOP = 'fake-loop-cred-0005-llll';
 const OWNER = { pid: 9, ppid: 1, uid: 1000, gid: 1000, tag: 'cone', users: 'enforce' };
 const SERVER = 'http://8080.kernel.localhost/mcp';
 
@@ -167,7 +168,7 @@ test('push and redact take any byte view, as exactly its own bytes', async (t) =
   );
 });
 
-test('registered endpoints are refused for secrets, at parse and at request time', async (t) => {
+test('endpoints the page registers are refused for secrets, at parse and at request time', async (t) => {
   const { page, a } = await ready(t);
   const text = config({ TOKEN_A: a }, [
     { secret: 'TOKEN_A', domain: 'llm.example.com', paths: ['/v1/*'] },
@@ -182,7 +183,7 @@ test('registered endpoints are refused for secrets, at parse and at request time
     ['api.anthropic.com']
   );
   const registered = await page.evaluate(() =>
-    window.harness.ask('endpoints', {
+    window.harness.call('endpoints', {
       model: ['https://llm.example.com/v1'],
       mcp: [{ server: 'docs', url: 'https://docs.example.com/mcp', names: [] }],
     })
@@ -211,7 +212,7 @@ test('registered endpoints are refused for secrets, at parse and at request time
     exit: 'page',
     rawTraits: {},
   });
-  assert.match(mcpPath.reply.refused.reason, /secrets are never sent/);
+  assert.match(mcpPath.reply.refused.reason, /docs.example.com is a model or MCP endpoint/);
   const elsewhere = await page.evaluate((fields) => window.harness.forward(fields), {
     head: {
       method: 'GET',
@@ -252,10 +253,21 @@ test('registered endpoints are refused for secrets, at parse and at request time
 });
 
 test('a kernel request to a registered MCP server gets only that server credential', async (t) => {
-  const { page, a, m } = await ready(t);
+  const { page, a } = await ready(t);
+  const m = (
+    await page.evaluate(
+      (url, value) =>
+        window.harness.sealed(
+          { v: 1, op: 'seal', name: 'LOOP_MCP', value, kind: 'mcp', server: 'docs', url },
+          { pid: 78, ppid: 1, uid: 1000, gid: 1000, tag: null }
+        ),
+      SERVER,
+      VALUE_LOOP
+    )
+  ).placeholder;
   await page.evaluate(
     (url) =>
-      window.harness.ask('endpoints', { mcp: [{ server: 'docs', url, names: ['DOCS_MCP'] }] }),
+      window.harness.ask('endpoints', { mcp: [{ server: 'docs', url, names: ['LOOP_MCP'] }] }),
     SERVER
   );
   const fields = (headers, body) => ({
@@ -267,7 +279,7 @@ test('a kernel request to a registered MCP server gets only that server credenti
   });
   const response = {
     head: { status: 200, statusText: 'OK', url: `${SERVER}/call`, headers: [] },
-    chunks: [`{"echo":"${VALUE_M}"}`],
+    chunks: [`{"echo":"${VALUE_LOOP}"}`],
   };
   const sent = await page.evaluate(
     (f, r) =>
@@ -278,7 +290,7 @@ test('a kernel request to a registered MCP server gets only that server credenti
     fields([['Authorization', `Bearer ${m}`]], `{"args":"${VALUE_A}"}`),
     response
   );
-  assert.deepEqual(sent.reply.head.headers, [['Authorization', `Bearer ${VALUE_M}`]]);
+  assert.deepEqual(sent.reply.head.headers, [['Authorization', `Bearer ${VALUE_LOOP}`]]);
   assert.equal(sent.body, `{"args":"${a}"}`);
   const body = sent.parts
     .filter((p) => p.op === 'body')
@@ -288,13 +300,13 @@ test('a kernel request to a registered MCP server gets only that server credenti
   const audit = (await page.evaluate(() => window.harness.call('audit', { limit: 1 }))).audit[0];
   assert.deepEqual(
     [audit.type, audit.server, audit.name, audit.uid, audit.tag],
-    ['mcp', 'docs', 'DOCS_MCP', 1000, 'cone']
+    ['mcp', 'docs', 'LOOP_MCP', 1000, 'cone']
   );
   const secret = await page.evaluate(
     (f) => window.harness.forward(f),
     fields([['Authorization', `Bearer ${a}`]])
   );
-  assert.match(secret.reply.refused.reason, /secrets are never sent to model or MCP endpoints/);
+  assert.match(secret.reply.refused.reason, /credentials are sent only over https on port 443/);
   const other = await page.evaluate((f) => window.harness.forward(f), {
     ...fields([['Authorization', `Bearer ${m}`]]),
     head: {

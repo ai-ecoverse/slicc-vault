@@ -111,6 +111,8 @@ export interface SecretView {
   provider?: string;
   account?: string;
   server?: string;
+  url?: string;
+  pinned?: true;
   settings?: Record<string, string>;
   domains: string[];
   rules: Rule[];
@@ -244,7 +246,21 @@ export interface PolicyEntry {
   warning?: string;
 }
 
+export interface EndpointsEntry {
+  type: 'endpoints';
+  seq: number;
+  id: string;
+  at: EpochMs;
+  uid: null;
+  tag: null;
+  purged?: { provider: string; host: string }[];
+  adopted?: { server: string; host: string }[];
+  pinned?: { name: string; server: string; host: string };
+  unpinned?: { name: string; server: string; host: string };
+}
+
 export type AuditEntry =
+  | EndpointsEntry
   | ForwardEntry
   | SessionEntry
   | McpEntry
@@ -473,6 +489,16 @@ export type Op =
   | { op: 'dismissBackupReminder' }
   | { op: 'policy'; files: Attestation[] }
   | {
+      op: 'endpoints';
+      model?: (string | { name: string; url: string })[];
+      mcp?: (string | McpServerEntry)[];
+      remove?: {
+        model?: (string | { name: string; url: string })[];
+        mcp?: { server: string; url: string }[];
+      };
+      unpin?: string[];
+    }
+  | {
       op: 'forward';
       head: RequestHead;
       body?: Uint8Array | string;
@@ -563,6 +589,7 @@ export type OpReply =
   | { op: 'lock' }
   | { op: 'dismissBackupReminder'; backupReminder: BackupReminder }
   | ({ op: 'policy' } & PolicyResult)
+  | { op: 'endpoints'; ok: true }
   | { op: 'refresh'; state: 'refreshed' | 'requested'; expiresAt?: EpochMs }
   | { op: 'answer'; state: RequestState }
   | ({ op: 'forward' } & ForwardResult)

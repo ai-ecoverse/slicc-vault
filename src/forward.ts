@@ -1,10 +1,11 @@
 import type { Scrubber, Stream } from '@ai-ecoverse/slicc-scrub';
 import type { ExitName } from './contract.ts';
-import { request, transact } from './db.ts';
+import { all, request, transact } from './db.ts';
 import { Refused } from './errors.ts';
 import { type Head, type Prepared, prepare, type Traits } from './inject.ts';
 import { audit, records, type VaultRecord } from './records.ts';
-import { loadRegistered } from './rules.ts';
+import { holds, type McpServer, mcpServer, modelRefused, refusedUrl, tofu } from './refusal.ts';
+import { endpointsIn, loadRegistered, migrate, pin } from './rules.ts';
 import { checkStamp } from './sealed.ts';
 import type { Vault } from './vault.ts';
 
@@ -89,7 +90,11 @@ async function record(
   });
 }
 
-export function relay(port: MessagePort, scrubber: Scrubber): void {
+export function relay(
+  port: MessagePort,
+  scrubber: Scrubber,
+  succeeded: () => void = () => {}
+): void {
   const stream: Stream = scrubber.stream();
   let timer: ReturnType<typeof setTimeout> | undefined;
   const text = (value: unknown) => (typeof value === 'string' ? scrubber.text(value).text : '');
@@ -105,6 +110,7 @@ export function relay(port: MessagePort, scrubber: Scrubber): void {
     const data = (event.data ?? {}) as Fields;
     clearTimeout(timer);
     if (data.op === 'response') {
+      if (typeof data.status === 'number' && data.status >= 200 && data.status < 300) succeeded();
       const headers = Array.isArray(data.headers) ? (data.headers as unknown[][]) : [];
       port.postMessage({
         op: 'response',
@@ -139,6 +145,12 @@ export async function forward(
   const exit = checkExit(fields.exit);
   const traits = checkTraits(fields.rawTraits);
   const body = bodyOf(fields.body);
+  const early = await vault.scrubbers.get(ns);
+  const tidy = early ? (text: string) => early.text(text).text : null;
+  if (tidy && (await migrate(vault.db, ns, vault.now(), tidy))) {
+    await vault.loadPolicy(ns);
+    await vault.changed(ns, ['secrets', 'audit', 'exits']);
+  }
   const [held, registered] = await Promise.all([
     records(vault.db, ns),
     loadRegistered(vault.db, ns),
@@ -157,9 +169,46 @@ export async function forward(
   });
   if (!prepared.ok) return { refused: { status: prepared.status, reason: prepared.reason } };
   const scrubber = (await vault.scrubbers.get(ns)) as Scrubber;
+  const current = async () => {
+    const [fresh, live] = await transact(vault.db, ['meta', 'records'], 'readonly', (tx) =>
+      Promise.all([endpointsIn(tx, ns), all<VaultRecord>(tx, 'records', ns)])
+    );
+    const url = new URL(head.url);
+    const server = prepared.server;
+    if (!server) return !refusedUrl(fresh, url);
+    const now = mcpServer(fresh, url);
+    return (
+      now?.server === server.server &&
+      now.url === server.url &&
+      !modelRefused(fresh, url) &&
+      prepared.injected.every((injection) => {
+        const found = live.find((r) => r.kind === 'mcp' && r.name === injection.name);
+        return !!found && holds(fresh, now, found);
+      })
+    );
+  };
+  const stale = {
+    refused: { status: 403, reason: 'the endpoints changed meanwhile; send it again' },
+  };
+  if (!(await current())) return stale;
   await record(vault, ns, prepared, owner.uid, owner.tag, exit);
   await vault.changed(ns, ['audit']);
-  if (port) relay(port, scrubber);
+  const server = prepared.server;
+  const names = server
+    ? prepared.injected
+        .map((injection) => held.find((r) => r.kind === 'mcp' && r.name === injection.name))
+        .filter((r): r is VaultRecord => !!r && tofu(registered, server, r))
+        .map((r) => r.name)
+    : [];
+  const clean = (text: string) => scrubber.text(text).text;
+  const succeeded = () => {
+    if (!names.length) return;
+    void pin(vault.db, ns, names, server as McpServer, vault.now(), clean).then((done) =>
+      done.pinned ? vault.changed(ns, ['secrets', 'audit']) : undefined
+    );
+  };
   const scrubbed = prepared.server && body ? { body: scrubber.bytes(body).bytes } : {};
+  if (!(await current())) return stale;
+  if (port) relay(port, scrubber, succeeded);
   return { head: prepared.head, ...scrubbed };
 }

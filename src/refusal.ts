@@ -18,10 +18,79 @@ export interface Owned {
   url: string;
 }
 
+export interface Custom {
+  provider: string;
+  name: string;
+  url: string;
+}
+
+export interface PageEndpoints {
+  model: string[];
+  mcp: McpServer[];
+  custom: Custom[];
+}
+
 export interface Registered {
   model: string[];
   mcp: McpServer[];
   owned?: Owned[];
+  page?: PageEndpoints;
+  migrated?: boolean;
+  held?: string[];
+  later?: McpServer[];
+}
+
+export function pageSealed(record: { source: string }): boolean {
+  return record.source !== 'oauth:mcp' && record.source !== 'process';
+}
+
+export const NO_PAGE: PageEndpoints = { model: [], mcp: [], custom: [] };
+
+export function servers(registered: Registered): McpServer[] {
+  const page = (registered.page ?? NO_PAGE).mcp;
+  const owned = new Set(page.map((server) => server.server));
+  return [...page, ...registered.mcp.filter((server) => !owned.has(server.server))];
+}
+
+export interface Holder {
+  url?: string;
+  pinned?: boolean;
+  server?: string;
+  source: string;
+}
+
+export function pageServer(registered: Registered, name: string | undefined): boolean {
+  return (registered.page ?? NO_PAGE).mcp.some((server) => server.server === name);
+}
+
+export function tofu(registered: Registered, server: McpServer, record: Holder): boolean {
+  return (
+    record.url === undefined &&
+    record.source !== 'oauth:mcp' &&
+    record.server === server.server &&
+    new URL(server.url).protocol === 'https:' &&
+    !server.url.includes('*') &&
+    !(registered.held ?? []).includes(server.server) &&
+    !pageServer(registered, record.server)
+  );
+}
+
+export function holds(registered: Registered, server: McpServer, record: Holder): boolean {
+  const https = new URL(server.url).protocol === 'https:';
+  const page = (registered.page ?? NO_PAGE).mcp.includes(server);
+  if (record.pinned && pageServer(registered, record.server)) return https && page;
+  if (record.url !== undefined) return new URL(server.url).href === record.url;
+  if (record.source === 'oauth:mcp') return https;
+  return (https && page) || tofu(registered, server, record);
+}
+
+export function coveredByBuiltIn(provider: string, url: string): boolean {
+  const parsed = URL.parse(url);
+  if (!parsed) return false;
+  const host = hostOf(parsed);
+  return BUILT_IN_ENDPOINTS.filter((e) => e.providers.includes(provider)).some((pattern) =>
+    covers(pattern, host, parsed.pathname)
+  );
 }
 
 export const NO_ENDPOINTS: Registered = { model: [], mcp: [] };
@@ -84,9 +153,21 @@ export function contains(pattern: Endpoint, domain: string, paths: string[]): bo
 }
 
 export function patterns(registered: Registered): Endpoint[] {
-  const model = registered.model.map((url) => endpoint(url, false));
-  const mcp = registered.mcp.map((server) => endpoint(server.url, true));
+  const page = registered.page ?? NO_PAGE;
+  const model = [...page.model, ...page.custom.map((entry) => entry.url)].map((url) =>
+    endpoint(url, false)
+  );
+  const mcp = page.mcp.map((server) => endpoint(server.url, true));
   return [...BUILT_IN_ENDPOINTS, ...[...model, ...mcp].filter((e): e is Endpoint => e !== null)];
+}
+
+export function modelRefused(registered: Registered, url: URL): boolean {
+  const page = registered.page ?? NO_PAGE;
+  const own = [...page.model, ...page.custom.map((entry) => entry.url)]
+    .map((base) => endpoint(base, false))
+    .filter((e): e is Endpoint => e !== null);
+  const host = hostOf(url);
+  return [...BUILT_IN_ENDPOINTS, ...own].some((pattern) => covers(pattern, host, url.pathname));
 }
 
 export function hostOf(url: URL): string {
@@ -106,12 +187,17 @@ function plain(url: URL, port: string): boolean {
   return !url.username && !url.password && url.port === port;
 }
 
-export function modelFor(registered: Registered, provider: string, url: URL): boolean {
+export function modelFor(
+  registered: Registered,
+  provider: string,
+  url: URL,
+  name: string | null = null
+): boolean {
   if (url.protocol !== 'https:' || !plain(url, '')) return false;
   const host = hostOf(url);
   const built = BUILT_IN_ENDPOINTS.filter((e) => e.providers.includes(provider));
-  const owned = (registered.owned ?? [])
-    .filter((entry) => entry.provider === provider)
+  const owned = (registered.page ?? NO_PAGE).custom
+    .filter((entry) => entry.provider === provider && entry.name === name)
     .map((entry) => endpoint(entry.url, false) as Endpoint);
   return [...built, ...owned].some((pattern) => covers(pattern, host, url.pathname));
 }
@@ -128,7 +214,7 @@ export function under(base: string, url: URL): boolean {
 
 export function serverFor(registered: Registered, server: string, url: URL): McpServer | null {
   const host = hostOf(url);
-  for (const entry of registered.mcp.filter((e) => e.server === server)) {
+  for (const entry of servers(registered).filter((e) => e.server === server)) {
     if (entry.tokenUrl === url.href) return entry;
     const pattern = endpoint(entry.url, true) as Endpoint;
     const own = new URL(entry.url);
@@ -140,7 +226,7 @@ export function serverFor(registered: Registered, server: string, url: URL): Mcp
 
 export function mcpServer(registered: Registered, url: URL): McpServer | null {
   const host = hostOf(url);
-  for (const server of registered.mcp) {
+  for (const server of servers(registered)) {
     const pattern = endpoint(server.url, true);
     const sameScheme = URL.parse(server.url)?.protocol === url.protocol;
     if (pattern && sameScheme && covers(pattern, host, url.pathname)) return server;

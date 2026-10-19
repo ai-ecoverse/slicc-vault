@@ -2,7 +2,15 @@ import type { ExitName, Rule, Stamp } from './contract.ts';
 import { decrypt } from './keys.ts';
 import type { Policy } from './policy.ts';
 import { aad, removed, rulesFor, type VaultRecord } from './records.ts';
-import { hostOf, type McpServer, mcpServer, type Registered, refusedUrl } from './refusal.ts';
+import {
+  holds,
+  hostOf,
+  type McpServer,
+  mcpServer,
+  modelRefused,
+  type Registered,
+  refusedUrl,
+} from './refusal.ts';
 
 export interface Head {
   method: string;
@@ -117,7 +125,7 @@ class Injector {
   readonly method: string;
   readonly byPlaceholder: Map<string, VaultRecord>;
   readonly injected: Injection[] = [];
-  readonly server: McpServer | null;
+  server: McpServer | null;
 
   constructor(input: Inputs) {
     this.input = input;
@@ -208,7 +216,14 @@ class Injector {
       if (text.split(placeholder).length > 2) {
         throw new Refusal(`${record.name} appears more than once in ${header}`);
       }
-      if (kind === 'mcp' && !this.server?.names.includes(record.name)) {
+      const server = this.server as McpServer;
+      if (
+        kind === 'mcp' &&
+        !(
+          (server.names.includes(record.name) || record.server === server.server) &&
+          holds(this.input.registered, server, record)
+        )
+      ) {
         throw new Refusal(
           `${record.name} isn't a credential of the MCP server ${this.server?.server}`
         );
@@ -261,16 +276,21 @@ class Injector {
 
   async run(): Promise<Prepared> {
     if (this.input.owner.users !== 'enforce') throw new Refusal('kernel users must be enforce');
-    this.checkTarget();
     const all = this.input.head.headers.flatMap(([, value]) => {
       const basic = /^Basic\s+(\S+)$/i.exec(value);
       const inside = basic ? (unbase64(basic[1]) ?? loose(basic[1])) : '';
       return [...this.known(value), ...this.known(inside)];
     });
+    const secret = all.some((p) => (this.byPlaceholder.get(p) as VaultRecord).kind === 'secret');
+    if (secret) this.server = null;
+    this.checkTarget();
     if (!all.length) throw new Refusal('the request carries no placeholder of this vault');
     const refused = refusedUrl(this.input.registered, this.url);
     if (refused && !this.server) {
       throw new Refusal(`${this.host} is a model or MCP endpoint; the vault never injects there`);
+    }
+    if (this.server && modelRefused(this.input.registered, this.url)) {
+      throw new Refusal(`${this.host} is a model endpoint; MCP credentials never go there`);
     }
     const headers = await this.headers(this.server ? 'mcp' : 'secret');
     const head = { ...this.input.head, headers };
