@@ -5,7 +5,7 @@ import { Refused } from './errors.ts';
 import { type Head, type Prepared, prepare, type Traits } from './inject.ts';
 import { audit, records, type VaultRecord } from './records.ts';
 import { holds, type McpServer, mcpServer, modelRefused, refusedUrl, tofu } from './refusal.ts';
-import { loadRegistered, pin } from './rules.ts';
+import { loadRegistered, migrate, pin } from './rules.ts';
 import { checkStamp } from './sealed.ts';
 import type { Vault } from './vault.ts';
 
@@ -145,6 +145,11 @@ export async function forward(
   const exit = checkExit(fields.exit);
   const traits = checkTraits(fields.rawTraits);
   const body = bodyOf(fields.body);
+  const early = await vault.scrubbers.get(ns);
+  const tidy = early ? (text: string) => early.text(text).text : null;
+  if (tidy && (await migrate(vault.db, ns, vault.now(), tidy))) {
+    await vault.changed(ns, ['secrets', 'audit', 'exits']);
+  }
   const [held, registered] = await Promise.all([
     records(vault.db, ns),
     loadRegistered(vault.db, ns),

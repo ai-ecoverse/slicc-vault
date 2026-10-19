@@ -25,7 +25,7 @@ import {
   tofu,
   under,
 } from './refusal.ts';
-import { loadRegistered, pin } from './rules.ts';
+import { loadRegistered, migrate, pin } from './rules.ts';
 import type { Vault } from './vault.ts';
 
 type Fields = Record<string, unknown>;
@@ -227,7 +227,20 @@ export class Preparer {
         "the vault's values changed meanwhile; prepare the request again"
       );
     }
-    still(await make(), seen.filled);
+    const last = await make();
+    const live = await records(this.vault.db, this.ns);
+    still(last, seen.filled);
+    const now = new Map(live.map((r) => [r.placeholder, r]));
+    const moved = seen.filled.some((r) => {
+      const found = now.get(r.placeholder);
+      return !found || removed(found) || found.updatedAt !== r.updatedAt;
+    });
+    if (moved) {
+      throw new Refused(
+        'EAGAIN',
+        "the vault's values changed meanwhile; prepare the request again"
+      );
+    }
     return {
       request: {
         method: request.method,
@@ -276,6 +289,11 @@ export class Preparer {
     }
     const request = outgoing(fields.request);
     const url = new URL(request.url);
+    const scrubber = await this.scrubber();
+    const clean = (text: string) => scrubber.text(text).text;
+    if (await migrate(this.vault.db, this.ns, this.vault.now(), clean)) {
+      await this.vault.changed(this.ns, ['secrets', 'audit', 'exits']);
+    }
     return this.prepare(request, () => this.mcpTarget(server, url));
   }
 

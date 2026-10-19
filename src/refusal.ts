@@ -36,6 +36,7 @@ export interface Registered {
   owned?: Owned[];
   page?: PageEndpoints;
   migrated?: boolean;
+  held?: string[];
 }
 
 export const NO_PAGE: PageEndpoints = { model: [], mcp: [], custom: [] };
@@ -64,6 +65,7 @@ export function tofu(registered: Registered, server: McpServer, record: Holder):
     record.server === server.server &&
     new URL(server.url).protocol === 'https:' &&
     !server.url.includes('*') &&
+    !(registered.held ?? []).includes(server.server) &&
     !pageServer(registered, record.server)
   );
 }

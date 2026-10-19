@@ -191,8 +191,16 @@ test('a kernel forward pins a typed-in token at its first 2xx, never at a failur
   );
 });
 
-test('NEGATIVE the upgrade adopts the agent server of a typed-in token once, so a later agent retarget is refused', async (t) => {
+test('NEGATIVE the upgrade adopts the one agent server of a typed-in token, never an ambiguous one, so a later agent retarget is refused', async (t) => {
   const { page, token } = await ready(t);
+  const dup = await page.evaluate(() =>
+    window.harness.call('put', {
+      name: 'DUP_MCP',
+      value: 'fake-dup-mcp-0503',
+      kind: 'mcp',
+      server: 'dup',
+    })
+  );
   const ns = served.origin('seven');
   await page.goto(`${served.vault}/config.json`);
   await page.evaluate(
@@ -205,7 +213,11 @@ test('NEGATIVE the upgrade adopts the agent server of a typed-in token once, so 
           tx.objectStore('meta').put(
             {
               model: [],
-              mcp: [{ server: 'notes', url: 'https://notes.example.com/mcp', names: [] }],
+              mcp: [
+                { server: 'notes', url: 'https://notes.example.com/mcp', names: [] },
+                { server: 'dup', url: 'https://dup-a.example.com/mcp', names: [] },
+                { server: 'dup', url: 'https://dup-b.example.com/mcp', names: [] },
+              ],
             },
             key
           );
@@ -232,6 +244,11 @@ test('NEGATIVE the upgrade adopts the agent server of a typed-in token once, so 
     request: call('https://evil.example.com/mcp', token.placeholder),
   });
   assert.match(moved.error.message, /is sent only to notes's own endpoints/);
+  const ambiguous = await askAgain('mcp', {
+    server: 'dup',
+    request: call('https://dup-a.example.com/mcp', dup.placeholder),
+  });
+  assert.match(ambiguous.error.message, /DUP_MCP isn't a credential of dup/);
   const own = await askAgain('mcp', {
     server: 'notes',
     request: call('https://notes.example.com/mcp', token.placeholder),

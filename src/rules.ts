@@ -221,22 +221,13 @@ function removalOf(remove: unknown): Removal {
   };
 }
 
-async function customFor(
-  tx: IDBTransaction,
-  ns: string,
-  given: Bound[],
-  registered: Registered
-): Promise<Custom[]> {
+async function customFor(tx: IDBTransaction, ns: string, given: Bound[]): Promise<Custom[]> {
   const store = tx.objectStore('records');
   const out: Custom[] = [];
   for (const { name, url } of given) {
     const record = (await request(store.get([ns, 'model', name]))) as VaultRecord | undefined;
     if (!record || removed(record) || typeof record.provider !== 'string') {
       throw new Refused('EINVAL', `${name} isn't a model record of this vault`);
-    }
-    const parsed = new URL(url);
-    if ((registered.page ?? NO_PAGE).mcp.some((server) => under(server.url, parsed))) {
-      throw new Refused('EINVAL', `${url} is an MCP server, never a model endpoint`);
     }
     out.push({ provider: record.provider, name, url });
   }
@@ -338,10 +329,7 @@ export function registerPage(
     const before = await stored(tx, ns);
     const page = before.page ?? NO_PAGE;
     const mcpNext = mergeServers(page.mcp, mcps, page.mcp);
-    const custom = await customFor(tx, ns, models.bound, {
-      ...before,
-      page: { ...page, mcp: mcpNext },
-    });
+    const custom = await customFor(tx, ns, models.bound);
     const byKey = new Map([...page.custom, ...custom].map((c) => [`${c.name} ${c.url}`, c]));
     const next = {
       model: [...new Set([...page.model, ...models.plain])].filter((url) => !removal.urls.has(url)),
@@ -424,12 +412,17 @@ export function migrate(db: IDBDatabase, ns: string, now: number, clean: Clean):
         !owned.has(r.server)
     );
     const wanted = new Set(held.map((r) => r.server as string));
-    const adopted = before.mcp.filter((server) => wanted.has(server.server));
+    const urls = (name: string) => before.mcp.filter((server) => server.server === name).length;
+    const adopted = before.mcp.filter(
+      (server) => wanted.has(server.server) && urls(server.server) === 1
+    );
+    const ambiguous = [...wanted].filter((name) => urls(name) > 1);
     const next: Registered = {
       ...before,
-      mcp: before.mcp.filter((server) => !wanted.has(server.server)),
+      mcp: before.mcp.filter((server) => !adopted.includes(server)),
       page: { ...page, mcp: [...page.mcp, ...adopted] },
       migrated: true,
+      ...(ambiguous.length ? { held: ambiguous } : {}),
     };
     delete next.owned;
     await request(meta.put(next, `endpoints:${ns}`));
