@@ -125,7 +125,7 @@ GITHUB_TOKEN = { argv = [["/usr/bin/gh", "release", "upload"]] }
 OPENAI_API_KEY = { shell = true }
 
 [exits]
-NPM_TOKEN = ["page", "device:lars-air"]
+NPM_TOKEN = ["page", "device:7d1e4b0a9c2f5e83"]
 
 [limits]
 materialize_per_minute = 10
@@ -134,7 +134,7 @@ shell_per_day = 5000
 ```
 
 - `[exec]`: `false` is an explicit off, `true` is `exec: 'any'`, exactly `{ argv = [[…]] }` is `'argv'` (each prefix an absolute program path), and exactly `{ shell = true }` is `'shell'`. Anything else, a table with other or extra keys included, is a warning, and `exec` stays `false`. VAULT-1d acts on them.
-- `[exits]` is **optional**: a secret without a line may use every exit; a line restricts it to the exits listed (`page`, `proxy`, `tailscale`, `device:<name>`). Unknown names are dropped from the line with a warning, which leaves the line narrower, never wider.
+- `[exits]` is **optional**: a secret without a line may use every exit; a line restricts it to the exits listed (`page`, `proxy`, `tailscale`, `device:<id>`). `<id>` is the device's `DeviceId`, the stable id of its link certificate, never its display name, which can be renamed or shared by two devices; an entry is compared exactly with the `exit` bios sends. Unknown names are dropped from the line with a warning, which leaves the line narrower, never wider.
 - `[limits]` overrides the defaults above with positive integers.
 
 Accepted policy is kept per namespace in IndexedDB, and loaded when an embedder says hello. Each file is audited once per SHA-256 and verdict (the vault remembers the last 64 per file) as a `policy` entry, with `accepted`, any `warning`, and its `changes` against the previously accepted file: rules `added` or `removed`, `exec` modes, `exits` lines and `limits`. Any change to the accepted policy, or a new audit entry, pushes `changed` with `secrets`, `exits` and `audit`, and other vault documents of the namespace reload the policy. Each `policy` call reads, merges and writes the stored policy in one transaction, so two pages can't undo each other's update.
@@ -304,7 +304,7 @@ const channel = new MessageChannel();
 port.postMessage({ v: 1, id, op: 'forward', head, body, owner, exit, rawTraits }, [channel.port2]);
 ```
 
-- `head` is `{ method, url, headers: [name, value][] }`; `owner` the kernel's `{ pid, ppid, uid, gid, tag, users, groups?, user? }` (`users` must be `enforce`, else nothing is injected); `exit` the exit bios chose (`page`, `proxy`, `tailscale` or `device:<name>`); `rawTraits` that exit's `{ manualRedirects?, encodedBodies? }`. `body` (bytes or a string) is needed only for MCP requests (below); for every other request it stays in bios, because bodies are never injected.
+- `head` is `{ method, url, headers: [name, value][] }`; `owner` the kernel's `{ pid, ppid, uid, gid, tag, users, groups?, user? }` (`users` must be `enforce`, else nothing is injected); `exit` the exit bios chose (`page`, `proxy`, `tailscale` or `device:<id>`, with the device's `DeviceId`); `rawTraits` that exit's `{ manualRedirects?, encodedBodies? }`. `body` (bytes or a string) is needed only for MCP requests (below); for every other request it stays in bios, because bodies are never injected.
 - **The reply** is `{ head }`, the same head with the values filled in, or `{ refused: { status, reason } }`: `403` with a one-line reason, or `502` for an exit with encoded bodies. A refused request must not be sent anywhere. Malformed fields are `EINVAL`.
 - **The response** goes back over `channel.port1`, scrubbed: bios posts `{ op: 'response', status, statusText, url, redirected?, headers }`, then any number of `{ op: 'body', chunk: Uint8Array }`, then `{ op: 'end' }` or `{ op: 'error', message }`. The vault answers with the same messages, with `statusText`, `url`, every header name and value, the body and the error scrubbed over every value of the namespace. A value in its raw form comes back as its placeholder, anything else as `[redacted:NAME]`. The body is scrubbed as a stream; after 250 ms without input, a held tail shorter than 16 bytes is let through.
 
@@ -329,7 +329,7 @@ The fields are the kernel's session attestation:
 - `host`: the name the kernel verified the leaf against, compared lower-cased without one trailing dot; `port`; `protocol` (`http1`, `smtp` or `pg`).
 - `position`: `header:<name>` (lower-cased) for http1, else `auth-plain`, `auth-login` or `password-cleartext`.
 - `verified`: the kernel's own verdict on the chain and the name; `handshakeAt`: when the handshake finished (epoch ms).
-- `exit`: the exit the session leaves by (`page`, `proxy`, `tailscale` or `device:<name>`).
+- `exit`: the exit the session leaves by (`page`, `proxy`, `tailscale` or `device:<id>`, with the device's `DeviceId`).
 - `placeholders`: 1 to 16 placeholders, every one found at the position, in one request. `head` (http1 only, required there): `{ method, path }`, the request line's method and target.
 - A malformed field is `EINVAL`, and so is a `protocol` other than these or a `position` that isn't one of its protocol's; neither burns the session.
 
@@ -444,7 +444,7 @@ The button writes its intent to `intents` under a random 128-bit nonce and opens
 
 The npm package `@ai-ecoverse/slicc-vault` holds only TypeScript types, built from `src/contract.ts`: the port API (`Hello`, `Greeting`, `Request`, `Reply`, `VaultEvent`, `Role`), the button (`ButtonConfig`, `ButtonMessage`, `ButtonEvent`), the popup (`PopupIntent`, `PopupState`), the page's results (`SealResult`, `ImportResult`), and the data Settings shows (`SecretView`, `VaultStatus`, `ScrubState`, `PendingRequest`, `AuditEntry`, `ExitPolicyView`, `VaultList`). `Availability` (`connecting`, `waiting`, `locked`, `ready`) is for bios to tell spectrum "waiting for the vault" and "unlock the vault to continue". They mean:
 
-- **`EpochMs`**: milliseconds since the epoch. **`DeviceId`**: the same id bios uses for linked devices and trays, in `sourceDevice`, `device:<id>` exits and `ExitPolicyView.devices[].device`.
+- **`EpochMs`**: milliseconds since the epoch. **`DeviceId`**: the stable id of a linked device's link certificate, the same id bios uses for linked devices and trays, in `sourceDevice`, `device:<id>` exits (and `[exits]` lines) and `ExitPolicyView.devices[].device`; never a display name.
 - **`Rule`**: `domain` is an exact lower-case host; `header` a lower-case header name; **empty `methods` or `paths` mean any**. A rule with `protocol` (`http1`, `smtp`, `pg`) is a session rule, with its `port` and, for smtp and pg, its `position`; show it as "PROTOCOL on host:port".
 - **`exec`**: `false` means the value is never revealed to a program; `any`, `argv` (with `execArgv`, the allowed argv prefixes) and `shell` are the `[exec]` modes under which `fnox exec` may hand it to a program.
 - **`exits`** is present only when `/etc/slicc/secrets-policy.toml` restricts that secret; absent means every exit (`page`, `proxy`, `tailscale`, `device:<id>`).

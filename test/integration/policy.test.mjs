@@ -170,7 +170,7 @@ OPENAI_API_KEY = { shell = true }
 BAD = "yes"
 
 [exits]
-NPM_TOKEN = ["page", "device:lars-air"]
+NPM_TOKEN = ["page", "device:7d1e4b0a9c2f5e83"]
 GITHUB_TOKEN = ["page", "carrier-pigeon"]
 
 [limits]
@@ -188,6 +188,11 @@ materialize_per_day = -1
   ]);
   assert.equal(reply.accepted, true);
   assert.equal(reply.files[1].warnings.length, 3);
+  assert.ok(
+    reply.files[1].warnings.includes(
+      '[exits] GITHUB_TOKEN: only page, proxy, tailscale and device:<id> are exits'
+    )
+  );
   const listed = await page.evaluate(sealedList);
   assert.deepEqual(
     listed.secrets.map((s) => [s.name, s.exec]),
@@ -200,7 +205,7 @@ materialize_per_day = -1
   const list = (await page.evaluate(() => window.harness.call('list'))).list;
   const byName = Object.fromEntries(list.secrets.map((s) => [s.name, s]));
   assert.deepEqual(byName.GITHUB_TOKEN.execArgv, [['/usr/bin/gh', 'release', 'upload']]);
-  assert.deepEqual(byName.NPM_TOKEN.exits, ['page', 'device:lars-air']);
+  assert.deepEqual(byName.NPM_TOKEN.exits, ['page', 'device:7d1e4b0a9c2f5e83']);
   assert.deepEqual(byName.GITHUB_TOKEN.exits, ['page']);
   assert.equal(byName.OPENAI_API_KEY.exits, undefined);
   assert.equal(list.exits.file, '/etc/slicc/secrets-policy.toml');
