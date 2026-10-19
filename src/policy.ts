@@ -60,7 +60,7 @@ export const NONE: Accepted = { config: null, extra: null };
 
 const DOMAIN = /^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]*[a-z0-9])?)+$/;
 const TOKEN = /^[!#$%&'*+.^_`|~0-9A-Za-z-]+$/;
-const EXIT = /^(?:page|proxy|tailscale|device:[A-Za-z0-9._-]+)$/;
+const EXIT = /^(?:page|proxy|tailscale|device:[A-Za-z0-9._:-]+)$/;
 const POSITIONS: Record<string, string[]> = {
   smtp: ['auth-plain', 'auth-login'],
   pg: ['password-cleartext'],

@@ -82,6 +82,25 @@ test('forward injects within the rule and scrubs the response', async (t) => {
   assert.ok(used.usedAt > 0);
 });
 
+test('an [exits] line names a same-computer CLI by its local device id, colon included', async (t) => {
+  const local = 'device:local:H-FuXm3ZyTMQF_kkC0Y_qQ';
+  const { page, a } = await ready(t, `[exits]\nTOKEN_A = ["${local}"]\n`);
+  const list = (await page.evaluate(() => window.harness.call('list'))).list;
+  assert.deepEqual(list.secrets.find((s) => s.name === 'TOKEN_A').exits, [local]);
+  const fields = (exit) => ({
+    head: head('https://api.example.com/v1/items', [['Authorization', `Bearer ${a}`]]),
+    owner: OWNER,
+    exit,
+    rawTraits: {},
+  });
+  const sent = await send(page, fields(local));
+  assert.deepEqual(sent.reply.head.headers, [['Authorization', `Bearer ${VALUE_A}`]]);
+  const other = await send(page, fields('device:local:another-cli-0000'));
+  assert.match(other.reply.refused.reason, /isn't allowed on device:local:another-cli-0000/);
+  const bad = await send(page, fields('device:local id'));
+  assert.equal(bad.reply.error.code, 'EINVAL');
+});
+
 test('forward refuses what the rule does not allow, before anything is sent', async (t) => {
   const { page, a, b } = await ready(t, '[exits]\nTOKEN_A = ["proxy"]\n');
   const bearer = (p) => [['Authorization', `Bearer ${p}`]];

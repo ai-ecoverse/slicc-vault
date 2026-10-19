@@ -10,7 +10,7 @@ import type { Vault } from './vault.ts';
 
 type Fields = Record<string, unknown>;
 
-const EXIT = /^(?:page|proxy|tailscale|device:[A-Za-z0-9._-]+)$/;
+const EXIT = /^(?:page|proxy|tailscale|device:[A-Za-z0-9._:-]+)$/;
 
 export function checkHead(value: unknown): Head {
   const head = (value ?? {}) as Fields;
