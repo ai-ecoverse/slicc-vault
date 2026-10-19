@@ -39,6 +39,8 @@ export interface VaultRecord {
   url?: string;
   pinned?: boolean;
   unpins?: number;
+  replaced?: Replaced;
+  dead?: true;
   sealedBy?: number;
   removedAt?: number;
   removedWith?: string;
@@ -49,6 +51,15 @@ export interface OAuthConfig {
   clientId: string;
   scope?: string;
   resource?: string;
+  bearer?: 'default';
+}
+
+export interface Replaced {
+  sealed: Sealed;
+  source: RecordSource;
+  provider?: string;
+  settings?: Record<string, string>;
+  createdAt: number;
 }
 
 export interface Binding {
@@ -119,6 +130,7 @@ export interface SealInput {
   settings?: Record<string, string>;
   url?: string;
   exclusive?: boolean;
+  stash?: boolean;
   placeholder?: string;
   answers?: Answers;
   now: number;
@@ -183,6 +195,7 @@ function shownBinding(record: VaultRecord, clean: Clean): Partial<SecretView> {
   if (record.provider !== undefined) out.provider = clean(record.provider);
   if (record.server !== undefined) out.server = clean(record.server);
   if (record.kind === 'mcp' && record.url !== undefined) out.url = clean(record.url);
+  if (record.replaced) out.replaced = true;
   if (record.pinned) out.pinned = true;
   if (record.settings !== undefined) {
     out.settings = Object.fromEntries(
@@ -366,6 +379,24 @@ async function write(tx: IDBTransaction, input: SealInput, sealed: Sealed): Prom
   };
   if (record.kind === 'model' && record.provider === undefined) {
     throw new Refused('EINVAL', 'a model record needs its provider');
+  }
+  const live = existing && !removed(existing) ? existing : undefined;
+  if (input.stash && live && live.provider !== input.provider) {
+    throw new Refused(
+      'EEXIST',
+      `${input.name} is a ${String(live.provider)} key; sign in under another name`
+    );
+  }
+  if (input.stash && live && !live.source.startsWith('oauth:')) {
+    record.replaced = {
+      sealed: live.sealed,
+      source: live.source,
+      createdAt: live.createdAt,
+      provider: live.provider,
+      ...(live.settings === undefined ? {} : { settings: live.settings }),
+    };
+  } else if (input.stash && live?.replaced) {
+    record.replaced = live.replaced;
   }
   await request(store.put(record));
   if (input.answers) await answered(tx, input.ns, input.answers, record.placeholder, input.now);
@@ -628,6 +659,7 @@ async function mark(
     const record = (await request(store.get([ns, kind, name]))) as VaultRecord | undefined;
     const gone = record?.removedAt !== undefined && now - record.removedAt > RESTORABLE;
     if (!record || gone) throw new Refused('ENOENT', `no record named ${name}`);
+    if (!removing && record.replaced) return swap(tx, store, record, now);
     if (removing === removed(record)) return record;
     if (removing) record.removedAt = now;
     else delete record.removedAt;
@@ -646,6 +678,50 @@ async function mark(
     });
     return record;
   });
+}
+
+async function swap(
+  tx: IDBTransaction,
+  store: IDBObjectStore,
+  record: VaultRecord,
+  now: number
+): Promise<VaultRecord> {
+  const old = record.replaced as Replaced;
+  if (record.refresh) {
+    const grant = (await request(store.get([record.ns, 'grant', record.refresh]))) as
+      | VaultRecord
+      | undefined;
+    if (grant && !removed(grant)) {
+      const next: VaultRecord = { ...grant, removedAt: now };
+      delete next.removedWith;
+      await request(store.put(next));
+    }
+  }
+  const back: VaultRecord = {
+    ...record,
+    sealed: old.sealed,
+    source: old.source,
+    createdAt: old.createdAt,
+    updatedAt: Math.max(now, record.updatedAt + 1),
+  };
+  for (const field of ['refresh', 'expiresAt', 'replaced', 'removedAt', 'removedWith'] as const) {
+    delete back[field];
+  }
+  delete back.settings;
+  if (old.provider !== undefined) back.provider = old.provider;
+  if (old.settings !== undefined) back.settings = old.settings;
+  await request(store.put(back));
+  await bump(tx, record.ns);
+  await audit(tx, record.ns, {
+    type: 'restore',
+    name: record.name,
+    replaced: true,
+    uid: null,
+    tag: null,
+    at: now,
+    ...(record.refresh ? { grant: record.refresh } : {}),
+  });
+  return back;
 }
 
 export function remove(

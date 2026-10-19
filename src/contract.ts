@@ -113,6 +113,7 @@ export interface SecretView {
   server?: string;
   url?: string;
   pinned?: true;
+  replaced?: true;
   settings?: Record<string, string>;
   domains: string[];
   rules: Rule[];

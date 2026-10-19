@@ -169,7 +169,9 @@ export class AgentPort {
       case 'records':
         return this.preparer.list();
       case 'grant':
-        return this.preparer.grant(fields);
+        return fields.provider === undefined
+          ? this.preparer.grant(fields)
+          : this.preparer.signIn(fields);
       case 'refresh':
         return this.preparer.refresh(fields);
       default:

@@ -3,8 +3,10 @@ import { text } from './bytes.ts';
 import { all as every, transact } from './db.ts';
 import { Refused } from './errors.ts';
 import { decrypt } from './keys.ts';
+import { signIn } from './providers.ts';
 import {
   aad,
+  binding,
   checkValue,
   NAME,
   records,
@@ -399,14 +401,16 @@ export class Preparer {
     const shown = held.filter(
       (r) => (r.kind === 'model' || r.kind === 'mcp') && !removed(r) && plain(r)
     );
+    const dead = new Set(held.filter((r) => r.kind === 'grant' && r.dead).map((r) => r.name));
     return {
       records: shown.map((r) => {
         const expired = r.expiresAt !== undefined && r.expiresAt <= now;
+        const renews = r.refresh !== undefined && !dead.has(r.refresh);
         return {
           kind: r.kind,
           name: r.name,
           placeholder: r.placeholder,
-          state: expired ? (r.refresh ? 'refreshing' : 'expired') : 'ready',
+          state: expired ? (renews ? 'refreshing' : 'expired') : 'ready',
           ...(r.provider === undefined ? {} : { provider: r.provider }),
           ...(r.server === undefined ? {} : { server: r.server }),
           ...(r.expiresAt === undefined || echoed(String(r.expiresAt))
@@ -415,6 +419,57 @@ export class Preparer {
           ...(r.settings === undefined ? {} : { settings: clean(r.settings) }),
         };
       }),
+    };
+  }
+
+  async signIn(fields: Fields): Promise<Fields> {
+    const provider = fields.provider as string;
+    const response = fields.response;
+    const oauth = typeof provider === 'string' ? signIn(provider) : null;
+    if (!oauth) throw new Refused('ENOTSUP', `the vault has no sign-in for ${String(provider)}`);
+    if (fields.server !== undefined || fields.oauth !== undefined) {
+      throw new Refused(
+        'EINVAL',
+        'a provider sign-in takes no server or oauth: the vault knows them'
+      );
+    }
+    if (typeof response !== 'string' && !(response instanceof Uint8Array)) {
+      throw new Refused('EINVAL', 'response must be the token response body');
+    }
+    const name = fields.name;
+    if (typeof name !== 'string' || !NAME.test(name) || `${name}_GRANT`.length > 128) {
+      throw new Refused('EINVAL', "name must be the account's record name");
+    }
+    const scrubber = await this.scrubber();
+    if (scrubber.text(name).hits.length > 0) throw new Refused('EINVAL', 'the name holds a value');
+    const bound = binding('model', { provider, settings: fields.settings });
+    const now = this.vault.now();
+    const got = await tokens({ status: 200, headers: [], body: response }, scrubber, now, true);
+    checkValue(got.access);
+    if (got.refresh !== null) checkValue(got.refresh);
+    const grantName = `${name}_GRANT`;
+    const common = { ns: this.ns, source: `oauth:${provider}` as const, uid: null, tag: null, now };
+    const access: SealInput = {
+      ...common,
+      kind: 'model',
+      name,
+      value: got.access,
+      ...bound,
+      stash: true,
+      ...(got.expires === null ? {} : { expiresAt: now + got.expires * 1000 }),
+      ...(got.refresh !== null ? { refresh: grantName } : {}),
+    };
+    const grant: SealInput[] =
+      got.refresh !== null
+        ? [{ ...common, kind: 'grant', name: grantName, value: got.refresh, oauth }]
+        : [];
+    const dek = this.vault.keyring.use();
+    const written = (await sealAll(this.vault.db, dek, [access, ...grant])).map((s) => s.record);
+    await this.vault.changed(this.ns, ['secrets', 'audit']);
+    const expiry = written[0].expiresAt;
+    return {
+      records: written.map((r) => ({ kind: r.kind, name: r.name, placeholder: r.placeholder })),
+      ...(expiry === undefined ? {} : { expiresAt: expiry }),
     };
   }
 
