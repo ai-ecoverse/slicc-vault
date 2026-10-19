@@ -192,7 +192,7 @@ export interface SessionEntry extends AuditBase {
   protocol: SessionProtocol;
   position: string;
   rule: number;
-  verifiedBy: 'roots' | 'anchored';
+  verifiedBy?: 'roots' | 'anchored';
   anchor?: string;
   exit: ExitName;
 }
