@@ -361,10 +361,9 @@ async function mark(vault: Vault, ns: string, request: Fields, removing: boolean
   const kind = (request.kind ?? 'secret') as RecordKind;
   if (!KINDS.has(kind)) throw new Refused('EINVAL', 'kind must be secret, grant, model or mcp');
   const record = await (removing ? remove : restore)(vault.db, ns, name, vault.now(), kind);
-  if (removing && kind === 'model' && (await dropCustom(vault.db, ns, name))) {
-    await vault.loadPolicy(ns);
-  }
-  await vault.changed(ns, ['secrets', 'audit']);
+  const dropped = removing && kind === 'model' && (await dropCustom(vault.db, ns, name));
+  if (dropped) await vault.loadPolicy(ns);
+  await vault.changed(ns, dropped ? ['secrets', 'audit', 'exits'] : ['secrets', 'audit']);
   return { ...result(vault, ns, record) };
 }
 
@@ -541,7 +540,7 @@ export class Server {
     const scrubber = await this.vault.scrubbers.get(session.ns);
     const clean = scrubber ? (text: string) => scrubber.text(text).text : null;
     if (clean && (await migrate(this.vault.db, session.ns, this.vault.now(), clean))) {
-      await this.vault.changed(session.ns, ['secrets', 'audit']);
+      await this.vault.changed(session.ns, ['secrets', 'audit', 'exits']);
     }
     await this.vault.loadPolicy(session.ns);
     const status = await this.vault.status(session.ns);
