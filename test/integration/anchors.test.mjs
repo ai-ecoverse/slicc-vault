@@ -157,6 +157,38 @@ test('an anchored session gets the secret only by its own rule anchor or pin', a
   assert.deepEqual(open.values, { [placeholders.OPEN_PASS]: VALUES.OPEN_PASS });
 });
 
+test('each session audit entry records how the kernel trusted the session', async (t) => {
+  const { page, placeholders } = await ready(t);
+  await call(
+    page,
+    'sessionMaterialize',
+    fields(placeholders, { verifiedBy: 'anchored', anchor: idOf(ANCHOR) })
+  );
+  await call(
+    page,
+    'sessionMaterialize',
+    fields(placeholders, { verifiedBy: 'anchored', anchor: PIN })
+  );
+  await call(
+    page,
+    'sessionMaterialize',
+    fields(placeholders, { host: 'open.example.com', placeholders: [placeholders.OPEN_PASS] })
+  );
+  const audit = (await page.evaluate(() => window.harness.call('audit'))).audit;
+  assert.deepEqual(
+    audit
+      .filter((entry) => entry.type === 'session')
+      .map((entry) => [entry.name, entry.verifiedBy, entry.anchor])
+      .reverse(),
+    [
+      ['MAIL_PASS', 'anchored', idOf(ANCHOR)],
+      ['MAIL_PASS', 'anchored', PIN],
+      ['OPEN_PASS', 'roots', undefined],
+    ]
+  );
+  assert.ok(!JSON.stringify(audit).includes('fake-anchor-mail-0001'));
+});
+
 test('NEGATIVE public roots: a rule with anchors or pins refuses a roots-verified session unless it says roots = true', async (t) => {
   const { page, placeholders } = await ready(t);
   for (const change of [{}, { verifiedBy: 'roots' }]) {
