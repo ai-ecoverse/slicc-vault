@@ -13,6 +13,15 @@ test('a passphrase lock locks injection-side ops and unlocks from the popup', as
   const page = await embedder(t);
   await page.evaluate(() => window.harness.connect());
   const first = await page.evaluate(seal, 'BEFORE_LOCK', 'value-before-lock');
+  await page.evaluate(() =>
+    window.harness.call('put', {
+      name: 'AZURE_KEY',
+      value: 'value-azure-before-lock',
+      kind: 'model',
+      provider: 'azure',
+      settings: { AZURE_OPENAI_RESOURCE_NAME: 'mine' },
+    })
+  );
   const manage = await openPopup(cdp, page, { kind: 'protect' }, 'Vault lock');
   await press(manage, 'Protect with a passphrase');
   const protect = () =>
@@ -39,6 +48,11 @@ test('a passphrase lock locks injection-side ops and unlocks from the popup', as
   const refused = await page.evaluate(seal, 'WHILE_LOCKED', 'value-while-locked');
   assert.equal(refused.error.code, 'EACCES');
   assert.match(refused.error.message, /^vault is locked/);
+  const rebind = await page.evaluate(() =>
+    window.harness.call('put', { name: 'AZURE_KEY', kind: 'model', settings: {} })
+  );
+  assert.equal(rebind.error.code, 'EACCES');
+  assert.match(rebind.error.message, /^vault is locked/);
   const looked = await page.evaluate(() =>
     window.harness.sealed({ v: 1, op: 'placeholder', name: 'BEFORE_LOCK' })
   );
@@ -47,7 +61,7 @@ test('a passphrase lock locks injection-side ops and unlocks from the popup', as
   await page.until(() => document.title === 'ready');
   const welcome = await page.evaluate(() => window.harness.connect());
   assert.equal(welcome.status.locked, true);
-  assert.deepEqual(welcome.status.scrub, { needed: true, version: 2, ready: false });
+  assert.deepEqual(welcome.status.scrub, { needed: true, version: 3, ready: false });
   const unlock = await openPopup(cdp, page, 'auto', 'Unlock vault');
   await typeInto(unlock, '#passphrase', 'wrong passphrase');
   await press(unlock, 'Unlock');

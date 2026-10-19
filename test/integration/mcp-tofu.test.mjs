@@ -185,6 +185,41 @@ test('unpin lets a token pin again when the page never registered its server', a
   assert.deepEqual(repinned.request.headers, [['authorization', `Bearer ${TOKEN}`]]);
 });
 
+test('moving a pinned token to another server in Settings clears its pin', async (t) => {
+  const { page, ask, token } = await ready(t);
+  await ask('endpoints', {
+    mcp: [
+      { server: 'notes', url: 'https://notes.example.com/mcp' },
+      { server: 'wiki', url: 'https://wiki.example.com/mcp' },
+    ],
+  });
+  await ask('mcp', {
+    server: 'notes',
+    request: call('https://notes.example.com/mcp', token.placeholder),
+  });
+  const moved = await page.evaluate(() =>
+    window.harness.call('put', { name: 'NOTES_MCP', kind: 'mcp', server: 'wiki' })
+  );
+  assert.equal(moved.placeholder, token.placeholder);
+  const view = (await page.evaluate(() => window.harness.call('list'))).list.secrets.find(
+    (r) => r.name === 'NOTES_MCP'
+  );
+  assert.deepEqual([view.server, view.url, view.pinned], ['wiki', undefined, undefined]);
+  const wiki = await ask('mcp', {
+    server: 'wiki',
+    request: call('https://wiki.example.com/mcp', token.placeholder),
+  });
+  assert.deepEqual(wiki.request.headers, [['authorization', `Bearer ${TOKEN}`]]);
+  const kept = await page.evaluate(() =>
+    window.harness.call('put', { name: 'NOTES_MCP', kind: 'mcp', settings: { NOTE: 'x' } })
+  );
+  assert.equal(kept.placeholder, token.placeholder);
+  const still = (await page.evaluate(() => window.harness.call('list'))).list.secrets.find(
+    (r) => r.name === 'NOTES_MCP'
+  );
+  assert.deepEqual([still.url, still.pinned], ['https://wiki.example.com/mcp', true]);
+});
+
 test('a kernel forward pins a typed-in token at its first 2xx, never at a failure', async (t) => {
   const { page, ask, token } = await ready(t);
   await ask('endpoints', {

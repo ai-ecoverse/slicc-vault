@@ -5,13 +5,13 @@ const out = new URL('../src/endpoints.json', import.meta.url);
 
 const EXTRA = [
   ['https://aiplatform.googleapis.com', 'google-vertex'],
-  ['https://*.cognitiveservices.azure.com/openai', 'azure'],
+  ['https://{AZURE_OPENAI_RESOURCE_NAME}.cognitiveservices.azure.com/openai', 'azure'],
   ['https://opencode.ai/zen', null],
   ['https://api.kimi.com/coding', null],
-  ['https://bedrock-runtime.*.amazonaws.com', 'amazon-bedrock'],
-  ['https://bedrock-runtime-fips.*.amazonaws.com', 'amazon-bedrock'],
-  ['https://*.openai.azure.com', 'azure'],
-  ['https://*.services.ai.azure.com', 'azure'],
+  ['https://bedrock-runtime.{region}.amazonaws.com', 'amazon-bedrock'],
+  ['https://bedrock-runtime-fips.{region}.amazonaws.com', 'amazon-bedrock'],
+  ['https://{AZURE_OPENAI_RESOURCE_NAME}.openai.azure.com', 'azure'],
+  ['https://{AZURE_OPENAI_RESOURCE_NAME}.services.ai.azure.com', 'azure'],
   ['https://adobe-llm-proxy.paolo-moz.workers.dev', 'adobe'],
 ];
 
@@ -32,11 +32,12 @@ function walk(value, found) {
 }
 
 function pattern(url) {
+  const vars = [...url.matchAll(/\{([^}]+)\}/g)].map((found) => found[1]);
   const templated = url.replace(/\{[^}]+\}/g, '*');
   const match = /^https:\/\/([^/]+)(\/.*)?$/.exec(templated);
   if (!match) throw new Error(`not an https base URL: ${url}`);
   const path = (match[2] ?? '').replace(/\/+$/, '');
-  return { host: match[1].toLowerCase(), path };
+  return { host: match[1].toLowerCase(), path, vars };
 }
 
 const found = new Map();
@@ -49,10 +50,16 @@ for (const [url, providers] of found) {
   const p = pattern(url);
   const key = `${p.host}${p.path}`;
   const known = merged.get(key) ?? { ...p, providers: new Set() };
+  if (p.vars.length) known.vars = p.vars;
   for (const provider of providers) known.providers.add(provider);
   merged.set(key, known);
 }
 const unique = [...merged.values()]
-  .map((p) => ({ host: p.host, path: p.path, providers: [...p.providers].sort() }))
+  .map((p) => ({
+    host: p.host,
+    path: p.path,
+    providers: [...p.providers].sort(),
+    ...(p.vars.length ? { vars: p.vars } : {}),
+  }))
   .sort((a, b) => `${a.host}${a.path}`.localeCompare(`${b.host}${b.path}`));
 writeFileSync(out, `${JSON.stringify(unique, null, 2)}\n`);

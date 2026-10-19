@@ -225,6 +225,7 @@ export interface SealEntry extends AuditBase {
   type: 'seal';
   source: RecordSource;
   rotated: boolean;
+  rebound?: true;
 }
 
 export interface RemoveEntry extends AuditBase {
@@ -459,6 +460,13 @@ export type Op =
       value: string;
       kind?: 'secret' | 'model' | 'mcp';
       request?: string;
+    } & RecordBinding)
+  | ({
+      op: 'put';
+      name: string;
+      value?: never;
+      kind: 'model' | 'mcp';
+      request?: never;
     } & RecordBinding)
   | { op: 'cancel'; request: string }
   | { op: 'remove'; name: string; kind?: RecordKind }

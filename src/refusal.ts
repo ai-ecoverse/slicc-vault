@@ -4,6 +4,46 @@ export interface Endpoint {
   host: string;
   path: string;
   providers?: string[];
+  vars?: string[];
+}
+
+export const TENANTS = new Set([
+  'CLOUDFLARE_ACCOUNT_ID',
+  'CLOUDFLARE_GATEWAY_ID',
+  'AZURE_OPENAI_RESOURCE_NAME',
+]);
+
+export function captured(pattern: Endpoint, host: string, path: string): string[] {
+  const escaped = pattern.host.replace(/[.+?^${}()|[\]\\]/g, '\\$&').replace(/\*/g, '([^.]+)');
+  const labels = (new RegExp(`^${escaped}$`).exec(host) ?? []).slice(1);
+  const have = segments(path);
+  const parts = segments(pattern.path)
+    .map((segment, i) => (segment === '*' ? have[i] : null))
+    .filter((part): part is string => part !== null);
+  return [...labels, ...parts];
+}
+
+function hostVars(pattern: Endpoint): number {
+  return (pattern.host.match(/\*/g) ?? []).length;
+}
+
+export function tenant(
+  pattern: Endpoint,
+  host: string,
+  path: string,
+  settings: Record<string, string> | undefined
+): boolean {
+  const vars = pattern.vars ?? [];
+  if (!settings || !vars.some((name) => TENANTS.has(name) && settings[name] !== undefined)) {
+    return true;
+  }
+  const values = captured(pattern, host, path);
+  return vars.every((name, i) => {
+    const want = TENANTS.has(name) ? settings[name] : undefined;
+    if (want === undefined) return true;
+    const label = i < hostVars(pattern);
+    return label ? values[i]?.toLowerCase() === want.toLowerCase() : values[i] === want;
+  });
 }
 
 export interface McpServer {
@@ -191,15 +231,21 @@ export function modelFor(
   registered: Registered,
   provider: string,
   url: URL,
-  name: string | null = null
+  name: string | null = null,
+  settings?: Record<string, string>
 ): boolean {
   if (url.protocol !== 'https:' || !plain(url, '')) return false;
   const host = hostOf(url);
-  const built = BUILT_IN_ENDPOINTS.filter((e) => e.providers.includes(provider));
+  const built = BUILT_IN_ENDPOINTS.filter(
+    (e) =>
+      e.providers.includes(provider) &&
+      covers(e, host, url.pathname) &&
+      tenant(e, host, url.pathname, settings)
+  );
   const owned = (registered.page ?? NO_PAGE).custom
     .filter((entry) => entry.provider === provider && entry.name === name)
     .map((entry) => endpoint(entry.url, false) as Endpoint);
-  return [...built, ...owned].some((pattern) => covers(pattern, host, url.pathname));
+  return built.length > 0 || owned.some((pattern) => covers(pattern, host, url.pathname));
 }
 
 export function under(base: string, url: URL): boolean {

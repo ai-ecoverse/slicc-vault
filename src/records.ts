@@ -485,6 +485,54 @@ export async function audit(
   await request(tx.objectStore('audit').add({ ns, id: hex(random(8)), ...entry }));
 }
 
+export function rebind(
+  db: IDBDatabase,
+  ns: string,
+  kind: RecordKind,
+  name: string,
+  bound: Binding,
+  now: number
+): Promise<VaultRecord> {
+  return transact(db, ['records', 'audit', 'meta'], 'readwrite', async (tx) => {
+    const store = tx.objectStore('records');
+    const record = (await request(store.get([ns, kind, name]))) as VaultRecord | undefined;
+    if (!record || removed(record)) throw new Refused('ENOENT', `no ${kind} record named ${name}`);
+    if (kind === 'model' && bound.provider !== undefined && bound.provider !== record.provider) {
+      const meta = tx.objectStore('meta');
+      const endpoints = (await request(meta.get(`endpoints:${ns}`))) as
+        | { page?: { custom: { name: string }[] } }
+        | undefined;
+      if (endpoints?.page?.custom.some((entry) => entry.name === name)) {
+        const custom = endpoints.page.custom.filter((entry) => entry.name !== name);
+        await request(
+          meta.put({ ...endpoints, page: { ...endpoints.page, custom } }, `endpoints:${ns}`)
+        );
+      }
+    }
+    const next: VaultRecord = {
+      ...record,
+      ...bound,
+      updatedAt: Math.max(now, record.updatedAt + 1),
+    };
+    if (record.pinned && next.server !== record.server) {
+      delete next.url;
+      delete next.pinned;
+    }
+    await request(store.put(next));
+    await audit(tx, ns, {
+      type: 'seal',
+      name,
+      source: 'settings',
+      rotated: false,
+      rebound: true,
+      uid: null,
+      tag: null,
+      at: now,
+    });
+    return next;
+  });
+}
+
 export function find(
   db: IDBDatabase,
   ns: string,

@@ -23,6 +23,7 @@ import {
   dismissBackup,
   NAME,
   placeholders,
+  rebind,
   records,
   remove,
   restore,
@@ -78,6 +79,7 @@ interface Session {
 type StoredAudit = AuditEntry & { ns: string };
 
 const PAYLOAD = new Set(['purged', 'adopted', 'pinned', 'unpinned']);
+const ENDPOINT_FIELDS = new Set(['v', 'id', 'op', 'model', 'mcp', 'remove', 'unpin']);
 
 export async function audit(
   vault: Vault,
@@ -170,10 +172,17 @@ const PUTTABLE = new Set<RecordKind>(['secret', 'model', 'mcp']);
 
 async function put(vault: Vault, ns: string, request: Fields): Promise<Fields> {
   const name = checkName(request.name);
-  const value = checkValue(request.value);
   const kind = (request.kind ?? 'secret') as RecordKind;
   if (!PUTTABLE.has(kind)) throw new Refused('EINVAL', 'put stores a secret, model or mcp record');
   const bound = binding(kind, request);
+  if (request.value === undefined && kind !== 'secret' && request.request === undefined) {
+    vault.keyring.use();
+    const record = await rebind(vault.db, ns, kind, name, bound, vault.now());
+    await vault.loadPolicy(ns);
+    await vault.changed(ns, ['secrets', 'audit', 'exits']);
+    return { ...result(vault, ns, record) };
+  }
+  const value = checkValue(request.value);
   const pending = request.request === undefined ? null : await get(vault.db, ns, request.request);
   if (pending && (kind !== 'secret' || pending.kind !== 'value' || pending.name !== name)) {
     throw new Refused('EINVAL', `request ${pending.id} asks for another value`);
@@ -444,6 +453,13 @@ export async function answer(
       vault.keyring.lock();
       return {};
     case 'endpoints': {
+      const unknown = Object.keys(request).filter((key) => !ENDPOINT_FIELDS.has(key));
+      if (unknown.length) {
+        throw new Refused(
+          'EINVAL',
+          `endpoints takes model, mcp, remove and unpin, not ${unknown[0]}`
+        );
+      }
       const scrubber = request.unpin === undefined ? null : await vault.scrubbers.get(ns);
       if (request.unpin !== undefined && !scrubber) {
         throw new Refused('EACCES', 'vault is locked: unlock it in the vault window');
