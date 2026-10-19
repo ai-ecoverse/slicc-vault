@@ -101,7 +101,7 @@ test('NEGATIVE a typed-in MCP token never pins to a wildcard agent server', asyn
   assert.ok(!JSON.stringify(sent).includes(TOKEN));
 });
 
-test('a page registration replaces a pin, and unpin lets the token pin again', async (t) => {
+test('a page registration replaces a pin; once the page drops its server, an unpinned token never pins to an agent URL again', async (t) => {
   const { page, ask, token } = await ready(t);
   await ask('endpoints', { mcp: [{ server: 'notes', url: 'https://notes.example.com/mcp' }] });
   await ask('mcp', {
@@ -138,17 +138,44 @@ test('a page registration replaces a pin, and unpin lets the token pin again', a
   );
   assert.equal(unpinned.ok, true);
   await ask('endpoints', { mcp: [{ server: 'notes', url: 'https://notes3.example.com/mcp' }] });
+  const after = await ask('mcp', {
+    server: 'notes',
+    request: call('https://notes3.example.com/mcp', token.placeholder),
+  });
+  assert.match(after.error.message, /NOTES_MCP isn't a credential of notes/);
+  assert.ok(!JSON.stringify(after).includes(TOKEN));
+  await page.evaluate(() =>
+    window.harness.call('endpoints', {
+      mcp: [{ server: 'notes', url: 'https://notes3.example.com/mcp' }],
+    })
+  );
+  const trusted = await ask('mcp', {
+    server: 'notes',
+    request: call('https://notes3.example.com/mcp', token.placeholder),
+  });
+  assert.deepEqual(trusted.request.headers, [['authorization', `Bearer ${TOKEN}`]]);
+  assert.deepEqual(
+    (await pins(page)).map((entry) => entry.pinned?.host ?? `-${entry.unpinned?.host}`).reverse(),
+    ['notes.example.com', '-notes.example.com']
+  );
+  const bad = await page.evaluate(() => window.harness.call('endpoints', { unpin: 'NOTES_MCP' }));
+  assert.equal(bad.error.code, 'EINVAL');
+});
+
+test('unpin lets a token pin again when the page never registered its server', async (t) => {
+  const { page, ask, token } = await ready(t);
+  await ask('endpoints', { mcp: [{ server: 'notes', url: 'https://notes.example.com/mcp' }] });
+  await ask('mcp', {
+    server: 'notes',
+    request: call('https://notes.example.com/mcp', token.placeholder),
+  });
+  await page.evaluate(() => window.harness.call('endpoints', { unpin: ['NOTES_MCP'] }));
+  await ask('endpoints', { mcp: [{ server: 'notes', url: 'https://notes3.example.com/mcp' }] });
   const repinned = await ask('mcp', {
     server: 'notes',
     request: call('https://notes3.example.com/mcp', token.placeholder),
   });
   assert.deepEqual(repinned.request.headers, [['authorization', `Bearer ${TOKEN}`]]);
-  assert.deepEqual(
-    (await pins(page)).map((entry) => entry.pinned?.host ?? `-${entry.unpinned?.host}`).reverse(),
-    ['notes.example.com', '-notes.example.com', 'notes3.example.com']
-  );
-  const bad = await page.evaluate(() => window.harness.call('endpoints', { unpin: 'NOTES_MCP' }));
-  assert.equal(bad.error.code, 'EINVAL');
 });
 
 test('a kernel forward pins a typed-in token at its first 2xx, never at a failure', async (t) => {

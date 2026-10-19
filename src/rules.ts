@@ -344,7 +344,11 @@ export function registerPage(
     }
     const changed = JSON.stringify(next) !== JSON.stringify(page);
     const fresh = before === NO_ENDPOINTS ? { migrated: true } : {};
-    const registered = { ...before, ...fresh, page: next };
+    const gone = page.mcp
+      .map((server) => server.server)
+      .filter((name) => !next.mcp.some((server) => server.server === name));
+    const held = [...new Set([...(before.held ?? []), ...gone])];
+    const registered = { ...before, ...fresh, page: next, ...(held.length ? { held } : {}) };
     if (changed) await request(tx.objectStore('meta').put(registered, `endpoints:${ns}`));
     const unpins = await unpinIn(tx, ns, unpinned, now, clean);
     return { registered, changed: changed ? 1 : 0, unpins };
@@ -407,7 +411,6 @@ export function migrate(db: IDBDatabase, ns: string, now: number, clean: Clean):
         r.kind === 'mcp' &&
         r.url === undefined &&
         r.source !== 'oauth:mcp' &&
-        !removed(r) &&
         typeof r.server === 'string' &&
         !owned.has(r.server)
     );
