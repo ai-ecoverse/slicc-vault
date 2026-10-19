@@ -172,9 +172,9 @@ function precheck(response: EgressResponse, raw: string, scrubber: Scrubber | nu
         : parsed.error === undefined || parsed.error === null
           ? `status ${response.status}`
           : 'the IdP sent an unreadable error';
-    throw new Refused(
-      'EACCES',
-      `refresh failed: ${scrubber ? scrubber.text(reason).text : reason}`
+    throw Object.assign(
+      new Refused('EACCES', `refresh failed: ${scrubber ? scrubber.text(reason).text : reason}`),
+      { idp: reason }
     );
   }
   const type = parsed.token_type;
@@ -332,8 +332,8 @@ export class Refresher {
       await this.vault.scrubbers.get(ns),
       this.vault.now(),
       bearer
-    ).catch(async (error: Refused) => {
-      if (bearer && error.message === 'refresh failed: invalid_grant') await this.bury(ns, grant);
+    ).catch(async (error: Refused & { idp?: string }) => {
+      if (bearer && error.idp === 'invalid_grant') await this.bury(ns, grant);
       throw error;
     });
     const now = this.vault.now();

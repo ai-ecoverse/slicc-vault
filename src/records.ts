@@ -682,6 +682,24 @@ async function mark(
   });
 }
 
+async function shared(
+  store: IDBObjectStore,
+  grant: VaultRecord,
+  kind: RecordKind,
+  name: string
+): Promise<boolean> {
+  const all = (await request(store.getAll())) as VaultRecord[];
+  return all.some(
+    (other) =>
+      other.ns === grant.ns &&
+      other.kind !== 'grant' &&
+      !(other.kind === kind && other.name === name) &&
+      other.refresh === grant.name &&
+      other.source === grant.source &&
+      !removed(other)
+  );
+}
+
 async function claim(
   store: IDBObjectStore,
   input: SealInput,
@@ -698,7 +716,7 @@ async function claim(
       `${wanted.grant} belongs to another credential; sign in under another name`
     );
   }
-  if (!wanted.retire) return;
+  if (!wanted.retire || (await shared(store, grant, input.kind, input.name))) return;
   const gone: VaultRecord = { ...grant, removedAt: input.now };
   delete gone.removedWith;
   await request(store.put(gone));
@@ -715,7 +733,7 @@ async function swap(
     const grant = (await request(store.get([record.ns, 'grant', record.refresh]))) as
       | VaultRecord
       | undefined;
-    if (grant && !removed(grant)) {
+    if (grant && !removed(grant) && !(await shared(store, grant, record.kind, record.name))) {
       const next: VaultRecord = { ...grant, removedAt: now };
       delete next.removedWith;
       await request(store.put(next));

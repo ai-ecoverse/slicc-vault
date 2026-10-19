@@ -298,6 +298,9 @@ test('removing a signed-in key removes its grant, and restore brings both back',
 
 test('a refused refresh shows the key expired, a network failure keeps it refreshing', async (t) => {
   const { page, ask } = await ready(t);
+  await page.evaluate(() =>
+    window.harness.call('put', { name: 'LITERAL', value: 'invalid_grant' })
+  );
   await ask('grant', { provider: 'xai', name: 'XAI_SHORT', response: response({ expires_in: 0 }) });
   await ask('grant', {
     provider: 'kimi-coding',
@@ -321,7 +324,7 @@ test('a refused refresh shows the key expired, a network failure keeps it refres
     };
   });
   const refused = await ask('refresh', { provider: 'xai', name: 'XAI_SHORT' });
-  assert.equal(refused.error.message, 'refresh failed: invalid_grant');
+  assert.match(refused.error.message, /^refresh failed: /);
   const records = (await ask('records', {})).records;
   const of = (name) => records.find((r) => r.name === name).state;
   assert.deepEqual([of('XAI_SHORT'), of('KIMI_SHORT')], ['expired', 'refreshing']);
@@ -332,7 +335,7 @@ test('a refused refresh shows the key expired, a network failure keeps it refres
   });
   const live = (await ask('records', {})).records.find((r) => r.name === 'XAI_LIVE');
   const manual = await ask('refresh', { provider: 'xai', name: 'XAI_LIVE' });
-  assert.equal(manual.error.message, 'refresh failed: invalid_grant');
+  assert.match(manual.error.message, /^refresh failed: /);
   assert.equal(
     (await ask('records', {})).records.find((r) => r.name === 'XAI_LIVE').state,
     'expired'
@@ -344,7 +347,7 @@ test('a refused refresh shows the key expired, a network failure keeps it refres
   assert.match(used.error.message, /XAI_LIVE expired; sign in again/);
   const egressed = await page.evaluate(() => window.harness.egress.requests.length);
   const again = await ask('refresh', { provider: 'xai', name: 'XAI_SHORT' });
-  assert.equal(again.error.message, 'refresh failed: invalid_grant');
+  assert.match(again.error.message, /^refresh failed: /);
   assert.equal(await page.evaluate(() => window.harness.egress.requests.length), egressed);
   const renewed = await ask('grant', { provider: 'xai', name: 'XAI_SHORT', response: response() });
   assert.ok(renewed.records.length === 2);
