@@ -63,6 +63,7 @@ export function tofu(registered: Registered, server: McpServer, record: Holder):
     record.source !== 'oauth:mcp' &&
     record.server === server.server &&
     new URL(server.url).protocol === 'https:' &&
+    !server.url.includes('*') &&
     !pageServer(registered, record.server)
   );
 }

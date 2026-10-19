@@ -84,6 +84,23 @@ test('a typed-in MCP token pins to the agent server URL of its first fill, and a
   assert.deepEqual(kept.request.headers, [['authorization', 'Bearer fake-notes-rotated-0502']]);
 });
 
+test('NEGATIVE a typed-in MCP token never pins to a wildcard agent server', async (t) => {
+  const { ask, token } = await ready(t);
+  const registered = await ask('endpoints', {
+    mcp: [{ server: 'notes', url: 'https://*.example.com/mcp' }],
+  });
+  assert.equal(registered.ok, true);
+  const sent = await ask('mcp', {
+    server: 'notes',
+    request: call('https://good.example.com/mcp', token.placeholder),
+  });
+  assert.match(
+    sent.error.message,
+    /NOTES_MCP (isn't a credential of notes|is sent only to notes's own endpoints)/
+  );
+  assert.ok(!JSON.stringify(sent).includes(TOKEN));
+});
+
 test('a page registration replaces a pin, and unpin lets the token pin again', async (t) => {
   const { page, ask, token } = await ready(t);
   await ask('endpoints', { mcp: [{ server: 'notes', url: 'https://notes.example.com/mcp' }] });
