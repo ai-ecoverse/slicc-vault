@@ -76,6 +76,8 @@ interface Session {
 
 type StoredAudit = AuditEntry & { ns: string };
 
+const PAYLOAD = new Set(['purged', 'adopted', 'pinned', 'unpinned']);
+
 export async function audit(
   vault: Vault,
   ns: string,
@@ -90,8 +92,25 @@ export async function audit(
     .sort((a, b) => b.seq - a.seq);
   const page = older.slice(0, limit);
   const more = older.length > page.length;
+  const scrubber = page.some((e) => e.type === 'endpoints') ? await vault.scrubbers.get(ns) : null;
+  const scrub = (value: unknown): unknown => {
+    if (typeof value === 'string') return scrubber ? scrubber.text(value).text : value;
+    if (Array.isArray(value)) return value.map(scrub);
+    return Object.fromEntries(
+      Object.entries(value as object).map(([key, item]) => [key, scrub(item)])
+    );
+  };
   const entries = page.map(({ ns: _ns, ...entry }) => {
-    const known = entry as AuditEntry & { uid?: number | null; tag?: string | null };
+    const shown =
+      entry.type === 'endpoints'
+        ? Object.fromEntries(
+            Object.entries(entry).map(([key, item]) => [key, PAYLOAD.has(key) ? scrub(item) : item])
+          )
+        : entry;
+    const known = shown as AuditEntry & {
+      uid?: number | null;
+      tag?: string | null;
+    };
     return { ...known, uid: known.uid ?? null, tag: known.tag ?? null } as AuditEntry;
   });
   return { audit: entries, more, ...(more ? { next: page[page.length - 1].seq } : {}) };

@@ -312,6 +312,12 @@ test('NEGATIVE a page base URL must be a plain https URL of a live model record,
     })
   );
   assert.match(overlap.error.message, /is an MCP server, never a model endpoint/);
+  const nested = await page.evaluate(() =>
+    window.harness.call('endpoints', {
+      mcp: [{ server: 'gw', url: 'https://gw.example.com/openai/v1/mcp' }],
+    })
+  );
+  assert.match(nested.error.message, /is an MCP server, never a model endpoint/);
   const servers = await page.evaluate(() =>
     window.harness.call('endpoints', {
       mcp: [{ server: 'gw', url: 'https://gw.example.com/other' }],

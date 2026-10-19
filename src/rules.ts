@@ -337,7 +337,9 @@ export function registerPage(
       custom: [...byKey.values()].filter((c) => !removal.bound.has(`${c.name} ${c.url}`)),
     };
     const overlap = next.custom.find((c) =>
-      next.mcp.some((server) => under(server.url, new URL(c.url)))
+      next.mcp.some(
+        (server) => under(server.url, new URL(c.url)) || under(c.url, new URL(server.url))
+      )
     );
     if (overlap) {
       throw new Refused('EINVAL', `${overlap.url} is an MCP server, never a model endpoint`);
