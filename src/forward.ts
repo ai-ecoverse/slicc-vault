@@ -4,7 +4,7 @@ import { request, transact } from './db.ts';
 import { Refused } from './errors.ts';
 import { type Head, type Prepared, prepare, type Traits } from './inject.ts';
 import { audit, records, type VaultRecord } from './records.ts';
-import { type McpServer, tofu } from './refusal.ts';
+import { holds, type McpServer, mcpServer, modelRefused, refusedUrl, tofu } from './refusal.ts';
 import { loadRegistered, pin } from './rules.ts';
 import { checkStamp } from './sealed.ts';
 import type { Vault } from './vault.ts';
@@ -163,6 +163,27 @@ export async function forward(
   });
   if (!prepared.ok) return { refused: { status: prepared.status, reason: prepared.reason } };
   const scrubber = (await vault.scrubbers.get(ns)) as Scrubber;
+  const current = async () => {
+    const fresh = await loadRegistered(vault.db, ns);
+    const url = new URL(head.url);
+    const server = prepared.server;
+    if (!server) return !refusedUrl(fresh, url);
+    const now = mcpServer(fresh, url);
+    const live = await records(vault.db, ns);
+    return (
+      now?.server === server.server &&
+      now.url === server.url &&
+      !modelRefused(fresh, url) &&
+      prepared.injected.every((injection) => {
+        const found = live.find((r) => r.kind === 'mcp' && r.name === injection.name);
+        return !!found && holds(fresh, now, found);
+      })
+    );
+  };
+  const stale = {
+    refused: { status: 403, reason: 'the endpoints changed meanwhile; send it again' },
+  };
+  if (!(await current())) return stale;
   await record(vault, ns, prepared, owner.uid, owner.tag, exit);
   await vault.changed(ns, ['audit']);
   const server = prepared.server;
@@ -179,7 +200,8 @@ export async function forward(
       done.pinned ? vault.changed(ns, ['secrets', 'audit']) : undefined
     );
   };
-  if (port) relay(port, scrubber, succeeded);
   const scrubbed = prepared.server && body ? { body: scrubber.bytes(body).bytes } : {};
+  if (!(await current())) return stale;
+  if (port) relay(port, scrubber, succeeded);
   return { head: prepared.head, ...scrubbed };
 }

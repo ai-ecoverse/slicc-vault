@@ -200,7 +200,6 @@ export class Preparer {
     const again = await make();
     still(again, seen.filled);
     await again.settle?.(seen.filled);
-    still(await make(), seen.filled);
     const scrubber = await this.scrubber();
     if (scrubber.version !== first.version + seen.refreshes) {
       throw new Refused(
@@ -228,6 +227,7 @@ export class Preparer {
         "the vault's values changed meanwhile; prepare the request again"
       );
     }
+    still(await make(), seen.filled);
     return {
       request: {
         method: request.method,
