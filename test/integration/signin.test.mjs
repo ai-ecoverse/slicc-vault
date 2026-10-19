@@ -277,6 +277,49 @@ test('a repeat sign-in without a refresh token retires the old grant, and the ne
   assert.equal(full.records.length, 2);
 });
 
+const saved = {};
+
+test('NEGATIVE a backup made over a pasted key carries the pasted key, not the sign-in', async (t) => {
+  const { page, ask } = await ready(t);
+  const pasted = await page.evaluate(() =>
+    window.harness.call('put', {
+      name: 'XAI_SAVED',
+      value: 'fake-xai-saved-0820',
+      kind: 'model',
+      provider: 'xai',
+    })
+  );
+  await ask('grant', { provider: 'xai', name: 'XAI_SAVED', response: response() });
+  saved.placeholder = pasted.placeholder;
+  saved.bundle = await page.evaluate(async () => {
+    const reply = await window.harness.call('export', { passphrase: 'fake backup passphrase' });
+    return btoa(String.fromCharCode(...reply.bundle));
+  });
+});
+
+test('NEGATIVE that backup restores the pasted key into another vault', async (t) => {
+  const { page, ask } = await ready(t);
+  const done = await page.evaluate(
+    (b) =>
+      window.harness.call('import', {
+        kind: 'bundle',
+        bytes: Uint8Array.from(atob(b), (c) => c.charCodeAt(0)),
+        password: 'fake backup passphrase',
+        pick: [{ name: 'XAI_SAVED', kind: 'model' }],
+      }),
+    saved.bundle
+  );
+  assert.deepEqual(
+    done.imported.map((r) => r.placeholder),
+    [saved.placeholder]
+  );
+  const filled = await ask('model', {
+    provider: 'xai',
+    request: chat('https://api.x.ai/v1/chat', saved.placeholder),
+  });
+  assert.deepEqual(filled.request.headers, [['authorization', 'Bearer fake-xai-saved-0820']]);
+});
+
 test('removing a signed-in key removes its grant, and restore brings both back', async (t) => {
   const { page, ask } = await ready(t);
   await ask('grant', { provider: 'openai-codex', name: 'CODEX_TOKEN', response: response() });

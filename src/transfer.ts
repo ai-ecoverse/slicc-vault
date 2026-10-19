@@ -389,6 +389,13 @@ export async function importer(vault: Vault, ns: string, req: Fields): Promise<F
   };
 }
 
+function underlying(record: VaultRecord): VaultRecord {
+  if (!record.replaced) return record;
+  const pasted: VaultRecord = { ...record, ...record.replaced };
+  if (record.replaced.expiresAt === undefined) delete pasted.expiresAt;
+  return pasted;
+}
+
 export async function exporter(vault: Vault, ns: string, req: Fields): Promise<Fields> {
   const secret = passphrase(req.passphrase);
   const dek = vault.keyring.require();
@@ -396,7 +403,8 @@ export async function exporter(vault: Vault, ns: string, req: Fields): Promise<F
     (r) => BUNDLED.includes(r.kind) && r.removedAt === undefined
   );
   const items: Bundled[] = [];
-  for (const record of held) {
+  for (const stored of held) {
+    const record = underlying(stored);
     items.push({
       name: record.name,
       kind: record.kind,

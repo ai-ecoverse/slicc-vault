@@ -60,6 +60,8 @@ export interface Replaced {
   provider?: string;
   settings?: Record<string, string>;
   createdAt: number;
+  expiresAt?: number;
+  refresh?: string;
 }
 
 export interface Binding {
@@ -350,6 +352,26 @@ export async function sealAll(db: IDBDatabase, dek: Dek, inputs: SealInput[]): P
   });
 }
 
+function stashed(input: SealInput, live: VaultRecord | undefined): Replaced | undefined {
+  if (!live) return undefined;
+  if (live.provider !== input.provider) {
+    throw new Refused(
+      'EEXIST',
+      `${input.name} is a ${String(live.provider)} key; sign in under another name`
+    );
+  }
+  if (live.source.startsWith('oauth:')) return live.replaced;
+  return {
+    sealed: live.sealed,
+    source: live.source,
+    createdAt: live.createdAt,
+    provider: live.provider,
+    ...(live.settings === undefined ? {} : { settings: live.settings }),
+    ...(live.expiresAt === undefined ? {} : { expiresAt: live.expiresAt }),
+    ...(live.refresh === undefined ? {} : { refresh: live.refresh }),
+  };
+}
+
 async function write(tx: IDBTransaction, input: SealInput, sealed: Sealed): Promise<Sealing> {
   const store = tx.objectStore('records');
   const existing = (await request(store.get([input.ns, input.kind, input.name]))) as
@@ -382,23 +404,8 @@ async function write(tx: IDBTransaction, input: SealInput, sealed: Sealed): Prom
     throw new Refused('EINVAL', 'a model record needs its provider');
   }
   const live = existing && !removed(existing) ? existing : undefined;
-  if (input.stash && live && live.provider !== input.provider) {
-    throw new Refused(
-      'EEXIST',
-      `${input.name} is a ${String(live.provider)} key; sign in under another name`
-    );
-  }
-  if (input.stash && live && !live.source.startsWith('oauth:')) {
-    record.replaced = {
-      sealed: live.sealed,
-      source: live.source,
-      createdAt: live.createdAt,
-      provider: live.provider,
-      ...(live.settings === undefined ? {} : { settings: live.settings }),
-    };
-  } else if (input.stash && live?.replaced) {
-    record.replaced = live.replaced;
-  }
+  const underneath = input.stash ? stashed(input, live) : undefined;
+  if (underneath) record.replaced = underneath;
   if (input.claim) await claim(store, input, input.claim, live);
   await request(store.put(record));
   if (input.answers) await answered(tx, input.ns, input.answers, record.placeholder, input.now);
@@ -752,6 +759,8 @@ async function swap(
   delete back.settings;
   if (old.provider !== undefined) back.provider = old.provider;
   if (old.settings !== undefined) back.settings = old.settings;
+  if (old.expiresAt !== undefined) back.expiresAt = old.expiresAt;
+  if (old.refresh !== undefined) back.refresh = old.refresh;
   await request(store.put(back));
   await bump(tx, record.ns);
   await audit(tx, record.ns, {
