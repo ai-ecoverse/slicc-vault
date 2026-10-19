@@ -35,6 +35,7 @@ export interface Registered {
   mcp: McpServer[];
   owned?: Owned[];
   page?: PageEndpoints;
+  migrated?: boolean;
 }
 
 export const NO_PAGE: PageEndpoints = { model: [], mcp: [], custom: [] };
@@ -47,15 +48,32 @@ export function servers(registered: Registered): McpServer[] {
 
 export interface Holder {
   url?: string;
+  pinned?: boolean;
+  server?: string;
   source: string;
 }
 
-export function holds(registered: Registered, server: McpServer, record: Holder): boolean {
-  if (record.url !== undefined) return new URL(server.url).href === record.url;
-  if (record.source === 'oauth:mcp') return new URL(server.url).protocol === 'https:';
+export function pageServer(registered: Registered, name: string | undefined): boolean {
+  return (registered.page ?? NO_PAGE).mcp.some((server) => server.server === name);
+}
+
+export function tofu(registered: Registered, server: McpServer, record: Holder): boolean {
   return (
-    new URL(server.url).protocol === 'https:' && (registered.page ?? NO_PAGE).mcp.includes(server)
+    record.url === undefined &&
+    record.source !== 'oauth:mcp' &&
+    record.server === server.server &&
+    new URL(server.url).protocol === 'https:' &&
+    !pageServer(registered, record.server)
   );
+}
+
+export function holds(registered: Registered, server: McpServer, record: Holder): boolean {
+  const https = new URL(server.url).protocol === 'https:';
+  const page = (registered.page ?? NO_PAGE).mcp.includes(server);
+  if (record.pinned && pageServer(registered, record.server)) return https && page;
+  if (record.url !== undefined) return new URL(server.url).href === record.url;
+  if (record.source === 'oauth:mcp') return https;
+  return (https && page) || tofu(registered, server, record);
 }
 
 export function coveredByBuiltIn(provider: string, url: string): boolean {

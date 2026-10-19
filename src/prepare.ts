@@ -13,8 +13,19 @@ import {
   type VaultRecord,
 } from './records.ts';
 import { checkOAuth, type TokenKind, tokens } from './refresh.ts';
-import { holds, kernelPort, modelFor, modelRefused, serverFor, servers, under } from './refusal.ts';
-import { loadRegistered } from './rules.ts';
+import {
+  holds,
+  kernelPort,
+  type McpServer,
+  modelFor,
+  modelRefused,
+  pageServer,
+  serverFor,
+  servers,
+  tofu,
+  under,
+} from './refusal.ts';
+import { loadRegistered, pin } from './rules.ts';
 import type { Vault } from './vault.ts';
 
 type Fields = Record<string, unknown>;
@@ -78,6 +89,7 @@ export interface Target {
   owns: (record: VaultRecord) => boolean;
   reaches: (record: VaultRecord) => boolean;
   loopback: boolean;
+  settle?: (filled: VaultRecord[]) => Promise<void>;
 }
 
 export async function scrubbed(scrubber: Scrubber, request: Outgoing) {
@@ -125,7 +137,7 @@ export class Preparer {
     held: Map<string, VaultRecord>,
     target: Target,
     url: boolean,
-    seen: { refreshes: number }
+    seen: { refreshes: number; filled: VaultRecord[] }
   ) {
     let out = text;
     for (const placeholder of new Set(text.match(FOUND) ?? [])) {
@@ -149,6 +161,7 @@ export class Preparer {
         }
       }
       held.set(placeholder, record);
+      seen.filled.push(record);
       const key = this.vault.keyring.key;
       if (!key) throw new Refused('EACCES', LOCKED);
       const value = await decrypt(key, record.sealed, aad(record.ns, record.kind, record.name));
@@ -160,7 +173,8 @@ export class Preparer {
     return out;
   }
 
-  async prepare(request: Outgoing, target: Target): Promise<Fields> {
+  async prepare(request: Outgoing, make: () => Promise<Target>): Promise<Fields> {
+    const target = await make();
     const parsed = new URL(request.url);
     const loopback = target.loopback && kernelPort(parsed) !== null;
     if (parsed.protocol !== 'https:' && !loopback) {
@@ -168,12 +182,20 @@ export class Preparer {
     }
     const first = await this.scrubber();
     const held = new Map((await records(this.vault.db, this.ns)).map((r) => [r.placeholder, r]));
-    const seen = { refreshes: 0 };
+    const seen = { refreshes: 0, filled: [] as VaultRecord[] };
     const url = await this.fill(request.url, held, target, true, seen);
     const headers: [string, string][] = [];
     for (const [name, value] of request.headers) {
       headers.push([name, await this.fill(value, held, target, false, seen)]);
     }
+    const again = await make();
+    if (seen.filled.some((record) => !again.owns(record) || !again.reaches(record))) {
+      throw new Refused(
+        'EAGAIN',
+        "the vault's endpoints changed meanwhile; prepare the request again"
+      );
+    }
+    await again.settle?.(seen.filled);
     const scrubber = await this.scrubber();
     if (scrubber.version !== first.version + seen.refreshes) {
       throw new Refused(
@@ -229,14 +251,16 @@ export class Preparer {
     }
     const request = outgoing(fields.request);
     const provider = (given as string | undefined) ?? (await this.inferred(request));
-    const registered = await loadRegistered(this.vault.db, this.ns);
-    return this.prepare(request, {
-      who: provider ?? 'this request',
-      owns: (record) =>
-        provider !== null && record.kind === 'model' && record.provider === provider,
-      reaches: (record) =>
-        provider !== null && modelFor(registered, provider, new URL(request.url), record.name),
-      loopback: false,
+    return this.prepare(request, async () => {
+      const registered = await loadRegistered(this.vault.db, this.ns);
+      return {
+        who: provider ?? 'this request',
+        owns: (record) =>
+          provider !== null && record.kind === 'model' && record.provider === provider,
+        reaches: (record) =>
+          provider !== null && modelFor(registered, provider, new URL(request.url), record.name),
+        loopback: false,
+      };
     });
   }
 
@@ -246,19 +270,26 @@ export class Preparer {
       throw new Refused('EINVAL', 'server must be a registered MCP server name');
     }
     const request = outgoing(fields.request);
-    const registered = await loadRegistered(this.vault.db, this.ns);
     const url = new URL(request.url);
+    return this.prepare(request, () => this.mcpTarget(server, url));
+  }
+
+  async mcpTarget(server: string, url: URL): Promise<Target> {
+    const registered = await loadRegistered(this.vault.db, this.ns);
     const entry = serverFor(registered, server, url);
     const loopback = entry !== null && new URL(entry.url).protocol === 'http:';
     const bound = (record: VaultRecord) =>
       entry === null ||
-      (holds(registered, entry, record) && (record.url === undefined || under(record.url, url)));
+      (holds(registered, entry, record) &&
+        (record.url === undefined ||
+          (record.pinned === true && pageServer(registered, record.server)) ||
+          under(record.url, url)));
     const names = new Set(
       servers(registered)
         .filter((e) => e.server === server)
         .flatMap((e) => e.names)
     );
-    return this.prepare(request, {
+    return {
       who: server,
       owns: (record) =>
         record.kind === 'mcp' &&
@@ -266,7 +297,17 @@ export class Preparer {
         bound(record),
       reaches: () => entry !== null && !modelRefused(registered, url),
       loopback,
-    });
+      settle: async (filled) => {
+        const fresh = entry ? filled.filter((r) => tofu(registered, entry, r)) : [];
+        if (!fresh.length) return;
+        const scrubber = await this.scrubber();
+        const clean = (text: string) => scrubber.text(text).text;
+        const names = fresh.map((r) => r.name);
+        if (await pin(this.vault.db, this.ns, names, entry as McpServer, this.vault.now(), clean)) {
+          await this.vault.changed(this.ns, ['secrets', 'audit']);
+        }
+      },
+    };
   }
 
   async list(): Promise<Fields> {

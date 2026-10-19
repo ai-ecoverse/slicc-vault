@@ -215,7 +215,7 @@ test('NEGATIVE stored agent-registered { provider, url } entries are purged on u
   const purge = audit.find((entry) => entry.type === 'endpoints');
   assert.deepEqual(
     [purge.purged, purge.uid, purge.tag],
-    [[{ provider: 'openai', url: 'https://evil.example.com/v1' }], null, null]
+    [[{ provider: 'openai', host: 'evil.example.com' }], null, null]
   );
   await page.reload();
   await page.until(() => document.title === 'ready');

@@ -251,7 +251,10 @@ export interface EndpointsEntry {
   at: EpochMs;
   uid: null;
   tag: null;
-  purged: ModelEndpoint[];
+  purged?: { provider: string; host: string }[];
+  adopted?: { server: string; host: string }[];
+  pinned?: { server: string; host: string };
+  unpinned?: { server: string; host: string };
 }
 
 export type AuditEntry =
@@ -485,9 +488,13 @@ export type Op =
   | { op: 'policy'; files: Attestation[] }
   | {
       op: 'endpoints';
-      model?: (string | ModelEndpoint)[];
+      model?: (string | { name: string; url: string })[];
       mcp?: (string | McpServerEntry)[];
-      remove?: { model?: (string | ModelEndpoint)[]; mcp?: { server: string; url: string }[] };
+      remove?: {
+        model?: (string | { name: string; url: string })[];
+        mcp?: { server: string; url: string }[];
+      };
+      unpin?: string[];
     }
   | {
       op: 'forward';

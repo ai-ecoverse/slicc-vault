@@ -526,18 +526,6 @@ test('a kernel bridge seals its own loopback token, which only that server gets'
       server: 'docs',
     })
   );
-  const unbound = await ask('mcp', {
-    server: 'docs',
-    request: req('https://docs.example.com/mcp', [
-      ['authorization', `Bearer ${sealed.placeholder}`],
-    ]),
-  });
-  assert.match(unbound.error.message, /isn't a credential of docs/);
-  await page.evaluate(() =>
-    window.harness.call('endpoints', {
-      mcp: [{ server: 'docs', url: 'https://docs.example.com/mcp' }],
-    })
-  );
   const rebound = await ask('mcp', {
     server: 'docs',
     request: req('https://docs.example.com/mcp', [

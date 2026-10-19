@@ -40,7 +40,7 @@ import {
   JERK,
 } from './refresh.ts';
 import { current, get, type HumanRequest, respond, settle } from './requests.ts';
-import { apply, dropCustom, purgeOwned, registerPage } from './rules.ts';
+import { apply, dropCustom, migrate, registerPage } from './rules.ts';
 import { sealed } from './sealed.ts';
 import { exporter, importer } from './transfer.ts';
 import type { Vault } from './vault.ts';
@@ -423,12 +423,20 @@ export async function answer(
       vault.keyring.lock();
       return {};
     case 'endpoints': {
+      const scrubber = request.unpin === undefined ? null : await vault.scrubbers.get(ns);
+      if (request.unpin !== undefined && !scrubber) {
+        throw new Refused('EACCES', 'vault is locked: unlock it in the vault window');
+      }
+      const clean = (text: string) => (scrubber ? scrubber.text(text).text : text);
       const { changed } = await registerPage(
         vault.db,
         ns,
         request.model,
         request.mcp,
-        request.remove
+        request.remove,
+        request.unpin,
+        vault.now(),
+        clean
       );
       await vault.loadPolicy(ns);
       if (changed) await vault.changed(ns, ['secrets', 'exits']);
@@ -530,11 +538,12 @@ export class Server {
   }
 
   async welcome(session: Session): Promise<void> {
-    if (await purgeOwned(this.vault.db, session.ns, this.vault.now())) {
+    const scrubber = await this.vault.scrubbers.get(session.ns);
+    const clean = scrubber ? (text: string) => scrubber.text(text).text : null;
+    if (clean && (await migrate(this.vault.db, session.ns, this.vault.now(), clean))) {
       await this.vault.changed(session.ns, ['secrets', 'audit']);
     }
     await this.vault.loadPolicy(session.ns);
-    await this.vault.scrubbers.get(session.ns);
     const status = await this.vault.status(session.ns);
     session.port.postMessage({ v: 1, op: 'welcome', role: session.role, status });
   }

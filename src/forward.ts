@@ -4,7 +4,8 @@ import { request, transact } from './db.ts';
 import { Refused } from './errors.ts';
 import { type Head, type Prepared, prepare, type Traits } from './inject.ts';
 import { audit, records, type VaultRecord } from './records.ts';
-import { loadRegistered } from './rules.ts';
+import { type McpServer, tofu } from './refusal.ts';
+import { loadRegistered, pin } from './rules.ts';
 import { checkStamp } from './sealed.ts';
 import type { Vault } from './vault.ts';
 
@@ -89,7 +90,11 @@ async function record(
   });
 }
 
-export function relay(port: MessagePort, scrubber: Scrubber): void {
+export function relay(
+  port: MessagePort,
+  scrubber: Scrubber,
+  succeeded: () => void = () => {}
+): void {
   const stream: Stream = scrubber.stream();
   let timer: ReturnType<typeof setTimeout> | undefined;
   const text = (value: unknown) => (typeof value === 'string' ? scrubber.text(value).text : '');
@@ -105,6 +110,7 @@ export function relay(port: MessagePort, scrubber: Scrubber): void {
     const data = (event.data ?? {}) as Fields;
     clearTimeout(timer);
     if (data.op === 'response') {
+      if (typeof data.status === 'number' && data.status >= 200 && data.status < 300) succeeded();
       const headers = Array.isArray(data.headers) ? (data.headers as unknown[][]) : [];
       port.postMessage({
         op: 'response',
@@ -159,7 +165,21 @@ export async function forward(
   const scrubber = (await vault.scrubbers.get(ns)) as Scrubber;
   await record(vault, ns, prepared, owner.uid, owner.tag, exit);
   await vault.changed(ns, ['audit']);
-  if (port) relay(port, scrubber);
+  const server = prepared.server;
+  const names = server
+    ? prepared.injected
+        .map((injection) => held.find((r) => r.kind === 'mcp' && r.name === injection.name))
+        .filter((r): r is VaultRecord => !!r && tofu(registered, server, r))
+        .map((r) => r.name)
+    : [];
+  const clean = (text: string) => scrubber.text(text).text;
+  const succeeded = () => {
+    if (!names.length) return;
+    void pin(vault.db, ns, names, server as McpServer, vault.now(), clean).then((n) =>
+      n ? vault.changed(ns, ['secrets', 'audit']) : undefined
+    );
+  };
+  if (port) relay(port, scrubber, succeeded);
   const scrubbed = prepared.server && body ? { body: scrubber.bytes(body).bytes } : {};
   return { head: prepared.head, ...scrubbed };
 }
