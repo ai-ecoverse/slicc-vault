@@ -18,10 +18,23 @@ export interface Owned {
   url: string;
 }
 
+export interface PageEndpoints {
+  model: string[];
+  mcp: McpServer[];
+  custom: Owned[];
+}
+
 export interface Registered {
   model: string[];
   mcp: McpServer[];
   owned?: Owned[];
+  page?: PageEndpoints;
+}
+
+export const NO_PAGE: PageEndpoints = { model: [], mcp: [], custom: [] };
+
+export function servers(registered: Registered): McpServer[] {
+  return [...registered.mcp, ...(registered.page ?? NO_PAGE).mcp];
 }
 
 export const NO_ENDPOINTS: Registered = { model: [], mcp: [] };
@@ -84,8 +97,9 @@ export function contains(pattern: Endpoint, domain: string, paths: string[]): bo
 }
 
 export function patterns(registered: Registered): Endpoint[] {
-  const model = registered.model.map((url) => endpoint(url, false));
-  const mcp = registered.mcp.map((server) => endpoint(server.url, true));
+  const page = registered.page ?? NO_PAGE;
+  const model = page.model.map((url) => endpoint(url, false));
+  const mcp = page.mcp.map((server) => endpoint(server.url, true));
   return [...BUILT_IN_ENDPOINTS, ...[...model, ...mcp].filter((e): e is Endpoint => e !== null)];
 }
 
@@ -110,7 +124,7 @@ export function modelFor(registered: Registered, provider: string, url: URL): bo
   if (url.protocol !== 'https:' || !plain(url, '')) return false;
   const host = hostOf(url);
   const built = BUILT_IN_ENDPOINTS.filter((e) => e.providers.includes(provider));
-  const owned = (registered.owned ?? [])
+  const owned = (registered.page ?? NO_PAGE).custom
     .filter((entry) => entry.provider === provider)
     .map((entry) => endpoint(entry.url, false) as Endpoint);
   return [...built, ...owned].some((pattern) => covers(pattern, host, url.pathname));
@@ -128,7 +142,7 @@ export function under(base: string, url: URL): boolean {
 
 export function serverFor(registered: Registered, server: string, url: URL): McpServer | null {
   const host = hostOf(url);
-  for (const entry of registered.mcp.filter((e) => e.server === server)) {
+  for (const entry of servers(registered).filter((e) => e.server === server)) {
     if (entry.tokenUrl === url.href) return entry;
     const pattern = endpoint(entry.url, true) as Endpoint;
     const own = new URL(entry.url);
@@ -140,7 +154,7 @@ export function serverFor(registered: Registered, server: string, url: URL): Mcp
 
 export function mcpServer(registered: Registered, url: URL): McpServer | null {
   const host = hostOf(url);
-  for (const server of registered.mcp) {
+  for (const server of servers(registered)) {
     const pattern = endpoint(server.url, true);
     const sameScheme = URL.parse(server.url)?.protocol === url.protocol;
     if (pattern && sameScheme && covers(pattern, host, url.pathname)) return server;

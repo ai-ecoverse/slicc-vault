@@ -12,7 +12,7 @@ const EXTRA = [
   ['https://bedrock-runtime-fips.*.amazonaws.com', 'amazon-bedrock'],
   ['https://*.openai.azure.com', 'azure'],
   ['https://*.services.ai.azure.com', 'azure'],
-  ['https://adobe-llm-proxy.paolo-moz.workers.dev', null],
+  ['https://adobe-llm-proxy.paolo-moz.workers.dev', 'adobe'],
 ];
 
 function add(found, url, provider) {

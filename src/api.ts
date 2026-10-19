@@ -40,7 +40,7 @@ import {
   JERK,
 } from './refresh.ts';
 import { current, get, type HumanRequest, respond, settle } from './requests.ts';
-import { apply } from './rules.ts';
+import { apply, purgeOwned, register } from './rules.ts';
 import { sealed } from './sealed.ts';
 import { exporter, importer } from './transfer.ts';
 import type { Vault } from './vault.ts';
@@ -419,6 +419,14 @@ export async function answer(
     case 'lock':
       vault.keyring.lock();
       return {};
+    case 'endpoints': {
+      const { added } = await register(vault.db, ns, request.model, request.mcp, 'page');
+      if (added > 0) {
+        await vault.loadPolicy(ns);
+        await vault.changed(ns, ['secrets', 'exits']);
+      }
+      return { ok: true };
+    }
     case 'policy': {
       const { result, changed } = await apply(vault.db, ns, request.files, vault.now());
       await vault.loadPolicy(ns);
@@ -515,6 +523,9 @@ export class Server {
   }
 
   async welcome(session: Session): Promise<void> {
+    if (await purgeOwned(this.vault.db, session.ns, this.vault.now())) {
+      await this.vault.changed(session.ns, ['secrets', 'audit']);
+    }
     await this.vault.loadPolicy(session.ns);
     await this.vault.scrubbers.get(session.ns);
     const status = await this.vault.status(session.ns);

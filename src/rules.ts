@@ -17,10 +17,12 @@ import {
 } from './policy.ts';
 import { audit, NAME, PROVIDER } from './records.ts';
 import {
+  servers as allServers,
   contains,
   endpoint,
   type McpServer,
   NO_ENDPOINTS,
+  NO_PAGE,
   type Owned,
   onHost,
   patterns,
@@ -77,7 +79,7 @@ export async function loadPolicy(db: IDBDatabase, ns: string): Promise<Policy> {
   return (await transact(db, ['meta'], 'readonly', (tx) => policyIn(tx, ns))).policy;
 }
 
-function servers(value: unknown): McpServer[] {
+function serversOf(value: unknown): McpServer[] {
   if (!Array.isArray(value)) throw new Refused('EINVAL', 'mcp must be a list');
   return value.map((entry) => {
     const item = typeof entry === 'string' ? { server: entry, url: entry, names: [] } : entry;
@@ -96,11 +98,38 @@ function servers(value: unknown): McpServer[] {
   });
 }
 
+function mergeServers(stored: McpServer[], given: McpServer[], all: McpServer[]): McpServer[] {
+  const byUrl = new Map(stored.map((server) => [`${server.server} ${server.url}`, server]));
+  const firstToken = new Map<string, string>();
+  for (const entry of [...all, ...given]) {
+    if (entry.tokenUrl && !firstToken.has(entry.server))
+      firstToken.set(entry.server, entry.tokenUrl);
+  }
+  for (const entry of given) {
+    const token = firstToken.get(entry.server);
+    const server = token ? { ...entry, tokenUrl: token } : entry;
+    const key = `${server.server} ${server.url}`;
+    const known = byUrl.get(key);
+    byUrl.set(
+      key,
+      known
+        ? { ...server, ...known, names: [...new Set([...known.names, ...server.names])] }
+        : server
+    );
+  }
+  return [...byUrl.values()];
+}
+
+function count(model: string[], mcp: McpServer[], custom: Owned[] = []): number {
+  return model.length + custom.length + mcp.reduce((sum, s) => sum + s.names.length + 1, 0);
+}
+
 export function register(
   db: IDBDatabase,
   ns: string,
   model: unknown,
-  mcp: unknown
+  mcp: unknown,
+  role: 'agent' | 'page' = 'agent'
 ): Promise<{ registered: Registered; added: number }> {
   const given = model === undefined ? [] : model;
   const ownedOf = (entry: unknown) =>
@@ -120,45 +149,55 @@ export function register(
     throw new Refused('EINVAL', 'model must be a list of https base URLs or { provider, url }');
   }
   const models = given.map((entry) => (typeof entry === 'string' ? entry : (entry as Owned).url));
-  const owned = given.filter((entry) => typeof entry !== 'string') as Owned[];
-  const mcps = mcp === undefined ? [] : servers(mcp);
+  const custom = given
+    .filter((entry) => typeof entry !== 'string')
+    .map((entry) => ({ provider: (entry as Owned).provider, url: (entry as Owned).url }));
+  const mcps = mcp === undefined ? [] : serversOf(mcp);
   return transact(db, ['meta'], 'readwrite', async (tx) => {
     const meta = tx.objectStore('meta');
     const stored =
       ((await request(meta.get(`endpoints:${ns}`))) as Registered | undefined) ?? NO_ENDPOINTS;
-    const modelUrls = [...new Set([...stored.model, ...models])];
-    const ownedBy = new Map(
-      [...(stored.owned ?? []), ...owned].map((o) => [
-        `${o.provider} ${o.url}`,
-        { provider: o.provider, url: o.url },
-      ])
-    );
-    const byUrl = new Map(stored.mcp.map((server) => [`${server.server} ${server.url}`, server]));
-    const firstToken = new Map<string, string>();
-    for (const entry of [...stored.mcp, ...mcps]) {
-      if (entry.tokenUrl && !firstToken.has(entry.server))
-        firstToken.set(entry.server, entry.tokenUrl);
-    }
-    for (const given of mcps) {
-      const token = firstToken.get(given.server);
-      const server = token ? { ...given, tokenUrl: token } : given;
-      const key = `${server.server} ${server.url}`;
-      const known = byUrl.get(key);
-      byUrl.set(
-        key,
-        known
-          ? { ...server, ...known, names: [...new Set([...known.names, ...server.names])] }
-          : server
+    const page = stored.page ?? NO_PAGE;
+    const all = allServers(stored);
+    let registered: Registered;
+    let added: number;
+    if (role === 'page') {
+      const ownedBy = new Map(
+        [...page.custom, ...custom].map((o) => [`${o.provider} ${o.url}`, o])
       );
+      const next = {
+        model: [...new Set([...page.model, ...models])],
+        mcp: mergeServers(page.mcp, mcps, all),
+        custom: [...ownedBy.values()],
+      };
+      registered = { ...stored, page: next };
+      added = count(next.model, next.mcp, next.custom) - count(page.model, page.mcp, page.custom);
+    } else {
+      registered = {
+        ...stored,
+        model: [...new Set([...stored.model, ...models])],
+        mcp: mergeServers(stored.mcp, mcps, all),
+      };
+      added = count(registered.model, registered.mcp) - count(stored.model, stored.mcp);
     }
-    const registered = { model: modelUrls, mcp: [...byUrl.values()], owned: [...ownedBy.values()] };
-    const added =
-      registered.model.length -
-      stored.model.length +
-      registered.mcp.reduce((sum, s) => sum + s.names.length + 1, 0) -
-      stored.mcp.reduce((sum, s) => sum + s.names.length + 1, 0);
     await request(meta.put(registered, `endpoints:${ns}`));
     return { registered, added };
+  });
+}
+
+export function purgeOwned(db: IDBDatabase, ns: string, now: number): Promise<number> {
+  return transact(db, ['meta', 'audit'], 'readwrite', async (tx) => {
+    const meta = tx.objectStore('meta');
+    const stored = (await request(meta.get(`endpoints:${ns}`))) as Registered | undefined;
+    if (stored?.owned === undefined) return 0;
+    const owned = stored.owned;
+    const rest: Registered = { ...stored };
+    delete rest.owned;
+    await request(meta.put(rest, `endpoints:${ns}`));
+    if (owned.length) {
+      await audit(tx, ns, { type: 'endpoints', purged: owned, uid: null, tag: null, at: now });
+    }
+    return owned.length;
   });
 }
 

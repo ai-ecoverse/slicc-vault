@@ -244,7 +244,18 @@ export interface PolicyEntry {
   warning?: string;
 }
 
+export interface EndpointsEntry {
+  type: 'endpoints';
+  seq: number;
+  id: string;
+  at: EpochMs;
+  uid: null;
+  tag: null;
+  purged: ModelEndpoint[];
+}
+
 export type AuditEntry =
+  | EndpointsEntry
   | ForwardEntry
   | SessionEntry
   | McpEntry
@@ -472,6 +483,7 @@ export type Op =
   | { op: 'lock' }
   | { op: 'dismissBackupReminder' }
   | { op: 'policy'; files: Attestation[] }
+  | { op: 'endpoints'; model?: (string | ModelEndpoint)[]; mcp?: (string | McpServerEntry)[] }
   | {
       op: 'forward';
       head: RequestHead;
@@ -563,6 +575,7 @@ export type OpReply =
   | { op: 'lock' }
   | { op: 'dismissBackupReminder'; backupReminder: BackupReminder }
   | ({ op: 'policy' } & PolicyResult)
+  | { op: 'endpoints'; ok: true }
   | { op: 'refresh'; state: 'refreshed' | 'requested'; expiresAt?: EpochMs }
   | { op: 'answer'; state: RequestState }
   | ({ op: 'forward' } & ForwardResult)

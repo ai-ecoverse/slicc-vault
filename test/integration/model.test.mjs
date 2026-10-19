@@ -30,8 +30,13 @@ async function ready(t) {
   const bridge = await put({ name: 'BRIDGE', value: BRIDGE, kind: 'mcp', server: 'bridge' });
   assert.equal((await page.evaluate(() => window.harness.agent())).role, 'agent');
   const ask = (op, fields) => page.evaluate((o, f) => window.harness.ask(o, f), op, fields);
+  const custom = await page.evaluate(() =>
+    window.harness.call('endpoints', {
+      model: [{ provider: 'openai', url: 'https://llm.example.com/v1' }],
+    })
+  );
+  assert.equal(custom.ok, true);
   const registered = await ask('endpoints', {
-    model: [{ provider: 'openai', url: 'https://llm.example.com/v1' }],
     mcp: [
       { server: 'bridge', url: 'http://8080.kernel.localhost/mcp' },
       {

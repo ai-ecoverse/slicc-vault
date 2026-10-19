@@ -167,7 +167,7 @@ test('push and redact take any byte view, as exactly its own bytes', async (t) =
   );
 });
 
-test('registered endpoints are refused for secrets, at parse and at request time', async (t) => {
+test('endpoints the page registers are refused for secrets, at parse and at request time', async (t) => {
   const { page, a } = await ready(t);
   const text = config({ TOKEN_A: a }, [
     { secret: 'TOKEN_A', domain: 'llm.example.com', paths: ['/v1/*'] },
@@ -182,7 +182,7 @@ test('registered endpoints are refused for secrets, at parse and at request time
     ['api.anthropic.com']
   );
   const registered = await page.evaluate(() =>
-    window.harness.ask('endpoints', {
+    window.harness.call('endpoints', {
       model: ['https://llm.example.com/v1'],
       mcp: [{ server: 'docs', url: 'https://docs.example.com/mcp', names: [] }],
     })
@@ -211,7 +211,7 @@ test('registered endpoints are refused for secrets, at parse and at request time
     exit: 'page',
     rawTraits: {},
   });
-  assert.match(mcpPath.reply.refused.reason, /secrets are never sent/);
+  assert.match(mcpPath.reply.refused.reason, /docs.example.com is a model or MCP endpoint/);
   const elsewhere = await page.evaluate((fields) => window.harness.forward(fields), {
     head: {
       method: 'GET',
@@ -294,7 +294,7 @@ test('a kernel request to a registered MCP server gets only that server credenti
     (f) => window.harness.forward(f),
     fields([['Authorization', `Bearer ${a}`]])
   );
-  assert.match(secret.reply.refused.reason, /secrets are never sent to model or MCP endpoints/);
+  assert.match(secret.reply.refused.reason, /credentials are sent only over https on port 443/);
   const other = await page.evaluate((f) => window.harness.forward(f), {
     ...fields([['Authorization', `Bearer ${m}`]]),
     head: {

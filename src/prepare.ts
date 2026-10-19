@@ -13,7 +13,7 @@ import {
   type VaultRecord,
 } from './records.ts';
 import { checkOAuth, type TokenKind, tokens } from './refresh.ts';
-import { kernelPort, modelFor, serverFor, under } from './refusal.ts';
+import { kernelPort, modelFor, serverFor, servers, under } from './refusal.ts';
 import { loadRegistered } from './rules.ts';
 import type { Vault } from './vault.ts';
 
@@ -249,7 +249,9 @@ export class Preparer {
     const url = new URL(request.url);
     const entry = serverFor(registered, server, url);
     const names = new Set(
-      registered.mcp.filter((e) => e.server === server).flatMap((e) => e.names)
+      servers(registered)
+        .filter((e) => e.server === server)
+        .flatMap((e) => e.names)
     );
     return this.prepare(request, {
       who: server,
@@ -321,7 +323,7 @@ export class Preparer {
     }
     const oauth = checkOAuth(fields.oauth);
     const registered = await loadRegistered(this.vault.db, this.ns);
-    if (!registered.mcp.some((e) => e.server === server && e.tokenUrl === oauth.tokenUrl)) {
+    if (!servers(registered).some((e) => e.server === server && e.tokenUrl === oauth.tokenUrl)) {
       throw new Refused('EACCES', `${oauth.tokenUrl} isn't the registered tokenUrl of ${server}`);
     }
     if (fields.name !== undefined && typeof fields.name !== 'string') {

@@ -117,7 +117,7 @@ class Injector {
   readonly method: string;
   readonly byPlaceholder: Map<string, VaultRecord>;
   readonly injected: Injection[] = [];
-  readonly server: McpServer | null;
+  server: McpServer | null;
 
   constructor(input: Inputs) {
     this.input = input;
@@ -261,12 +261,14 @@ class Injector {
 
   async run(): Promise<Prepared> {
     if (this.input.owner.users !== 'enforce') throw new Refusal('kernel users must be enforce');
-    this.checkTarget();
     const all = this.input.head.headers.flatMap(([, value]) => {
       const basic = /^Basic\s+(\S+)$/i.exec(value);
       const inside = basic ? (unbase64(basic[1]) ?? loose(basic[1])) : '';
       return [...this.known(value), ...this.known(inside)];
     });
+    const secret = all.some((p) => (this.byPlaceholder.get(p) as VaultRecord).kind === 'secret');
+    if (secret) this.server = null;
+    this.checkTarget();
     if (!all.length) throw new Refusal('the request carries no placeholder of this vault');
     const refused = refusedUrl(this.input.registered, this.url);
     if (refused && !this.server) {
