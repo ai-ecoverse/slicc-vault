@@ -13,7 +13,7 @@ import {
   type VaultRecord,
 } from './records.ts';
 import { checkOAuth, type TokenKind, tokens } from './refresh.ts';
-import { kernelPort, modelFor, serverFor, servers, under } from './refusal.ts';
+import { holds, kernelPort, modelFor, modelRefused, serverFor, servers, under } from './refusal.ts';
 import { loadRegistered } from './rules.ts';
 import type { Vault } from './vault.ts';
 
@@ -248,6 +248,10 @@ export class Preparer {
     const registered = await loadRegistered(this.vault.db, this.ns);
     const url = new URL(request.url);
     const entry = serverFor(registered, server, url);
+    const loopback = entry !== null && new URL(entry.url).protocol === 'http:';
+    const bound = (record: VaultRecord) =>
+      entry === null ||
+      (holds(registered, entry, record) && (record.url === undefined || under(record.url, url)));
     const names = new Set(
       servers(registered)
         .filter((e) => e.server === server)
@@ -258,10 +262,9 @@ export class Preparer {
       owns: (record) =>
         record.kind === 'mcp' &&
         (record.server === server || names.has(record.name)) &&
-        (record.url === undefined ||
-          (entry !== null && new URL(entry.url).href === record.url && under(record.url, url))),
-      reaches: entry !== null,
-      loopback: entry !== null && new URL(entry.url).protocol === 'http:',
+        bound(record),
+      reaches: entry !== null && !modelRefused(registered, url),
+      loopback,
     });
   }
 

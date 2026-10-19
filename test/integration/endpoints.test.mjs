@@ -114,28 +114,32 @@ test("a provider's custom base URL comes only from the page, and Adobe's proxy i
 });
 
 test("an older agent's { provider, url } never fails its call, so its MCP servers still register", async (t) => {
-  const { page, ask } = await ready(t);
-  const mcp = await page.evaluate(() =>
-    window.harness.call('put', {
-      name: 'DOCS_MCP',
-      value: 'fake-docs-mcp-0204',
-      kind: 'mcp',
-      server: 'docs',
-    })
-  );
+  const { ask } = await ready(t);
   const registered = await ask('endpoints', {
     model: [
       { provider: 'adobe', url: 'https://adobe-llm-proxy.paolo-moz.workers.dev' },
       { provider: 'openai', url: 'https://evil.example.com/v1' },
     ],
-    mcp: [{ server: 'docs', url: 'https://docs.example.com/mcp', names: ['DOCS_MCP'] }],
+    mcp: [
+      {
+        server: 'docs',
+        url: 'https://docs.example.com/mcp',
+        tokenUrl: 'https://auth.example.com/token',
+      },
+    ],
   });
   assert.deepEqual(registered, { v: 1, id: registered.id, op: 'endpoints', ok: true });
+  const granted = await ask('grant', {
+    server: 'docs',
+    oauth: { tokenUrl: 'https://auth.example.com/token', clientId: 'fake-client' },
+    response: JSON.stringify({ token_type: 'Bearer', access_token: 'fake-docs-access-0204' }),
+  });
+  const placeholder = JSON.parse(granted.response).access_token;
   const filled = await ask('mcp', {
     server: 'docs',
-    request: req('https://docs.example.com/mcp', [['authorization', `Bearer ${mcp.placeholder}`]]),
+    request: req('https://docs.example.com/mcp', [['authorization', `Bearer ${placeholder}`]]),
   });
-  assert.deepEqual(filled.request.headers, [['authorization', 'Bearer fake-docs-mcp-0204']]);
+  assert.deepEqual(filled.request.headers, [['authorization', 'Bearer fake-docs-access-0204']]);
 });
 
 test("NEGATIVE denial of service: an agent's registrations never make a user's secret rule inert", async (t) => {
@@ -163,7 +167,7 @@ test("NEGATIVE denial of service: an agent's registrations never make a user's s
   }
 });
 
-test('NEGATIVE stored agent-registered { provider, url } entries are purged on upgrade, and audited', async (t) => {
+test('NEGATIVE stored agent-registered { provider, url } entries are purged on upgrade, and only those beyond the built-in list are audited', async (t) => {
   const { page, ask, openai } = await ready(t);
   const ns = served.origin('seven');
   await page.goto(`${served.vault}/config.json`);
@@ -180,7 +184,13 @@ test('NEGATIVE stored agent-registered { provider, url } entries are purged on u
           got.onsuccess = () => {
             const stored = got.result ?? { model: [], mcp: [] };
             meta.put(
-              { ...stored, owned: [{ provider: 'openai', url: 'https://evil.example.com/v1' }] },
+              {
+                ...stored,
+                owned: [
+                  { provider: 'adobe', url: 'https://adobe-llm-proxy.paolo-moz.workers.dev/v1' },
+                  { provider: 'openai', url: 'https://evil.example.com/v1' },
+                ],
+              },
               key
             );
           };
@@ -211,4 +221,25 @@ test('NEGATIVE stored agent-registered { provider, url } entries are purged on u
   await page.evaluate(() => window.harness.connect());
   const again = (await page.evaluate(() => window.harness.call('audit'))).audit;
   assert.equal(again.filter((entry) => entry.type === 'endpoints').length, 1);
+});
+
+test('a page endpoints request that is invalid anywhere changes nothing', async (t) => {
+  const { page, ask, openai } = await ready(t);
+  const gateway = 'https://gateway.example.com/openai';
+  const bad = await page.evaluate(
+    (url) =>
+      window.harness.call('endpoints', {
+        model: [{ provider: 'openai', url }],
+        remove: { model: [7] },
+      }),
+    gateway
+  );
+  assert.equal(bad.error.code, 'EINVAL');
+  const sent = await ask('model', {
+    provider: 'openai',
+    request: req(`${gateway}/chat`, [['authorization', `Bearer ${openai.placeholder}`]]),
+  });
+  assert.equal(sent.error.code, 'EACCES');
+  const list = (await page.evaluate(() => window.harness.call('list'))).list;
+  assert.deepEqual(list.refused, []);
 });

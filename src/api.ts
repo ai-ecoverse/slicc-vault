@@ -40,7 +40,7 @@ import {
   JERK,
 } from './refresh.ts';
 import { current, get, type HumanRequest, respond, settle } from './requests.ts';
-import { apply, purgeOwned, register, unregister } from './rules.ts';
+import { apply, purgeOwned, registerPage } from './rules.ts';
 import { sealed } from './sealed.ts';
 import { exporter, importer } from './transfer.ts';
 import type { Vault } from './vault.ts';
@@ -420,13 +420,15 @@ export async function answer(
       vault.keyring.lock();
       return {};
     case 'endpoints': {
-      const { added } = await register(vault.db, ns, request.model, request.mcp, 'page');
-      const removed =
-        request.remove === undefined ? 0 : await unregister(vault.db, ns, request.remove);
-      if (added + removed > 0) {
-        await vault.loadPolicy(ns);
-        await vault.changed(ns, ['secrets', 'exits']);
-      }
+      const { changed } = await registerPage(
+        vault.db,
+        ns,
+        request.model,
+        request.mcp,
+        request.remove
+      );
+      await vault.loadPolicy(ns);
+      if (changed) await vault.changed(ns, ['secrets', 'exits']);
       return { ok: true };
     }
     case 'policy': {

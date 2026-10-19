@@ -19,6 +19,7 @@ import { audit, NAME, PROVIDER } from './records.ts';
 import {
   servers as allServers,
   contains,
+  coveredByBuiltIn,
   endpoint,
   type McpServer,
   NO_ENDPOINTS,
@@ -124,13 +125,13 @@ function count(model: string[], mcp: McpServer[], custom: Owned[] = []): number 
   return model.length + custom.length + mcp.reduce((sum, s) => sum + s.names.length + 1, 0);
 }
 
-export function register(
-  db: IDBDatabase,
-  ns: string,
-  model: unknown,
-  mcp: unknown,
-  role: 'agent' | 'page' = 'agent'
-): Promise<{ registered: Registered; added: number }> {
+interface Models {
+  urls: string[];
+  plain: string[];
+  custom: Owned[];
+}
+
+function modelsOf(model: unknown): Models {
   const given = model === undefined ? [] : model;
   const ownedOf = (entry: unknown) =>
     entry && typeof entry === 'object' ? (entry as Partial<Owned>) : null;
@@ -148,45 +149,22 @@ export function register(
   if (!Array.isArray(given) || !given.every(okEntry)) {
     throw new Refused('EINVAL', 'model must be a list of https base URLs or { provider, url }');
   }
-  const models = given.map((entry) => (typeof entry === 'string' ? entry : (entry as Owned).url));
-  const plain = given.filter((entry) => typeof entry === 'string') as string[];
-  const custom = given
-    .filter((entry) => typeof entry !== 'string')
-    .map((entry) => ({ provider: (entry as Owned).provider, url: (entry as Owned).url }));
-  const mcps = mcp === undefined ? [] : serversOf(mcp);
-  return transact(db, ['meta'], 'readwrite', async (tx) => {
-    const meta = tx.objectStore('meta');
-    const stored =
-      ((await request(meta.get(`endpoints:${ns}`))) as Registered | undefined) ?? NO_ENDPOINTS;
-    const page = stored.page ?? NO_PAGE;
-    const all = allServers(stored);
-    let registered: Registered;
-    let added: number;
-    if (role === 'page') {
-      const ownedBy = new Map(
-        [...page.custom, ...custom].map((o) => [`${o.provider} ${o.url}`, o])
-      );
-      const next = {
-        model: [...new Set([...page.model, ...plain])],
-        mcp: mergeServers(page.mcp, mcps, all),
-        custom: [...ownedBy.values()],
-      };
-      registered = { ...stored, page: next };
-      added = count(next.model, next.mcp, next.custom) - count(page.model, page.mcp, page.custom);
-    } else {
-      registered = {
-        ...stored,
-        model: [...new Set([...stored.model, ...models])],
-        mcp: mergeServers(stored.mcp, mcps, all),
-      };
-      added = count(registered.model, registered.mcp) - count(stored.model, stored.mcp);
-    }
-    await request(meta.put(registered, `endpoints:${ns}`));
-    return { registered, added };
-  });
+  return {
+    urls: given.map((entry) => (typeof entry === 'string' ? entry : (entry as Owned).url)),
+    plain: given.filter((entry) => typeof entry === 'string') as string[],
+    custom: given
+      .filter((entry) => typeof entry !== 'string')
+      .map((entry) => ({ provider: (entry as Owned).provider, url: (entry as Owned).url })),
+  };
 }
 
-export function unregister(db: IDBDatabase, ns: string, remove: unknown): Promise<number> {
+interface Removal {
+  urls: Set<string>;
+  owned: Set<string>;
+  servers: Set<string>;
+}
+
+function removalOf(remove: unknown): Removal {
   const given = (remove ?? {}) as { model?: unknown; mcp?: unknown };
   const model = given.model ?? [];
   const mcp = given.mcp ?? [];
@@ -207,27 +185,76 @@ export function unregister(db: IDBDatabase, ns: string, remove: unknown): Promis
       'remove must be { model?: (url | { provider, url })[], mcp?: { server, url }[] }'
     );
   }
-  const urls = new Set(model.filter((item) => typeof item === 'string'));
-  const owned = new Set(
-    (model.filter((item) => typeof item !== 'string') as Owned[]).map(
-      (o) => `${o.provider} ${o.url}`
-    )
+  return {
+    urls: new Set(model.filter((item) => typeof item === 'string')),
+    owned: new Set(
+      (model.filter((item) => typeof item !== 'string') as Owned[]).map(
+        (o) => `${o.provider} ${o.url}`
+      )
+    ),
+    servers: new Set((mcp as McpServer[]).map((s) => `${s.server} ${s.url}`)),
+  };
+}
+
+function stored(tx: IDBTransaction, ns: string): Promise<Registered> {
+  return request(tx.objectStore('meta').get(`endpoints:${ns}`)).then(
+    (found) => (found as Registered | undefined) ?? NO_ENDPOINTS
   );
-  const servers = new Set((mcp as McpServer[]).map((s) => `${s.server} ${s.url}`));
+}
+
+export function register(
+  db: IDBDatabase,
+  ns: string,
+  model: unknown,
+  mcp: unknown
+): Promise<{ registered: Registered; added: number }> {
+  const models = modelsOf(model);
+  const given = mcp === undefined ? [] : serversOf(mcp);
   return transact(db, ['meta'], 'readwrite', async (tx) => {
-    const meta = tx.objectStore('meta');
-    const stored =
-      ((await request(meta.get(`endpoints:${ns}`))) as Registered | undefined) ?? NO_ENDPOINTS;
-    const page = stored.page ?? NO_PAGE;
-    const next = {
-      model: page.model.filter((url) => !urls.has(url)),
-      mcp: page.mcp.filter((s) => !servers.has(`${s.server} ${s.url}`)),
-      custom: page.custom.filter((o) => !owned.has(`${o.provider} ${o.url}`)),
+    const before = await stored(tx, ns);
+    const owned = new Set((before.page ?? NO_PAGE).mcp.map((server) => server.server));
+    const mcps = given.filter((server) => !owned.has(server.server));
+    const registered = {
+      ...before,
+      model: [...new Set([...before.model, ...models.urls])],
+      mcp: mergeServers(before.mcp, mcps, allServers(before)),
     };
-    const removed =
-      count(page.model, page.mcp, page.custom) - count(next.model, next.mcp, next.custom);
-    if (removed) await request(meta.put({ ...stored, page: next }, `endpoints:${ns}`));
-    return removed;
+    const added = count(registered.model, registered.mcp) - count(before.model, before.mcp);
+    await request(tx.objectStore('meta').put(registered, `endpoints:${ns}`));
+    return { registered, added };
+  });
+}
+
+export function registerPage(
+  db: IDBDatabase,
+  ns: string,
+  model: unknown,
+  mcp: unknown,
+  remove?: unknown
+): Promise<{ registered: Registered; changed: number }> {
+  const models = modelsOf(model);
+  const mcps = mcp === undefined ? [] : serversOf(mcp);
+  const removal = removalOf(remove);
+  return transact(db, ['meta'], 'readwrite', async (tx) => {
+    const before = await stored(tx, ns);
+    const page = before.page ?? NO_PAGE;
+    const ownedBy = new Map(
+      [...page.custom, ...models.custom].map((o) => [`${o.provider} ${o.url}`, o])
+    );
+    const added = {
+      model: [...new Set([...page.model, ...models.plain])],
+      mcp: mergeServers(page.mcp, mcps, page.mcp),
+      custom: [...ownedBy.values()],
+    };
+    const next = {
+      model: added.model.filter((url) => !removal.urls.has(url)),
+      mcp: added.mcp.filter((s) => !removal.servers.has(`${s.server} ${s.url}`)),
+      custom: added.custom.filter((o) => !removal.owned.has(`${o.provider} ${o.url}`)),
+    };
+    const changed = JSON.stringify(next) !== JSON.stringify(page);
+    const registered = { ...before, page: next };
+    if (changed) await request(tx.objectStore('meta').put(registered, `endpoints:${ns}`));
+    return { registered, changed: changed ? 1 : 0 };
   });
 }
 
@@ -236,7 +263,7 @@ export function purgeOwned(db: IDBDatabase, ns: string, now: number): Promise<nu
     const meta = tx.objectStore('meta');
     const stored = (await request(meta.get(`endpoints:${ns}`))) as Registered | undefined;
     if (stored?.owned === undefined) return 0;
-    const owned = stored.owned;
+    const owned = stored.owned.filter((entry) => !coveredByBuiltIn(entry.provider, entry.url));
     const rest: Registered = { ...stored };
     delete rest.owned;
     await request(meta.put(rest, `endpoints:${ns}`));

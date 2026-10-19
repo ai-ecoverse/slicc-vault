@@ -8,6 +8,7 @@ const MODEL_KEY = 'fake-model-key-0101';
 const OTHER_KEY = 'fake-model-key-0102';
 const SECRET = 'fake-secret-value-0103';
 const BRIDGE = 'fake-bridge-token-0104';
+const LOOP = 'fake-loop-token-0140';
 
 async function ready(t) {
   const page = await embedder(t);
@@ -138,8 +139,25 @@ test('model prepares a request with its provider key and the body scrubbed', asy
   assert.match(named.error.message, /head carries a value/);
 });
 
-test('mcp fills its server credential on the kernel loopback, and never sends one elsewhere', async (t) => {
-  const { ask, bridge, model } = await ready(t);
+test('mcp fills a kernel bridge token on its loopback, and never sends one elsewhere', async (t) => {
+  const { page, ask, model } = await ready(t);
+  const bridge = await page.evaluate(
+    (value) =>
+      window.harness.sealed(
+        {
+          v: 1,
+          op: 'seal',
+          name: 'LOOP',
+          value,
+          kind: 'mcp',
+          server: 'bridge',
+          url: 'http://8080.kernel.localhost/mcp',
+        },
+        { pid: 76, ppid: 1, uid: 1000, gid: 1000, tag: null }
+      ),
+    LOOP
+  );
+  assert.match(bridge.placeholder, /^fnox_proxy_/, JSON.stringify(bridge));
   const got = await ask('mcp', {
     server: 'bridge',
     request: req(
@@ -148,7 +166,11 @@ test('mcp fills its server credential on the kernel loopback, and never sends on
       `{"args":"${SECRET}"}`
     ),
   });
-  assert.deepEqual(got.request.headers, [['authorization', `Bearer ${BRIDGE}`]]);
+  assert.deepEqual(
+    got.request?.headers,
+    [['authorization', `Bearer ${LOOP}`]],
+    JSON.stringify(got)
+  );
   assert.ok(!got.request.body.includes(SECRET));
   const cdp = await ask('mcp', {
     server: 'bridge',
@@ -502,6 +524,18 @@ test('a kernel bridge seals its own loopback token, which only that server gets'
       value: 'fake-rebound-0135',
       kind: 'mcp',
       server: 'docs',
+    })
+  );
+  const unbound = await ask('mcp', {
+    server: 'docs',
+    request: req('https://docs.example.com/mcp', [
+      ['authorization', `Bearer ${sealed.placeholder}`],
+    ]),
+  });
+  assert.match(unbound.error.message, /isn't a credential of docs/);
+  await page.evaluate(() =>
+    window.harness.call('endpoints', {
+      mcp: [{ server: 'docs', url: 'https://docs.example.com/mcp' }],
     })
   );
   const rebound = await ask('mcp', {

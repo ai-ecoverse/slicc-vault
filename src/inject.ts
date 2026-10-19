@@ -2,7 +2,14 @@ import type { ExitName, Rule, Stamp } from './contract.ts';
 import { decrypt } from './keys.ts';
 import type { Policy } from './policy.ts';
 import { aad, removed, rulesFor, type VaultRecord } from './records.ts';
-import { hostOf, type McpServer, mcpServer, type Registered, refusedUrl } from './refusal.ts';
+import {
+  holds,
+  hostOf,
+  type McpServer,
+  mcpServer,
+  type Registered,
+  refusedUrl,
+} from './refusal.ts';
 
 export interface Head {
   method: string;
@@ -208,7 +215,11 @@ class Injector {
       if (text.split(placeholder).length > 2) {
         throw new Refusal(`${record.name} appears more than once in ${header}`);
       }
-      if (kind === 'mcp' && !this.server?.names.includes(record.name)) {
+      const server = this.server as McpServer;
+      if (
+        kind === 'mcp' &&
+        !(server.names.includes(record.name) && holds(this.input.registered, server, record))
+      ) {
         throw new Refusal(
           `${record.name} isn't a credential of the MCP server ${this.server?.server}`
         );
