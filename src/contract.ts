@@ -461,6 +461,13 @@ export type Op =
       kind?: 'secret' | 'model' | 'mcp';
       request?: string;
     } & RecordBinding)
+  | ({
+      op: 'put';
+      name: string;
+      value?: never;
+      kind: 'model' | 'mcp';
+      request?: never;
+    } & RecordBinding)
   | { op: 'cancel'; request: string }
   | { op: 'remove'; name: string; kind?: RecordKind }
   | { op: 'restore'; name: string; kind?: RecordKind }
