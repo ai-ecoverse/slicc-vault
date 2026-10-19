@@ -63,7 +63,7 @@ const TOKEN = /^[!#$%&'*+.^_`|~0-9A-Za-z-]+$/;
 const EXIT = /^(?:page|proxy|tailscale|device:[A-Za-z0-9._:-]+)$/;
 const POSITIONS: Record<string, string[]> = {
   smtp: ['auth-plain', 'auth-login'],
-  pg: ['password-cleartext'],
+  pg: ['password-cleartext', 'scram-sha-256'],
 };
 
 function isTable(value: TomlValue | undefined): value is TomlTable {

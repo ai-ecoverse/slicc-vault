@@ -8,6 +8,7 @@ import type { Policy } from './policy.ts';
 import { aad, audit, PLACEHOLDER, records, removed, type VaultRecord } from './records.ts';
 import { type Registered, refusedUrl } from './refusal.ts';
 import { policyIn } from './rules.ts';
+import { clientProof, parseScram, SCRAM_CANDIDATES, type Scram, same } from './scram.ts';
 import { checkStamp } from './sealed.ts';
 import type { Vault } from './vault.ts';
 
@@ -21,7 +22,7 @@ const TARGET = /^\/[\x21-\x7e]*$/;
 const POSITIONS: Record<string, RegExp> = {
   http1: /^header:[!#$%&'*+.^_`|~0-9a-z-]+$/,
   smtp: /^(?:auth-plain|auth-login)$/,
-  pg: /^password-cleartext$/,
+  pg: /^(?:password-cleartext|scram-sha-256)$/,
 };
 
 interface Asked {
@@ -36,6 +37,7 @@ interface Asked {
   exit: ExitName;
   placeholders: string[];
   head: { method: string; target: string; path: string } | null;
+  scram: Scram | null;
 }
 
 interface Handed {
@@ -87,11 +89,16 @@ export function asked(req: Fields): Asked {
   }
   if (typeof req.verified !== 'boolean') invalid('verified must be a boolean');
   if (!integer(req.handshakeAt, 0, Number.MAX_SAFE_INTEGER)) invalid('handshakeAt must be a time');
-  const list = req.placeholders;
-  if (!Array.isArray(list) || list.length === 0 || list.length > 16) {
+  const scram = req.position === 'scram-sha-256' ? parseScram(req.scram) : null;
+  if (scram && req.placeholders !== undefined) {
+    invalid('a scram-sha-256 session names no placeholders: the proof does');
+  }
+  if (!scram && req.scram !== undefined) invalid('only a scram-sha-256 session has scram');
+  const list = scram ? [] : req.placeholders;
+  if (!scram && (!Array.isArray(list) || list.length === 0 || list.length > 16)) {
     invalid('placeholders must be a list of 1 to 16 placeholders');
   }
-  if (!list.every((item) => typeof item === 'string' && PLACEHOLDER.test(item))) {
+  if (!(list as unknown[]).every((item) => typeof item === 'string' && PLACEHOLDER.test(item))) {
     invalid('placeholders must be vault placeholders');
   }
   return {
@@ -106,6 +113,7 @@ export function asked(req: Fields): Asked {
     exit: checkExit(req.exit),
     placeholders: [...new Set(list as string[])],
     head: head(req, host),
+    scram,
   };
 }
 
@@ -139,6 +147,7 @@ function current(stored: VaultRecord | undefined, seen: VaultRecord, now: number
 
 export class Sessions {
   readonly vault: Vault;
+  prove = clientProof;
 
   constructor(vault: Vault) {
     this.vault = vault;
@@ -201,6 +210,28 @@ export class Sessions {
     }
   }
 
+  async prover(
+    held: Map<string, VaultRecord>,
+    policy: Policy,
+    ask: Asked,
+    now: number
+  ): Promise<string[]> {
+    const candidates = [...held].filter(
+      ([, record]) => this.still(record, policy, ask, now) !== null
+    );
+    if (candidates.length > SCRAM_CANDIDATES) {
+      fail(`more than ${SCRAM_CANDIDATES} session rules' placeholders to try for SCRAM`);
+    }
+    const found: string[] = [];
+    for (const [placeholder] of candidates) {
+      const proof = await this.prove(placeholder, ask.scram as Scram);
+      if (same(proof, (ask.scram as Scram).proof)) found.push(placeholder);
+    }
+    if (found.length === 0) fail("no session rule's placeholder matches the SCRAM proof");
+    if (found.length > 1) fail('more than one placeholder matches the SCRAM proof');
+    return found;
+  }
+
   async materialize(ns: string, req: Fields): Promise<Fields> {
     const ask = asked(req);
     const now = this.vault.now();
@@ -214,6 +245,7 @@ export class Sessions {
     );
     this.endpoint(ask, registered);
     const held = new Map((await records(this.vault.db, ns)).map((r) => [r.placeholder, r]));
+    if (ask.scram) ask.placeholders = await this.prover(held, policy, ask, now);
     const handed: Handed[] = [];
     const reasons: string[] = [];
     for (const placeholder of ask.placeholders) {

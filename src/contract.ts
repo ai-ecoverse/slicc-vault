@@ -43,7 +43,7 @@ export interface VaultError {
 }
 
 export type SessionProtocol = 'http1' | 'smtp' | 'pg';
-export type SessionPosition = 'auth-plain' | 'auth-login' | 'password-cleartext';
+export type SessionPosition = 'auth-plain' | 'auth-login' | 'password-cleartext' | 'scram-sha-256';
 
 export interface Rule {
   domain: string;
@@ -460,8 +460,14 @@ export type Op =
       verified: boolean;
       handshakeAt: EpochMs;
       exit: ExitName;
-      placeholders: string[];
+      placeholders?: string[];
       head?: { method: string; path: string };
+      scram?: {
+        clientFirstBare: string;
+        serverFirst: string;
+        clientFinalBare: string;
+        proof: string;
+      };
     };
 
 export type AgentOp =
