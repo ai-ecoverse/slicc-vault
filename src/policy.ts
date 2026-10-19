@@ -225,7 +225,7 @@ export function parseExtra(text: string, warnings: string[]): ExtraPolicy {
     const list = strings(value) ?? [];
     const valid = list.filter((exit) => EXIT.test(exit)) as ExitName[];
     if (valid.length !== list.length || !Array.isArray(value)) {
-      warnings.push(`[exits] ${name}: only page, proxy, tailscale and device:<name> are exits`);
+      warnings.push(`[exits] ${name}: only page, proxy, tailscale and device:<id> are exits`);
     }
     exits[name] = valid;
   }
