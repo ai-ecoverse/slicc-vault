@@ -334,6 +334,45 @@ test('NEGATIVE that backup restores the pasted key into another vault', async (t
   assert.deepEqual(filled.request.headers, [['authorization', 'Bearer fake-xai-saved-0820']]);
 });
 
+test('NEGATIVE a sign-in over a removed pasted key keeps it restorable, and a removed key of another provider keeps its name', async (t) => {
+  const { page, ask } = await ready(t);
+  const pasted = await page.evaluate(() =>
+    window.harness.call('put', {
+      name: 'XAI_LATER',
+      value: 'fake-xai-later-0822',
+      kind: 'model',
+      provider: 'xai',
+    })
+  );
+  await ask('grant', { provider: 'xai', name: 'XAI_LATER', response: response() });
+  await page.evaluate(() => window.harness.call('remove', { name: 'XAI_LATER', kind: 'model' }));
+  await ask('grant', {
+    provider: 'xai',
+    name: 'XAI_LATER',
+    response: response({
+      access_token: 'fake-xai-later-0823',
+      refresh_token: 'fake-xai-later-0824',
+    }),
+  });
+  await page.evaluate(() => window.harness.call('restore', { name: 'XAI_LATER', kind: 'model' }));
+  const back = await ask('model', {
+    provider: 'xai',
+    request: chat('https://api.x.ai/v1/chat', pasted.placeholder),
+  });
+  assert.deepEqual(back.request.headers, [['authorization', 'Bearer fake-xai-later-0822']]);
+  await page.evaluate(() =>
+    window.harness.call('put', {
+      name: 'KIMI_LATER',
+      value: 'fake-kimi-later-0825',
+      kind: 'model',
+      provider: 'kimi-coding',
+    })
+  );
+  await page.evaluate(() => window.harness.call('remove', { name: 'KIMI_LATER', kind: 'model' }));
+  const crossed = await ask('grant', { provider: 'xai', name: 'KIMI_LATER', response: response() });
+  assert.equal(crossed.error.code, 'EEXIST');
+});
+
 test('removing a signed-in key removes its grant, and restore brings both back', async (t) => {
   const { page, ask } = await ready(t);
   await ask('grant', { provider: 'openai-codex', name: 'CODEX_TOKEN', response: response() });

@@ -462,13 +462,14 @@ export class Preparer {
     );
     const holds = (s: Scrubber) => (t: string) =>
       s.text(t).hits.some((hit) => hit.form !== 'fragment');
-    const guard = (settings: Record<string, string>) => {
+    const guard = (settings: Record<string, string>, version: number) => {
+      if (version !== scrubber.version) throw new Refused('EAGAIN', 'the vault changed meanwhile');
       const meta = [name, grantName, ...Object.entries(settings).flat()];
       if (meta.some(holds(returned)) || meta.some(holds(scrubber))) {
         throw new Refused('EINVAL', 'the name or settings hold a token or a stored value');
       }
     };
-    guard(bound.settings ?? {});
+    guard(bound.settings ?? {}, scrubber.version);
     const common = { ns: this.ns, source: `oauth:${provider}` as const, uid: null, tag: null, now };
     const access: SealInput = {
       ...common,

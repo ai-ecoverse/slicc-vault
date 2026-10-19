@@ -134,7 +134,7 @@ export interface SealInput {
   exclusive?: boolean;
   stash?: boolean;
   claim?: { grant: string; retire: boolean };
-  guard?: (settings: Record<string, string>) => void;
+  guard?: (settings: Record<string, string>, version: number) => void;
   placeholder?: string;
   answers?: Answers;
   now: number;
@@ -353,23 +353,23 @@ export async function sealAll(db: IDBDatabase, dek: Dek, inputs: SealInput[]): P
   });
 }
 
-function stashed(input: SealInput, live: VaultRecord | undefined): Replaced | undefined {
-  if (!live) return undefined;
-  if (live.provider !== input.provider) {
+function stashed(input: SealInput, held: VaultRecord | undefined): Replaced | undefined {
+  if (!held) return undefined;
+  if (held.provider !== input.provider) {
     throw new Refused(
       'EEXIST',
-      `${input.name} is a ${String(live.provider)} key; sign in under another name`
+      `${input.name} is a ${String(held.provider)} key; sign in under another name`
     );
   }
-  if (live.source.startsWith('oauth:')) return live.replaced;
+  if (held.source.startsWith('oauth:')) return held.replaced;
   return {
-    sealed: live.sealed,
-    source: live.source,
-    createdAt: live.createdAt,
-    provider: live.provider,
-    ...(live.settings === undefined ? {} : { settings: live.settings }),
-    ...(live.expiresAt === undefined ? {} : { expiresAt: live.expiresAt }),
-    ...(live.refresh === undefined ? {} : { refresh: live.refresh }),
+    sealed: held.sealed,
+    source: held.source,
+    createdAt: held.createdAt,
+    provider: held.provider,
+    ...(held.settings === undefined ? {} : { settings: held.settings }),
+    ...(held.expiresAt === undefined ? {} : { expiresAt: held.expiresAt }),
+    ...(held.refresh === undefined ? {} : { refresh: held.refresh }),
   };
 }
 
@@ -405,9 +405,9 @@ async function write(tx: IDBTransaction, input: SealInput, sealed: Sealed): Prom
     throw new Refused('EINVAL', 'a model record needs its provider');
   }
   const live = existing && !removed(existing) ? existing : undefined;
-  const underneath = input.stash ? stashed(input, live) : undefined;
+  const underneath = input.stash ? stashed(input, existing) : undefined;
   if (underneath) record.replaced = underneath;
-  input.guard?.(record.settings ?? {});
+  input.guard?.(record.settings ?? {}, await scrubIn(tx, input.ns));
   if (input.claim) await claim(store, input, input.claim, live);
   await request(store.put(record));
   if (input.answers) await answered(tx, input.ns, input.answers, record.placeholder, input.now);
