@@ -168,6 +168,10 @@ export class Preparer {
       if (!target.reaches(found)) {
         throw new Refused('EACCES', `${found.name} is sent only to ${target.who}'s own endpoints`);
       }
+      const dead = [...held.values()].some(
+        (r) => r.kind === 'grant' && r.name === found.refresh && r.dead && !removed(r)
+      );
+      if (dead) throw new Refused('EACCES', `${found.name} expired; sign in again`);
       const record = await this.usable(found);
       if (record !== found) {
         seen.refreshes += 1;
@@ -405,12 +409,13 @@ export class Preparer {
     return {
       records: shown.map((r) => {
         const expired = r.expiresAt !== undefined && r.expiresAt <= now;
-        const renews = r.refresh !== undefined && !dead.has(r.refresh);
+        const buried = r.refresh !== undefined && dead.has(r.refresh);
+        const renews = r.refresh !== undefined && !buried;
         return {
           kind: r.kind,
           name: r.name,
           placeholder: r.placeholder,
-          state: expired ? (renews ? 'refreshing' : 'expired') : 'ready',
+          state: buried ? 'expired' : expired ? (renews ? 'refreshing' : 'expired') : 'ready',
           ...(r.provider === undefined ? {} : { provider: r.provider }),
           ...(r.server === undefined ? {} : { server: r.server }),
           ...(r.expiresAt === undefined || echoed(String(r.expiresAt))
@@ -420,6 +425,18 @@ export class Preparer {
         };
       }),
     };
+  }
+
+  async free(name: string, grantName: string, source: string): Promise<void> {
+    const held = await records(this.vault.db, this.ns);
+    const grant = held.find((r) => r.kind === 'grant' && r.name === grantName && !removed(r));
+    if (!grant) return;
+    const owner = held.find((r) => r.kind === 'model' && r.name === name && !removed(r));
+    if (grant.source === source && owner?.refresh === grantName) return;
+    throw new Refused(
+      'EEXIST',
+      `${grantName} belongs to another credential; sign in under another name`
+    );
   }
 
   async signIn(fields: Fields): Promise<Fields> {
@@ -448,6 +465,19 @@ export class Preparer {
     checkValue(got.access);
     if (got.refresh !== null) checkValue(got.refresh);
     const grantName = `${name}_GRANT`;
+    const returned = compile(
+      [got.access, ...(got.refresh === null ? [] : [got.refresh])].map((value, i) => ({
+        name: `T${i}`,
+        placeholder: `fnox_proxy_${'0'.repeat(23)}${i}`,
+        value,
+      })),
+      { version: 0 }
+    );
+    const meta = [name, grantName, ...Object.entries(bound.settings ?? {}).flat()];
+    if (meta.some((t) => returned.text(t).hits.some((hit) => hit.form !== 'fragment'))) {
+      throw new Refused('EINVAL', 'the name or settings hold a returned token');
+    }
+    await this.free(name, grantName, `oauth:${provider}`);
     const common = { ns: this.ns, source: `oauth:${provider}` as const, uid: null, tag: null, now };
     const access: SealInput = {
       ...common,

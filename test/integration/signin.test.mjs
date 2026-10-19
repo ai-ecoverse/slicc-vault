@@ -139,6 +139,8 @@ test('NEGATIVE an agent sign-in over a pasted key keeps the pasted key restorabl
     (r) => r.name === 'XAI_KEY'
   );
   assert.deepEqual([view.source, view.replaced], ['oauth:xai', true]);
+  const hidden = await ask('redact', { texts: ['echo fake-xai-pasted-0804'] });
+  assert.equal(hidden.texts[0], `echo ${pasted.placeholder}`);
   const back = await page.evaluate(() =>
     window.harness.call('restore', { name: 'XAI_KEY', kind: 'model' })
   );
@@ -171,6 +173,47 @@ test('NEGATIVE an agent sign-in over a pasted key keeps the pasted key restorabl
     request: chat('https://api.x.ai/v1/chat', pasted.placeholder),
   });
   assert.deepEqual(pastedAgain.request.headers, [['authorization', 'Bearer fake-xai-pasted-0804']]);
+});
+
+test("NEGATIVE a sign-in never writes a returned token into its name or settings, nor takes another credential's grant", async (t) => {
+  const { page, ask } = await ready(t);
+  const leaked = await ask('grant', {
+    provider: 'xai',
+    name: 'XAI_LEAK',
+    response: response(),
+    settings: { NOTE: ACCESS },
+  });
+  assert.equal(leaked.error.code, 'EINVAL');
+  const named = await ask('grant', {
+    provider: 'xai',
+    name: 'FAKE_TOKEN_NAME_0809',
+    response: response({ access_token: 'FAKE_TOKEN_NAME_0809' }),
+  });
+  assert.equal(named.error.code, 'EINVAL');
+  await ask('endpoints', {
+    mcp: [
+      {
+        server: 'docs',
+        url: 'https://docs.example.com/mcp',
+        tokenUrl: 'https://auth.example.com/token',
+      },
+    ],
+  });
+  const mcp = await ask('grant', {
+    server: 'docs',
+    name: 'SHARED',
+    oauth: { tokenUrl: 'https://auth.example.com/token', clientId: 'fake-client' },
+    response: JSON.stringify({
+      token_type: 'Bearer',
+      access_token: 'fake-mcp-shared-0810',
+      refresh_token: 'fake-mcp-shared-0811',
+    }),
+  });
+  assert.equal(mcp.records.length, 2);
+  const taken = await ask('grant', { provider: 'xai', name: 'SHARED', response: response() });
+  assert.equal(taken.error.code, 'EEXIST');
+  const list = (await page.evaluate(() => window.harness.call('list'))).list.secrets;
+  assert.equal(list.find((r) => r.name === 'SHARED_GRANT').source, 'oauth:mcp');
 });
 
 test('removing a signed-in key removes its grant, and restore brings both back', async (t) => {
@@ -221,6 +264,23 @@ test('a refused refresh shows the key expired, a network failure keeps it refres
   const records = (await ask('records', {})).records;
   const of = (name) => records.find((r) => r.name === name).state;
   assert.deepEqual([of('XAI_SHORT'), of('KIMI_SHORT')], ['expired', 'refreshing']);
+  await ask('grant', {
+    provider: 'xai',
+    name: 'XAI_LIVE',
+    response: response({ access_token: 'fake-xai-live-0812', refresh_token: 'fake-xai-live-0813' }),
+  });
+  const live = (await ask('records', {})).records.find((r) => r.name === 'XAI_LIVE');
+  const manual = await ask('refresh', { provider: 'xai', name: 'XAI_LIVE' });
+  assert.equal(manual.error.message, 'refresh failed: invalid_grant');
+  assert.equal(
+    (await ask('records', {})).records.find((r) => r.name === 'XAI_LIVE').state,
+    'expired'
+  );
+  const used = await ask('model', {
+    provider: 'xai',
+    request: chat('https://api.x.ai/v1/chat', live.placeholder),
+  });
+  assert.match(used.error.message, /XAI_LIVE expired; sign in again/);
   const egressed = await page.evaluate(() => window.harness.egress.requests.length);
   const again = await ask('refresh', { provider: 'xai', name: 'XAI_SHORT' });
   assert.equal(again.error.message, 'refresh failed: invalid_grant');
