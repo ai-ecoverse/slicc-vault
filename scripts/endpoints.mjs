@@ -5,7 +5,9 @@ const out = new URL('../src/endpoints.json', import.meta.url);
 
 const EXTRA = [
   ['https://aiplatform.googleapis.com', 'google-vertex'],
-  ['https://*.cognitiveservices.azure.com', 'azure'],
+  ['https://*.cognitiveservices.azure.com/openai', 'azure'],
+  ['https://opencode.ai/zen', null],
+  ['https://api.kimi.com/coding', null],
   ['https://bedrock-runtime.*.amazonaws.com', 'amazon-bedrock'],
   ['https://bedrock-runtime-fips.*.amazonaws.com', 'amazon-bedrock'],
   ['https://*.openai.azure.com', 'azure'],
