@@ -290,6 +290,34 @@ test("a page-registered base URL fills only its own record's key, and goes with 
   assert.equal((await send(openai.placeholder)).error.code, 'EACCES');
 });
 
+test('a model record moved to another provider drops its custom base URL', async (t) => {
+  const { page, ask, openai } = await ready(t);
+  const gateway = 'https://gateway.example.com/openai';
+  await page.evaluate(
+    (url) => window.harness.call('endpoints', { model: [{ name: 'OPENAI_API_KEY', url }] }),
+    gateway
+  );
+  await page.evaluate(() =>
+    window.harness.call('put', { name: 'OPENAI_API_KEY', kind: 'model', provider: 'azure' })
+  );
+  const moved = await ask('model', {
+    provider: 'azure',
+    request: req(`${gateway}/chat`, [['authorization', `Bearer ${openai.placeholder}`]]),
+  });
+  assert.equal(moved.error.code, 'EACCES');
+  const back = await page.evaluate(() =>
+    window.harness.call('put', { name: 'OPENAI_API_KEY', kind: 'model', provider: 'openai' })
+  );
+  assert.equal(back.placeholder, openai.placeholder);
+  const gone = await ask('model', {
+    provider: 'openai',
+    request: req(`${gateway}/chat`, [['authorization', `Bearer ${openai.placeholder}`]]),
+  });
+  assert.equal(gone.error.code, 'EACCES');
+  const list = (await page.evaluate(() => window.harness.call('list'))).list;
+  assert.deepEqual(list.refused, []);
+});
+
 test('NEGATIVE a page base URL must be a plain https URL of a live model record, never an MCP server', async (t) => {
   const { page } = await ready(t);
   await page.evaluate(() =>

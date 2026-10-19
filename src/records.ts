@@ -493,10 +493,22 @@ export function rebind(
   bound: Binding,
   now: number
 ): Promise<VaultRecord> {
-  return transact(db, ['records', 'audit'], 'readwrite', async (tx) => {
+  return transact(db, ['records', 'audit', 'meta'], 'readwrite', async (tx) => {
     const store = tx.objectStore('records');
     const record = (await request(store.get([ns, kind, name]))) as VaultRecord | undefined;
     if (!record || removed(record)) throw new Refused('ENOENT', `no ${kind} record named ${name}`);
+    if (kind === 'model' && bound.provider !== undefined && bound.provider !== record.provider) {
+      const meta = tx.objectStore('meta');
+      const endpoints = (await request(meta.get(`endpoints:${ns}`))) as
+        | { page?: { custom: { name: string }[] } }
+        | undefined;
+      if (endpoints?.page?.custom.some((entry) => entry.name === name)) {
+        const custom = endpoints.page.custom.filter((entry) => entry.name !== name);
+        await request(
+          meta.put({ ...endpoints, page: { ...endpoints.page, custom } }, `endpoints:${ns}`)
+        );
+      }
+    }
     const next: VaultRecord = {
       ...record,
       ...bound,
