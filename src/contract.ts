@@ -45,6 +45,43 @@ export interface VaultError {
 export type SessionProtocol = 'http1' | 'smtp' | 'pg';
 export type SessionPosition = 'auth-plain' | 'auth-login' | 'password-cleartext' | 'scram-sha-256';
 
+export interface ScramExchange {
+  clientFirstBare: string;
+  serverFirst: string;
+  clientFinalBare: string;
+  proof: string;
+}
+
+export type SessionTarget =
+  | {
+      protocol: 'http1';
+      position: `header:${string}`;
+      placeholders: string[];
+      head: { method: string; path: string };
+      scram?: never;
+    }
+  | {
+      protocol: 'smtp';
+      position: 'auth-plain' | 'auth-login';
+      placeholders: string[];
+      head?: never;
+      scram?: never;
+    }
+  | {
+      protocol: 'pg';
+      position: 'password-cleartext';
+      placeholders: string[];
+      head?: never;
+      scram?: never;
+    }
+  | {
+      protocol: 'pg';
+      position: 'scram-sha-256';
+      scram: ScramExchange;
+      placeholders?: never;
+      head?: never;
+    };
+
 export interface Rule {
   domain: string;
   header: string;
@@ -449,26 +486,16 @@ export type Op =
       interpreters: string[];
       trusted: boolean;
     }
-  | {
+  | ({
       op: 'sessionMaterialize';
       stamp: Stamp;
       session: string;
       host: string;
       port: number;
-      protocol: SessionProtocol;
-      position: string;
       verified: boolean;
       handshakeAt: EpochMs;
       exit: ExitName;
-      placeholders?: string[];
-      head?: { method: string; path: string };
-      scram?: {
-        clientFirstBare: string;
-        serverFirst: string;
-        clientFinalBare: string;
-        proof: string;
-      };
-    };
+    } & SessionTarget);
 
 export type AgentOp =
   | { op: 'redact'; texts: (string | Uint8Array)[] }
