@@ -32,7 +32,7 @@ const pins = async (page) =>
     .filter((entry) => entry.type === 'endpoints')
     .map(({ pinned, unpinned, adopted }) => ({ pinned, unpinned, adopted }));
 
-test('a typed-in MCP token pins to the agent server URL of its first fill, and an agent retarget after the pin is refused', async (t) => {
+test('a typed-in MCP token pins to the agent server URL of its first fill, and an agent retarget after the pin, or after a rotation, is refused', async (t) => {
   const { page, ask, token } = await ready(t);
   await ask('endpoints', { mcp: [{ server: 'notes', url: 'https://notes.example.com/mcp' }] });
   const first = await ask('mcp', {
@@ -59,6 +59,24 @@ test('a typed-in MCP token pins to the agent server URL of its first fill, and a
     request: call('https://notes.example.com/mcp', token.placeholder),
   });
   assert.deepEqual(again.request.headers, [['authorization', `Bearer ${TOKEN}`]]);
+  await page.evaluate(() =>
+    window.harness.call('put', {
+      name: 'NOTES_MCP',
+      value: 'fake-notes-rotated-0502',
+      kind: 'mcp',
+      server: 'notes',
+    })
+  );
+  const rotated = await ask('mcp', {
+    server: 'notes',
+    request: call('https://evil.example.com/mcp', token.placeholder),
+  });
+  assert.match(rotated.error.message, /NOTES_MCP isn't a credential of notes/);
+  const kept = await ask('mcp', {
+    server: 'notes',
+    request: call('https://notes.example.com/mcp', token.placeholder),
+  });
+  assert.deepEqual(kept.request.headers, [['authorization', 'Bearer fake-notes-rotated-0502']]);
 });
 
 test('a page registration replaces a pin, and unpin lets the token pin again', async (t) => {

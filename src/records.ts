@@ -291,6 +291,11 @@ function bound(existing: VaultRecord | undefined, input: SealInput): Partial<Vau
   const settings = input.settings ?? existing?.settings;
   const bridge = input.source === 'process' && input.kind === 'mcp';
   if (input.url !== undefined) out.url = input.url;
+  const kept = existing?.pinned === true && input.url === undefined && server === existing.server;
+  if (kept) {
+    out.url = existing.url;
+    out.pinned = true;
+  }
   if (bridge) out.sealedBy = input.uid as number;
   if (provider !== undefined) out.provider = provider;
   if (server !== undefined) out.server = server;

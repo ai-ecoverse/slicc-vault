@@ -92,6 +92,15 @@ export interface Target {
   settle?: (filled: VaultRecord[]) => Promise<void>;
 }
 
+function still(target: Target, filled: VaultRecord[]): void {
+  if (filled.some((record) => !target.owns(record) || !target.reaches(record))) {
+    throw new Refused(
+      'EAGAIN',
+      "the vault's endpoints changed meanwhile; prepare the request again"
+    );
+  }
+}
+
 export async function scrubbed(scrubber: Scrubber, request: Outgoing) {
   if (request.body === undefined) return { body: undefined, hits: [] as Hit[] };
   if (typeof request.body === 'string') {
@@ -189,13 +198,9 @@ export class Preparer {
       headers.push([name, await this.fill(value, held, target, false, seen)]);
     }
     const again = await make();
-    if (seen.filled.some((record) => !again.owns(record) || !again.reaches(record))) {
-      throw new Refused(
-        'EAGAIN',
-        "the vault's endpoints changed meanwhile; prepare the request again"
-      );
-    }
+    still(again, seen.filled);
     await again.settle?.(seen.filled);
+    still(await make(), seen.filled);
     const scrubber = await this.scrubber();
     if (scrubber.version !== first.version + seen.refreshes) {
       throw new Refused(
