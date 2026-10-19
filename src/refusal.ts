@@ -37,6 +37,11 @@ export interface Registered {
   page?: PageEndpoints;
   migrated?: boolean;
   held?: string[];
+  later?: McpServer[];
+}
+
+export function pageSealed(record: { source: string }): boolean {
+  return record.source !== 'oauth:mcp' && record.source !== 'process';
 }
 
 export const NO_PAGE: PageEndpoints = { model: [], mcp: [], custom: [] };

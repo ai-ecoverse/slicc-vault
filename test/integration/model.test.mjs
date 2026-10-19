@@ -510,7 +510,10 @@ test('a kernel bridge seals its own loopback token, which only that server gets'
       ['authorization', `Bearer ${sealed.placeholder}`],
     ]),
   });
-  assert.match(exfil.error.message, /isn't a credential of bridge/);
+  assert.match(
+    exfil.error.message,
+    /isn't a credential of bridge|is sent only to bridge's own endpoints/
+  );
   const elsewhere = await ask('mcp', {
     server: 'docs',
     request: req('https://docs.example.com/mcp', [

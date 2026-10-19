@@ -21,6 +21,7 @@ import {
   type McpServer,
   modelFor,
   modelRefused,
+  pageSealed,
   pageServer,
   type Registered,
   serverFor,
@@ -326,12 +327,13 @@ export class Preparer {
     const registered = given ?? (await loadRegistered(this.vault.db, this.ns));
     const entry = serverFor(registered, server, url);
     const loopback = entry !== null && new URL(entry.url).protocol === 'http:';
-    const bound = (record: VaultRecord) =>
-      entry === null ||
-      (holds(registered, entry, record) &&
-        (record.url === undefined ||
-          (record.pinned === true && pageServer(registered, record.server)) ||
-          under(record.url, url)));
+    const bound = (record: VaultRecord) => {
+      if (entry === null) return true;
+      if (!holds(registered, entry, record)) return false;
+      const overridden = record.pinned === true && pageServer(registered, record.server);
+      if (record.url !== undefined && !overridden) return under(record.url, url);
+      return !pageSealed(record) || under(entry.url, url);
+    };
     const names = new Set(
       servers(registered)
         .filter((e) => e.server === server)

@@ -27,6 +27,7 @@ import {
   NO_PAGE,
   type Owned,
   onHost,
+  pageSealed,
   patterns,
   type Registered,
   under,
@@ -263,17 +264,34 @@ export function register(
 ): Promise<{ registered: Registered; added: number }> {
   const models = modelsOf(model);
   const given = mcp === undefined ? [] : serversOf(mcp);
-  return transact(db, ['meta'], 'readwrite', async (tx) => {
+  return transact(db, ['meta', 'records'], 'readwrite', async (tx) => {
     const before = await stored(tx, ns);
     const owned = new Set((before.page ?? NO_PAGE).mcp.map((server) => server.server));
-    const mcps = given.filter((server) => !owned.has(server.server));
+    const bound = new Set(
+      (await all<VaultRecord>(tx, 'records', ns))
+        .filter((r) => r.kind === 'mcp' && pageSealed(r) && typeof r.server === 'string')
+        .map((r) => r.server as string)
+    );
+    const mcps = given
+      .filter((server) => !owned.has(server.server))
+      .map((server) => {
+        if (!bound.has(server.server)) return server;
+        const bare = { ...server };
+        delete bare.tokenUrl;
+        return bare;
+      });
+    const legacy = before !== NO_ENDPOINTS && !before.migrated;
     const registered = {
       ...before,
       ...(before === NO_ENDPOINTS ? { migrated: true } : {}),
       model: [...new Set([...before.model, ...models])],
-      mcp: mergeServers(before.mcp, mcps, allServers(before)),
+      ...(legacy
+        ? { later: mergeServers(before.later ?? [], mcps, allServers(before)) }
+        : { mcp: mergeServers(before.mcp, mcps, allServers(before)) }),
     };
-    const added = count(registered.model, registered.mcp) - count(before.model, before.mcp);
+    const added =
+      count(registered.model, [...registered.mcp, ...(registered.later ?? [])]) -
+      count(before.model, [...before.mcp, ...(before.later ?? [])]);
     await request(tx.objectStore('meta').put(registered, `endpoints:${ns}`));
     return { registered, added };
   });
@@ -434,9 +452,10 @@ export function migrate(db: IDBDatabase, ns: string, now: number, clean: Clean):
     const ambiguous = [...wanted].filter(
       (name) => !adopted.some((server) => server.server === name)
     );
+    const kept = before.mcp.filter((server) => !adopted.includes(server));
     const next: Registered = {
       ...before,
-      mcp: before.mcp.filter((server) => !adopted.includes(server)),
+      mcp: mergeServers(kept, before.later ?? [], kept),
       page: {
         ...page,
         mcp: [...page.mcp, ...adopted.map(({ server, url }) => ({ server, url, names: [] }))],
@@ -447,6 +466,7 @@ export function migrate(db: IDBDatabase, ns: string, now: number, clean: Clean):
         : {}),
     };
     delete next.owned;
+    delete next.later;
     await request(meta.put(next, `endpoints:${ns}`));
     const shown = adopted.map((s) => ({ server: clean(s.server), host: clean(hostOfUrl(s.url)) }));
     if (!purged.length && !shown.length) return false;

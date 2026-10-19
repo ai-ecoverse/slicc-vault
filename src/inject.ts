@@ -219,7 +219,10 @@ class Injector {
       const server = this.server as McpServer;
       if (
         kind === 'mcp' &&
-        !(server.names.includes(record.name) && holds(this.input.registered, server, record))
+        !(
+          (server.names.includes(record.name) || record.server === server.server) &&
+          holds(this.input.registered, server, record)
+        )
       ) {
         throw new Refusal(
           `${record.name} isn't a credential of the MCP server ${this.server?.server}`
