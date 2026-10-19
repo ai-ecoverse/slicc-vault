@@ -23,6 +23,7 @@ import {
   dismissBackup,
   NAME,
   placeholders,
+  rebind,
   records,
   remove,
   restore,
@@ -170,10 +171,15 @@ const PUTTABLE = new Set<RecordKind>(['secret', 'model', 'mcp']);
 
 async function put(vault: Vault, ns: string, request: Fields): Promise<Fields> {
   const name = checkName(request.name);
-  const value = checkValue(request.value);
   const kind = (request.kind ?? 'secret') as RecordKind;
   if (!PUTTABLE.has(kind)) throw new Refused('EINVAL', 'put stores a secret, model or mcp record');
   const bound = binding(kind, request);
+  if (request.value === undefined && kind !== 'secret' && request.request === undefined) {
+    const record = await rebind(vault.db, ns, kind, name, bound, vault.now());
+    await vault.changed(ns, ['secrets']);
+    return { ...result(vault, ns, record) };
+  }
+  const value = checkValue(request.value);
   const pending = request.request === undefined ? null : await get(vault.db, ns, request.request);
   if (pending && (kind !== 'secret' || pending.kind !== 'value' || pending.name !== name)) {
     throw new Refused('EINVAL', `request ${pending.id} asks for another value`);
