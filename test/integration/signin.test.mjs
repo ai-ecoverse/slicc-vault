@@ -184,6 +184,23 @@ test("NEGATIVE a sign-in never writes a returned token into its name or settings
     settings: { NOTE: ACCESS },
   });
   assert.equal(leaked.error.code, 'EINVAL');
+  await page.evaluate(
+    (note) =>
+      window.harness.call('put', {
+        name: 'XAI_NOTED',
+        value: 'fake-xai-noted-0817',
+        kind: 'model',
+        provider: 'xai',
+        settings: { NOTE: note },
+      }),
+    ACCESS
+  );
+  const inherited = await ask('grant', {
+    provider: 'xai',
+    name: 'XAI_NOTED',
+    response: response(),
+  });
+  assert.equal(inherited.error.code, 'EINVAL');
   const named = await ask('grant', {
     provider: 'xai',
     name: 'FAKE_TOKEN_NAME_0809',

@@ -1,6 +1,6 @@
 import type { Scrubber } from '@ai-ecoverse/slicc-scrub';
 import { text } from './bytes.ts';
-import { request, transact } from './db.ts';
+import { all, request, transact } from './db.ts';
 import { Refused } from './errors.ts';
 import { decrypt } from './keys.ts';
 import { aad, type Rotation, records, removed, rotate, type VaultRecord } from './records.ts';
@@ -307,10 +307,16 @@ export class Refresher {
   }
 
   async bury(ns: string, grant: VaultRecord): Promise<void> {
+    const at = this.vault.now();
     await transact(this.vault.db, ['records'], 'readwrite', async (tx) => {
       const store = tx.objectStore('records');
       const now = (await request(store.get([ns, 'grant', grant.name]))) as VaultRecord | undefined;
-      if (now?.updatedAt === grant.updatedAt) await request(store.put({ ...now, dead: true }));
+      if (now?.updatedAt !== grant.updatedAt) return;
+      await request(store.put({ ...now, dead: true }));
+      for (const owner of await all<VaultRecord>(tx, 'records', ns)) {
+        if (owner.kind === 'grant' || owner.refresh !== grant.name) continue;
+        await request(store.put({ ...owner, updatedAt: Math.max(at, owner.updatedAt + 1) }));
+      }
     });
     await this.vault.changed(ns, ['secrets']);
   }

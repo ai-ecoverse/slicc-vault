@@ -473,7 +473,11 @@ export class Preparer {
       })),
       { version: 0 }
     );
-    const meta = [name, grantName, ...Object.entries(bound.settings ?? {}).flat()];
+    const current = (await records(this.vault.db, this.ns)).find(
+      (r) => r.kind === 'model' && r.name === name && !removed(r)
+    );
+    const settings = bound.settings ?? current?.settings ?? {};
+    const meta = [name, grantName, ...Object.entries(settings).flat()];
     if (meta.some((t) => returned.text(t).hits.some((hit) => hit.form !== 'fragment'))) {
       throw new Refused('EINVAL', 'the name or settings hold a returned token');
     }
