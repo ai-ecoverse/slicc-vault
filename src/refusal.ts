@@ -23,6 +23,10 @@ export function captured(pattern: Endpoint, host: string, path: string): string[
   return [...labels, ...parts];
 }
 
+function hostVars(pattern: Endpoint): number {
+  return (pattern.host.match(/\*/g) ?? []).length;
+}
+
 export function tenant(
   pattern: Endpoint,
   host: string,
@@ -36,7 +40,9 @@ export function tenant(
   const values = captured(pattern, host, path);
   return vars.every((name, i) => {
     const want = TENANTS.has(name) ? settings[name] : undefined;
-    return want === undefined || values[i]?.toLowerCase() === want.toLowerCase();
+    if (want === undefined) return true;
+    const label = i < hostVars(pattern);
+    return label ? values[i]?.toLowerCase() === want.toLowerCase() : values[i] === want;
   });
 }
 

@@ -63,6 +63,10 @@ test('NEGATIVE a Cloudflare gateway key with its account and gateway goes only t
     await ask('cloudflare-ai-gateway', `${base}/acct1/gw2/anthropic/v1/messages`, gw.placeholder),
     'cloudflare-ai-gateway'
   );
+  refused(
+    await ask('cloudflare-ai-gateway', `${base}/ACCT1/gw1/openai/chat/completions`, gw.placeholder),
+    'cloudflare-ai-gateway'
+  );
   const workers = await put({
     name: 'CF_WORKERS_KEY',
     value: 'fake-cf-workers-0702',
