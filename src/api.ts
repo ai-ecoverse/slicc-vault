@@ -175,6 +175,7 @@ async function put(vault: Vault, ns: string, request: Fields): Promise<Fields> {
   if (!PUTTABLE.has(kind)) throw new Refused('EINVAL', 'put stores a secret, model or mcp record');
   const bound = binding(kind, request);
   if (request.value === undefined && kind !== 'secret' && request.request === undefined) {
+    vault.keyring.use();
     const record = await rebind(vault.db, ns, kind, name, bound, vault.now());
     await vault.changed(ns, ['secrets']);
     return { ...result(vault, ns, record) };
