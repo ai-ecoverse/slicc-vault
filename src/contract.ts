@@ -483,7 +483,12 @@ export type Op =
   | { op: 'lock' }
   | { op: 'dismissBackupReminder' }
   | { op: 'policy'; files: Attestation[] }
-  | { op: 'endpoints'; model?: (string | ModelEndpoint)[]; mcp?: (string | McpServerEntry)[] }
+  | {
+      op: 'endpoints';
+      model?: (string | ModelEndpoint)[];
+      mcp?: (string | McpServerEntry)[];
+      remove?: { model?: (string | ModelEndpoint)[]; mcp?: { server: string; url: string }[] };
+    }
   | {
       op: 'forward';
       head: RequestHead;

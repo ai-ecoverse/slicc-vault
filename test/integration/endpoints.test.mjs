@@ -96,7 +96,46 @@ test("a provider's custom base URL comes only from the page, and Adobe's proxy i
     provider: 'openai',
     request: req(`${gateway}/chat`, [['authorization', `Bearer ${openai.placeholder}`]]),
   });
+  const removed = await page.evaluate(
+    (url) => window.harness.call('endpoints', { remove: { model: [{ provider: 'openai', url }] } }),
+    gateway
+  );
+  assert.equal(removed.ok, true);
+  const gone = await ask('model', {
+    provider: 'openai',
+    request: req(`${gateway}/chat`, [['authorization', `Bearer ${openai.placeholder}`]]),
+  });
+  assert.equal(gone.error.code, 'EACCES');
+  const bad = await page.evaluate(() =>
+    window.harness.call('endpoints', { remove: { model: [7] } })
+  );
+  assert.equal(bad.error.code, 'EINVAL');
   assert.deepEqual(after.request.headers, [['authorization', `Bearer ${OPENAI_KEY}`]]);
+});
+
+test("an older agent's { provider, url } never fails its call, so its MCP servers still register", async (t) => {
+  const { page, ask } = await ready(t);
+  const mcp = await page.evaluate(() =>
+    window.harness.call('put', {
+      name: 'DOCS_MCP',
+      value: 'fake-docs-mcp-0204',
+      kind: 'mcp',
+      server: 'docs',
+    })
+  );
+  const registered = await ask('endpoints', {
+    model: [
+      { provider: 'adobe', url: 'https://adobe-llm-proxy.paolo-moz.workers.dev' },
+      { provider: 'openai', url: 'https://evil.example.com/v1' },
+    ],
+    mcp: [{ server: 'docs', url: 'https://docs.example.com/mcp', names: ['DOCS_MCP'] }],
+  });
+  assert.deepEqual(registered, { v: 1, id: registered.id, op: 'endpoints', ok: true });
+  const filled = await ask('mcp', {
+    server: 'docs',
+    request: req('https://docs.example.com/mcp', [['authorization', `Bearer ${mcp.placeholder}`]]),
+  });
+  assert.deepEqual(filled.request.headers, [['authorization', 'Bearer fake-docs-mcp-0204']]);
 });
 
 test("NEGATIVE denial of service: an agent's registrations never make a user's secret rule inert", async (t) => {

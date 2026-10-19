@@ -98,7 +98,9 @@ export function contains(pattern: Endpoint, domain: string, paths: string[]): bo
 
 export function patterns(registered: Registered): Endpoint[] {
   const page = registered.page ?? NO_PAGE;
-  const model = page.model.map((url) => endpoint(url, false));
+  const model = [...page.model, ...page.custom.map((entry) => entry.url)].map((url) =>
+    endpoint(url, false)
+  );
   const mcp = page.mcp.map((server) => endpoint(server.url, true));
   return [...BUILT_IN_ENDPOINTS, ...[...model, ...mcp].filter((e): e is Endpoint => e !== null)];
 }

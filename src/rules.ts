@@ -149,6 +149,7 @@ export function register(
     throw new Refused('EINVAL', 'model must be a list of https base URLs or { provider, url }');
   }
   const models = given.map((entry) => (typeof entry === 'string' ? entry : (entry as Owned).url));
+  const plain = given.filter((entry) => typeof entry === 'string') as string[];
   const custom = given
     .filter((entry) => typeof entry !== 'string')
     .map((entry) => ({ provider: (entry as Owned).provider, url: (entry as Owned).url }));
@@ -166,7 +167,7 @@ export function register(
         [...page.custom, ...custom].map((o) => [`${o.provider} ${o.url}`, o])
       );
       const next = {
-        model: [...new Set([...page.model, ...models])],
+        model: [...new Set([...page.model, ...plain])],
         mcp: mergeServers(page.mcp, mcps, all),
         custom: [...ownedBy.values()],
       };
@@ -182,6 +183,51 @@ export function register(
     }
     await request(meta.put(registered, `endpoints:${ns}`));
     return { registered, added };
+  });
+}
+
+export function unregister(db: IDBDatabase, ns: string, remove: unknown): Promise<number> {
+  const given = (remove ?? {}) as { model?: unknown; mcp?: unknown };
+  const model = given.model ?? [];
+  const mcp = given.mcp ?? [];
+  const entry = (item: unknown) =>
+    typeof item === 'string' ||
+    (!!item &&
+      typeof item === 'object' &&
+      typeof (item as Owned).provider === 'string' &&
+      typeof (item as Owned).url === 'string');
+  const server = (item: unknown) =>
+    !!item &&
+    typeof item === 'object' &&
+    typeof (item as McpServer).server === 'string' &&
+    typeof (item as McpServer).url === 'string';
+  if (!Array.isArray(model) || !model.every(entry) || !Array.isArray(mcp) || !mcp.every(server)) {
+    throw new Refused(
+      'EINVAL',
+      'remove must be { model?: (url | { provider, url })[], mcp?: { server, url }[] }'
+    );
+  }
+  const urls = new Set(model.filter((item) => typeof item === 'string'));
+  const owned = new Set(
+    (model.filter((item) => typeof item !== 'string') as Owned[]).map(
+      (o) => `${o.provider} ${o.url}`
+    )
+  );
+  const servers = new Set((mcp as McpServer[]).map((s) => `${s.server} ${s.url}`));
+  return transact(db, ['meta'], 'readwrite', async (tx) => {
+    const meta = tx.objectStore('meta');
+    const stored =
+      ((await request(meta.get(`endpoints:${ns}`))) as Registered | undefined) ?? NO_ENDPOINTS;
+    const page = stored.page ?? NO_PAGE;
+    const next = {
+      model: page.model.filter((url) => !urls.has(url)),
+      mcp: page.mcp.filter((s) => !servers.has(`${s.server} ${s.url}`)),
+      custom: page.custom.filter((o) => !owned.has(`${o.provider} ${o.url}`)),
+    };
+    const removed =
+      count(page.model, page.mcp, page.custom) - count(next.model, next.mcp, next.custom);
+    if (removed) await request(meta.put({ ...stored, page: next }, `endpoints:${ns}`));
+    return removed;
   });
 }
 

@@ -183,7 +183,7 @@ iframe.contentWindow.postMessage({ type: 'slicc-vault', v: 1, op: 'hello', role:
 | `lock` | — | `{}`; drops the key everywhere when the lock is on |
 | `dismissBackupReminder` | — | `{ backupReminder }`; the reminder becomes `dismissed` for this namespace |
 | `policy` | `files` | the attested policy files, below (Policy) |
-| `endpoints` | `model?`: https base URLs or `{ provider, url }` for a provider's custom base URL; `mcp?`: as the agent's | `{ ok: true }`; the user's own registrations, trusted (Model and MCP endpoints) |
+| `endpoints` | `model?`: https base URLs or `{ provider, url }` for a provider's custom base URL; `mcp?`: as the agent's; `remove?`: `{ model?: (url \| { provider, url })[], mcp?: { server, url }[] }` | `{ ok: true }`; the user's own registrations, trusted (Model and MCP endpoints). `remove` takes back the page's own entries (removing an account removes its custom base URL), never the agent's; a malformed `remove` is `EINVAL` |
 | `forward` | `head`, `body?`, `owner`, `exit`, `rawTraits`, with a `MessagePort` transferred alongside | the injected head, below (Forward) |
 | `materializeConsume` | `ticket`, `stamp`, `path`, `resolved`, `argv`, `cwd`, `interpreters`, `trusted` | the values for the child's environment, below (Exec) |
 | `sessionMaterialize` | `stamp`, `session`, `host`, `port`, `protocol`, `position`, `verified`, `handshakeAt`, `exit`, `verifiedBy?`, `anchor?`, then `placeholders` (and `head` for http1) at every position but `scram-sha-256`, which takes `scram` and no `placeholders` | `{ values }` for a kernel-verified TLS session, below (Sessions) |
