@@ -272,22 +272,23 @@ export function register(
         .filter((r) => r.kind === 'mcp' && pageSealed(r) && typeof r.server === 'string')
         .map((r) => r.server as string)
     );
-    const mcps = given
-      .filter((server) => !owned.has(server.server))
-      .map((server) => {
-        if (!bound.has(server.server)) return server;
-        const bare = { ...server };
-        delete bare.tokenUrl;
-        return bare;
-      });
+    const mcps = given.filter((server) => !owned.has(server.server));
     const legacy = before !== NO_ENDPOINTS && !before.migrated;
+    const prior = legacy ? (before.later ?? []) : before.mcp;
+    const keep = (server: McpServer): McpServer => {
+      if (!bound.has(server.server)) return server;
+      const was = prior.find((p) => p.server === server.server && p.url === server.url);
+      const out = { ...server };
+      if (was?.tokenUrl) out.tokenUrl = was.tokenUrl;
+      else delete out.tokenUrl;
+      return out;
+    };
+    const merged = mergeServers(prior, mcps, allServers(before)).map(keep);
     const registered = {
       ...before,
       ...(before === NO_ENDPOINTS ? { migrated: true } : {}),
       model: [...new Set([...before.model, ...models])],
-      ...(legacy
-        ? { later: mergeServers(before.later ?? [], mcps, allServers(before)) }
-        : { mcp: mergeServers(before.mcp, mcps, allServers(before)) }),
+      ...(legacy ? { later: merged } : { mcp: merged }),
     };
     const added =
       count(registered.model, [...registered.mcp, ...(registered.later ?? [])]) -

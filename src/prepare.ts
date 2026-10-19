@@ -314,13 +314,16 @@ export class Preparer {
     }
     const request = outgoing(fields.request);
     const url = new URL(request.url);
-    const scrubber = await this.scrubber();
+    await this.migrated(await this.scrubber());
+    return this.prepare(request, (given) => this.mcpTarget(server, url, given));
+  }
+
+  async migrated(scrubber: Scrubber): Promise<void> {
     const clean = (text: string) => scrubber.text(text).text;
     if (await migrate(this.vault.db, this.ns, this.vault.now(), clean)) {
       await this.vault.loadPolicy(this.ns);
       await this.vault.changed(this.ns, ['secrets', 'audit', 'exits']);
     }
-    return this.prepare(request, (given) => this.mcpTarget(server, url, given));
   }
 
   async mcpTarget(server: string, url: URL, given?: Registered): Promise<Target> {
@@ -429,6 +432,7 @@ export class Preparer {
       throw new Refused('EINVAL', 'the server or record name holds a value');
     }
     const oauth = checkOAuth(fields.oauth);
+    await this.migrated(before);
     const registered = await loadRegistered(this.vault.db, this.ns);
     if (!servers(registered).some((e) => e.server === server && e.tokenUrl === oauth.tokenUrl)) {
       throw new Refused('EACCES', `${oauth.tokenUrl} isn't the registered tokenUrl of ${server}`);
