@@ -367,6 +367,8 @@ export class Sessions {
           protocol: ask.protocol,
           position: ask.position,
           rule: index,
+          verifiedBy: ask.verifiedBy,
+          ...(ask.anchor === null ? {} : { anchor: ask.anchor }),
           exit: ask.exit,
           uid: ask.stamp.uid,
           tag: ask.stamp.tag,
