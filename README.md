@@ -184,7 +184,7 @@ iframe.contentWindow.postMessage({ type: 'slicc-vault', v: 1, op: 'hello', role:
 | `policy` | `files` | the attested policy files, below (Policy) |
 | `forward` | `head`, `body?`, `owner`, `exit`, `rawTraits`, with a `MessagePort` transferred alongside | the injected head, below (Forward) |
 | `materializeConsume` | `ticket`, `stamp`, `path`, `resolved`, `argv`, `cwd`, `interpreters`, `trusted` | the values for the child's environment, below (Exec) |
-| `sessionMaterialize` | `stamp`, `session`, `host`, `port`, `protocol`, `position`, `verified`, `handshakeAt`, `exit`, `placeholders`, `head?` | `{ values }` for a kernel-verified TLS session, below (Sessions) |
+| `sessionMaterialize` | `stamp`, `session`, `host`, `port`, `protocol`, `position`, `verified`, `handshakeAt`, `exit`, then `placeholders` (and `head` for http1) at every position but `scram-sha-256`, which takes `scram` and no `placeholders` | `{ values }` for a kernel-verified TLS session, below (Sessions) |
 | `import` | `kind`, `bytes`, `password?`, `pick?` | below (Import and export) |
 | `export` | `passphrase` | `{ bundle, count }`, below |
 | anything else | | `ENOTSUP` |
@@ -330,7 +330,7 @@ The fields are the kernel's session attestation:
 - `position`: `header:<name>` (lower-cased) for http1, else `auth-plain`, `auth-login`, `password-cleartext` or `scram-sha-256` (below).
 - `verified`: the kernel's own verdict on the chain and the name; `handshakeAt`: when the handshake finished (epoch ms).
 - `exit`: the exit the session leaves by (`page`, `proxy`, `tailscale` or `device:<id>`, with the device's `DeviceId`).
-- `placeholders`: 1 to 16 placeholders, every one found at the position, in one request. `head` (http1 only, required there): `{ method, path }`, the request line's method and target.
+- `placeholders` (every position but `scram-sha-256`, which takes `scram` instead, below): 1 to 16 placeholders, every one found at the position, in one request. `head` (http1 only, required there): `{ method, path }`, the request line's method and target.
 - A malformed field is `EINVAL`, and so is a `protocol` other than these or a `position` that isn't one of its protocol's; neither burns the session.
 
 Once the fields check out, the vault burns the session in IndexedDB, in one transaction, so no vault frame of the namespace, now or after a reload, answers it again until 60 s after the later of the request and `handshakeAt`. Then it refuses the whole request with `EACCES` "session refused: …" when:
