@@ -15,9 +15,10 @@ import {
   parseConfig,
   parseExtra,
 } from './policy.ts';
-import { audit, NAME, PROVIDER } from './records.ts';
+import { audit, NAME, PROVIDER, removed, type VaultRecord } from './records.ts';
 import {
   servers as allServers,
+  type Custom,
   contains,
   coveredByBuiltIn,
   endpoint,
@@ -28,6 +29,7 @@ import {
   onHost,
   patterns,
   type Registered,
+  under,
 } from './refusal.ts';
 
 export interface Stored {
@@ -125,13 +127,7 @@ function count(model: string[], mcp: McpServer[], custom: Owned[] = []): number 
   return model.length + custom.length + mcp.reduce((sum, s) => sum + s.names.length + 1, 0);
 }
 
-interface Models {
-  urls: string[];
-  plain: string[];
-  custom: Owned[];
-}
-
-function modelsOf(model: unknown): Models {
+function modelsOf(model: unknown): string[] {
   const given = model === undefined ? [] : model;
   const ownedOf = (entry: unknown) =>
     entry && typeof entry === 'object' ? (entry as Partial<Owned>) : null;
@@ -149,18 +145,54 @@ function modelsOf(model: unknown): Models {
   if (!Array.isArray(given) || !given.every(okEntry)) {
     throw new Refused('EINVAL', 'model must be a list of https base URLs or { provider, url }');
   }
+  return given.map((entry) => (typeof entry === 'string' ? entry : (entry as Owned).url));
+}
+
+interface Bound {
+  name: string;
+  url: string;
+}
+
+function bound(item: unknown): item is Bound {
+  return (
+    !!item &&
+    typeof item === 'object' &&
+    typeof (item as Bound).name === 'string' &&
+    typeof (item as Bound).url === 'string'
+  );
+}
+
+interface PageModels {
+  plain: string[];
+  bound: Bound[];
+}
+
+function pageModelsOf(model: unknown): PageModels {
+  const given = model === undefined ? [] : model;
+  const ok = (item: unknown) =>
+    (typeof item === 'string' && endpoint(item, false) !== null) ||
+    (bound(item) &&
+      NAME.test(item.name) &&
+      endpoint(item.url, false) !== null &&
+      !/[*{}]/.test(item.url));
+  if (!Array.isArray(given) || !given.every(ok)) {
+    throw new Refused(
+      'EINVAL',
+      'model must be a list of https base URLs or { name, url } for a model record'
+    );
+  }
   return {
-    urls: given.map((entry) => (typeof entry === 'string' ? entry : (entry as Owned).url)),
-    plain: given.filter((entry) => typeof entry === 'string') as string[],
-    custom: given
-      .filter((entry) => typeof entry !== 'string')
-      .map((entry) => ({ provider: (entry as Owned).provider, url: (entry as Owned).url })),
+    plain: given.filter((item) => typeof item === 'string') as string[],
+    bound: (given.filter((item) => typeof item !== 'string') as Bound[]).map(({ name, url }) => ({
+      name,
+      url,
+    })),
   };
 }
 
 interface Removal {
   urls: Set<string>;
-  owned: Set<string>;
+  bound: Set<string>;
   servers: Set<string>;
 }
 
@@ -168,12 +200,7 @@ function removalOf(remove: unknown): Removal {
   const given = (remove ?? {}) as { model?: unknown; mcp?: unknown };
   const model = given.model ?? [];
   const mcp = given.mcp ?? [];
-  const entry = (item: unknown) =>
-    typeof item === 'string' ||
-    (!!item &&
-      typeof item === 'object' &&
-      typeof (item as Owned).provider === 'string' &&
-      typeof (item as Owned).url === 'string');
+  const entry = (item: unknown) => typeof item === 'string' || bound(item);
   const server = (item: unknown) =>
     !!item &&
     typeof item === 'object' &&
@@ -182,18 +209,49 @@ function removalOf(remove: unknown): Removal {
   if (!Array.isArray(model) || !model.every(entry) || !Array.isArray(mcp) || !mcp.every(server)) {
     throw new Refused(
       'EINVAL',
-      'remove must be { model?: (url | { provider, url })[], mcp?: { server, url }[] }'
+      'remove must be { model?: (url | { name, url })[], mcp?: { server, url }[] }'
     );
   }
   return {
     urls: new Set(model.filter((item) => typeof item === 'string')),
-    owned: new Set(
-      (model.filter((item) => typeof item !== 'string') as Owned[]).map(
-        (o) => `${o.provider} ${o.url}`
-      )
-    ),
+    bound: new Set((model.filter(bound) as Bound[]).map((b) => `${b.name} ${b.url}`)),
     servers: new Set((mcp as McpServer[]).map((s) => `${s.server} ${s.url}`)),
   };
+}
+
+async function customFor(
+  tx: IDBTransaction,
+  ns: string,
+  given: Bound[],
+  registered: Registered
+): Promise<Custom[]> {
+  const store = tx.objectStore('records');
+  const out: Custom[] = [];
+  for (const { name, url } of given) {
+    const record = (await request(store.get([ns, 'model', name]))) as VaultRecord | undefined;
+    if (!record || removed(record) || typeof record.provider !== 'string') {
+      throw new Refused('EINVAL', `${name} isn't a model record of this vault`);
+    }
+    const parsed = new URL(url);
+    if ((registered.page ?? NO_PAGE).mcp.some((server) => under(server.url, parsed))) {
+      throw new Refused('EINVAL', `${url} is an MCP server, never a model endpoint`);
+    }
+    out.push({ provider: record.provider, name, url });
+  }
+  return out;
+}
+
+export function dropCustom(db: IDBDatabase, ns: string, name: string): Promise<boolean> {
+  return transact(db, ['meta'], 'readwrite', async (tx) => {
+    const before = await stored(tx, ns);
+    const page = before.page ?? NO_PAGE;
+    const custom = page.custom.filter((entry) => entry.name !== name);
+    if (custom.length === page.custom.length) return false;
+    await request(
+      tx.objectStore('meta').put({ ...before, page: { ...page, custom } }, `endpoints:${ns}`)
+    );
+    return true;
+  });
 }
 
 function stored(tx: IDBTransaction, ns: string): Promise<Registered> {
@@ -216,7 +274,7 @@ export function register(
     const mcps = given.filter((server) => !owned.has(server.server));
     const registered = {
       ...before,
-      model: [...new Set([...before.model, ...models.urls])],
+      model: [...new Set([...before.model, ...models])],
       mcp: mergeServers(before.mcp, mcps, allServers(before)),
     };
     const added = count(registered.model, registered.mcp) - count(before.model, before.mcp);
@@ -232,24 +290,22 @@ export function registerPage(
   mcp: unknown,
   remove?: unknown
 ): Promise<{ registered: Registered; changed: number }> {
-  const models = modelsOf(model);
+  const models = pageModelsOf(model);
   const mcps = mcp === undefined ? [] : serversOf(mcp);
   const removal = removalOf(remove);
-  return transact(db, ['meta'], 'readwrite', async (tx) => {
+  return transact(db, ['meta', 'records'], 'readwrite', async (tx) => {
     const before = await stored(tx, ns);
     const page = before.page ?? NO_PAGE;
-    const ownedBy = new Map(
-      [...page.custom, ...models.custom].map((o) => [`${o.provider} ${o.url}`, o])
-    );
-    const added = {
-      model: [...new Set([...page.model, ...models.plain])],
-      mcp: mergeServers(page.mcp, mcps, page.mcp),
-      custom: [...ownedBy.values()],
-    };
+    const mcpNext = mergeServers(page.mcp, mcps, page.mcp);
+    const custom = await customFor(tx, ns, models.bound, {
+      ...before,
+      page: { ...page, mcp: mcpNext },
+    });
+    const byKey = new Map([...page.custom, ...custom].map((c) => [`${c.name} ${c.url}`, c]));
     const next = {
-      model: added.model.filter((url) => !removal.urls.has(url)),
-      mcp: added.mcp.filter((s) => !removal.servers.has(`${s.server} ${s.url}`)),
-      custom: added.custom.filter((o) => !removal.owned.has(`${o.provider} ${o.url}`)),
+      model: [...new Set([...page.model, ...models.plain])].filter((url) => !removal.urls.has(url)),
+      mcp: mcpNext.filter((s) => !removal.servers.has(`${s.server} ${s.url}`)),
+      custom: [...byKey.values()].filter((c) => !removal.bound.has(`${c.name} ${c.url}`)),
     };
     const changed = JSON.stringify(next) !== JSON.stringify(page);
     const registered = { ...before, page: next };

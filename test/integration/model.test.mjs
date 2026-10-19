@@ -33,7 +33,7 @@ async function ready(t) {
   const ask = (op, fields) => page.evaluate((o, f) => window.harness.ask(o, f), op, fields);
   const custom = await page.evaluate(() =>
     window.harness.call('endpoints', {
-      model: [{ provider: 'openai', url: 'https://llm.example.com/v1' }],
+      model: [{ name: 'OPENAI_API_KEY', url: 'https://llm.example.com/v1' }],
     })
   );
   assert.equal(custom.ok, true);

@@ -88,7 +88,7 @@ test("a provider's custom base URL comes only from the page, and Adobe's proxy i
   });
   assert.equal(before.error.code, 'EACCES');
   const set = await page.evaluate(
-    (url) => window.harness.call('endpoints', { model: [{ provider: 'openai', url }] }),
+    (url) => window.harness.call('endpoints', { model: [{ name: 'OPENAI_API_KEY', url }] }),
     gateway
   );
   assert.equal(set.ok, true);
@@ -97,7 +97,8 @@ test("a provider's custom base URL comes only from the page, and Adobe's proxy i
     request: req(`${gateway}/chat`, [['authorization', `Bearer ${openai.placeholder}`]]),
   });
   const removed = await page.evaluate(
-    (url) => window.harness.call('endpoints', { remove: { model: [{ provider: 'openai', url }] } }),
+    (url) =>
+      window.harness.call('endpoints', { remove: { model: [{ name: 'OPENAI_API_KEY', url }] } }),
     gateway
   );
   assert.equal(removed.ok, true);
@@ -229,7 +230,7 @@ test('a page endpoints request that is invalid anywhere changes nothing', async 
   const bad = await page.evaluate(
     (url) =>
       window.harness.call('endpoints', {
-        model: [{ provider: 'openai', url }],
+        model: [{ name: 'OPENAI_API_KEY', url }],
         remove: { model: [7] },
       }),
     gateway
@@ -242,4 +243,62 @@ test('a page endpoints request that is invalid anywhere changes nothing', async 
   assert.equal(sent.error.code, 'EACCES');
   const list = (await page.evaluate(() => window.harness.call('list'))).list;
   assert.deepEqual(list.refused, []);
+});
+
+test("a page-registered base URL fills only its own record's key, and goes with the record", async (t) => {
+  const { page, ask, openai } = await ready(t);
+  const other = await page.evaluate(() =>
+    window.harness.call('put', {
+      name: 'OPENAI_WORK',
+      value: 'fake-openai-work-0205',
+      kind: 'model',
+      provider: 'openai',
+    })
+  );
+  const gateway = 'https://gateway.example.com/openai';
+  const send = (placeholder) =>
+    ask('model', {
+      provider: 'openai',
+      request: req(`${gateway}/chat`, [['authorization', `Bearer ${placeholder}`]]),
+    });
+  await page.evaluate(
+    (url) => window.harness.call('endpoints', { model: [{ name: 'OPENAI_API_KEY', url }] }),
+    gateway
+  );
+  await ask('endpoints', { model: [{ provider: 'openai', url: gateway }, gateway] });
+  assert.deepEqual((await send(openai.placeholder)).request.headers, [
+    ['authorization', `Bearer ${OPENAI_KEY}`],
+  ]);
+  const crossed = await send(other.placeholder);
+  assert.match(crossed.error.message, /OPENAI_WORK is sent only to openai's own endpoints/);
+  assert.ok(!JSON.stringify(crossed).includes('fake-openai-work-0205'));
+  await page.evaluate(() =>
+    window.harness.call('remove', { name: 'OPENAI_API_KEY', kind: 'model' })
+  );
+  await page.evaluate(() =>
+    window.harness.call('restore', { name: 'OPENAI_API_KEY', kind: 'model' })
+  );
+  assert.equal((await send(openai.placeholder)).error.code, 'EACCES');
+});
+
+test('NEGATIVE a page base URL must be a plain https URL of a live model record, never an MCP server', async (t) => {
+  const { page } = await ready(t);
+  await page.evaluate(() =>
+    window.harness.call('endpoints', {
+      mcp: [{ server: 'docs', url: 'https://docs.example.com/mcp' }],
+    })
+  );
+  for (const model of [
+    [{ provider: 'openai', url: 'https://gateway.example.com/v1' }],
+    [{ name: 'OPENAI_API_KEY', url: 'http://gateway.example.com/v1' }],
+    [{ name: 'OPENAI_API_KEY', url: 'https://gateway.example.com:8443/v1' }],
+    [{ name: 'OPENAI_API_KEY', url: 'https://*.gateway.example.com/v1' }],
+    [{ name: 'OPENAI_API_KEY', url: 'http://8080.kernel.localhost/v1' }],
+    [{ name: 'NO_SUCH_KEY', url: 'https://gateway.example.com/v1' }],
+    [{ name: 'GH_TOKEN', url: 'https://gateway.example.com/v1' }],
+    [{ name: 'OPENAI_API_KEY', url: 'https://docs.example.com/mcp/v1' }],
+  ]) {
+    const reply = await page.evaluate((m) => window.harness.call('endpoints', { model: m }), model);
+    assert.equal(reply.error?.code, 'EINVAL', JSON.stringify(model));
+  }
 });

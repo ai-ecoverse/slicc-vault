@@ -18,10 +18,16 @@ export interface Owned {
   url: string;
 }
 
+export interface Custom {
+  provider: string;
+  name: string;
+  url: string;
+}
+
 export interface PageEndpoints {
   model: string[];
   mcp: McpServer[];
-  custom: Owned[];
+  custom: Custom[];
 }
 
 export interface Registered {
@@ -155,12 +161,17 @@ function plain(url: URL, port: string): boolean {
   return !url.username && !url.password && url.port === port;
 }
 
-export function modelFor(registered: Registered, provider: string, url: URL): boolean {
+export function modelFor(
+  registered: Registered,
+  provider: string,
+  url: URL,
+  name: string | null = null
+): boolean {
   if (url.protocol !== 'https:' || !plain(url, '')) return false;
   const host = hostOf(url);
   const built = BUILT_IN_ENDPOINTS.filter((e) => e.providers.includes(provider));
   const owned = (registered.page ?? NO_PAGE).custom
-    .filter((entry) => entry.provider === provider)
+    .filter((entry) => entry.provider === provider && entry.name === name)
     .map((entry) => endpoint(entry.url, false) as Endpoint);
   return [...built, ...owned].some((pattern) => covers(pattern, host, url.pathname));
 }

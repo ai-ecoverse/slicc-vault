@@ -76,7 +76,7 @@ export function outgoing(value: unknown): Outgoing {
 export interface Target {
   who: string;
   owns: (record: VaultRecord) => boolean;
-  reaches: boolean;
+  reaches: (record: VaultRecord) => boolean;
   loopback: boolean;
 }
 
@@ -138,7 +138,7 @@ export class Preparer {
           `${found.name} isn't a credential of ${target.who}; secrets are never sent to model or MCP endpoints`
         );
       }
-      if (!target.reaches) {
+      if (!target.reaches(found)) {
         throw new Refused('EACCES', `${found.name} is sent only to ${target.who}'s own endpoints`);
       }
       const record = await this.usable(found);
@@ -234,7 +234,8 @@ export class Preparer {
       who: provider ?? 'this request',
       owns: (record) =>
         provider !== null && record.kind === 'model' && record.provider === provider,
-      reaches: provider !== null && modelFor(registered, provider, new URL(request.url)),
+      reaches: (record) =>
+        provider !== null && modelFor(registered, provider, new URL(request.url), record.name),
       loopback: false,
     });
   }
@@ -263,7 +264,7 @@ export class Preparer {
         record.kind === 'mcp' &&
         (record.server === server || names.has(record.name)) &&
         bound(record),
-      reaches: entry !== null && !modelRefused(registered, url),
+      reaches: () => entry !== null && !modelRefused(registered, url),
       loopback,
     });
   }

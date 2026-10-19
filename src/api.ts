@@ -40,7 +40,7 @@ import {
   JERK,
 } from './refresh.ts';
 import { current, get, type HumanRequest, respond, settle } from './requests.ts';
-import { apply, purgeOwned, registerPage } from './rules.ts';
+import { apply, dropCustom, purgeOwned, registerPage } from './rules.ts';
 import { sealed } from './sealed.ts';
 import { exporter, importer } from './transfer.ts';
 import type { Vault } from './vault.ts';
@@ -361,6 +361,9 @@ async function mark(vault: Vault, ns: string, request: Fields, removing: boolean
   const kind = (request.kind ?? 'secret') as RecordKind;
   if (!KINDS.has(kind)) throw new Refused('EINVAL', 'kind must be secret, grant, model or mcp');
   const record = await (removing ? remove : restore)(vault.db, ns, name, vault.now(), kind);
+  if (removing && kind === 'model' && (await dropCustom(vault.db, ns, name))) {
+    await vault.loadPolicy(ns);
+  }
   await vault.changed(ns, ['secrets', 'audit']);
   return { ...result(vault, ns, record) };
 }
