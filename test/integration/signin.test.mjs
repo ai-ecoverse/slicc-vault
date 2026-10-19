@@ -216,6 +216,33 @@ test("NEGATIVE a sign-in never writes a returned token into its name or settings
   assert.equal(list.find((r) => r.name === 'SHARED_GRANT').source, 'oauth:mcp');
 });
 
+test('a repeat sign-in without a refresh token retires the old grant, and the next sign-in works', async (t) => {
+  const { page, ask } = await ready(t);
+  await ask('grant', { provider: 'xai', name: 'XAI_AGAIN', response: response() });
+  const bare = await ask('grant', {
+    provider: 'xai',
+    name: 'XAI_AGAIN',
+    response: JSON.stringify({ access_token: 'fake-xai-again-0814' }),
+  });
+  assert.deepEqual(
+    bare.records.map((r) => r.kind),
+    ['model']
+  );
+  const grant = (await page.evaluate(() => window.harness.call('list'))).list.secrets.find(
+    (r) => r.name === 'XAI_AGAIN_GRANT'
+  );
+  assert.equal(grant.state, 'removed');
+  const full = await ask('grant', {
+    provider: 'xai',
+    name: 'XAI_AGAIN',
+    response: response({
+      access_token: 'fake-xai-again-0815',
+      refresh_token: 'fake-xai-again-0816',
+    }),
+  });
+  assert.equal(full.records.length, 2);
+});
+
 test('removing a signed-in key removes its grant, and restore brings both back', async (t) => {
   const { page, ask } = await ready(t);
   await ask('grant', { provider: 'openai-codex', name: 'CODEX_TOKEN', response: response() });

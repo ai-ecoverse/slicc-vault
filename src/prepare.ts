@@ -427,12 +427,12 @@ export class Preparer {
     };
   }
 
-  async free(name: string, grantName: string, source: string): Promise<void> {
+  async free(name: string, grantName: string, source: string): Promise<boolean> {
     const held = await records(this.vault.db, this.ns);
     const grant = held.find((r) => r.kind === 'grant' && r.name === grantName && !removed(r));
-    if (!grant) return;
+    if (!grant) return false;
     const owner = held.find((r) => r.kind === 'model' && r.name === name && !removed(r));
-    if (grant.source === source && owner?.refresh === grantName) return;
+    if (grant.source === source && owner?.refresh === grantName) return true;
     throw new Refused(
       'EEXIST',
       `${grantName} belongs to another credential; sign in under another name`
@@ -477,7 +477,7 @@ export class Preparer {
     if (meta.some((t) => returned.text(t).hits.some((hit) => hit.form !== 'fragment'))) {
       throw new Refused('EINVAL', 'the name or settings hold a returned token');
     }
-    await this.free(name, grantName, `oauth:${provider}`);
+    const owned = await this.free(name, grantName, `oauth:${provider}`);
     const common = { ns: this.ns, source: `oauth:${provider}` as const, uid: null, tag: null, now };
     const access: SealInput = {
       ...common,
@@ -486,6 +486,7 @@ export class Preparer {
       value: got.access,
       ...bound,
       stash: true,
+      ...(owned && got.refresh === null ? { retire: grantName } : {}),
       ...(got.expires === null ? {} : { expiresAt: now + got.expires * 1000 }),
       ...(got.refresh !== null ? { refresh: grantName } : {}),
     };

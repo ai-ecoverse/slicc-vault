@@ -131,6 +131,7 @@ export interface SealInput {
   url?: string;
   exclusive?: boolean;
   stash?: boolean;
+  retire?: string;
   placeholder?: string;
   answers?: Answers;
   now: number;
@@ -399,6 +400,12 @@ async function write(tx: IDBTransaction, input: SealInput, sealed: Sealed): Prom
     record.replaced = live.replaced;
   }
   await request(store.put(record));
+  if (input.retire) {
+    const old = (await request(store.get([input.ns, 'grant', input.retire]))) as VaultRecord;
+    const gone: VaultRecord = { ...old, removedAt: input.now };
+    delete gone.removedWith;
+    await request(store.put(gone));
+  }
   if (input.answers) await answered(tx, input.ns, input.answers, record.placeholder, input.now);
   await bump(tx, input.ns);
   const rotated = existing !== undefined && !removed(existing);
