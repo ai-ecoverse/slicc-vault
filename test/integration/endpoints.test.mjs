@@ -107,6 +107,15 @@ test("a provider's custom base URL comes only from the page, and Adobe's proxy i
     request: req(`${gateway}/chat`, [['authorization', `Bearer ${openai.placeholder}`]]),
   });
   assert.equal(gone.error.code, 'EACCES');
+  const shaped = await page.evaluate(() =>
+    window.harness.call('endpoints', {
+      add: { mcp: [{ server: 'x', url: 'https://x.example.com/mcp' }] },
+    })
+  );
+  assert.deepEqual(
+    [shaped.error.code, shaped.error.message],
+    ['EINVAL', 'endpoints takes model, mcp, remove and unpin, not add']
+  );
   const bad = await page.evaluate(() =>
     window.harness.call('endpoints', { remove: { model: [7] } })
   );

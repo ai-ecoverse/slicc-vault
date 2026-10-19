@@ -79,6 +79,7 @@ interface Session {
 type StoredAudit = AuditEntry & { ns: string };
 
 const PAYLOAD = new Set(['purged', 'adopted', 'pinned', 'unpinned']);
+const ENDPOINT_FIELDS = new Set(['v', 'id', 'op', 'model', 'mcp', 'remove', 'unpin']);
 
 export async function audit(
   vault: Vault,
@@ -451,6 +452,13 @@ export async function answer(
       vault.keyring.lock();
       return {};
     case 'endpoints': {
+      const unknown = Object.keys(request).filter((key) => !ENDPOINT_FIELDS.has(key));
+      if (unknown.length) {
+        throw new Refused(
+          'EINVAL',
+          `endpoints takes model, mcp, remove and unpin, not ${unknown[0]}`
+        );
+      }
       const scrubber = request.unpin === undefined ? null : await vault.scrubbers.get(ns);
       if (request.unpin !== undefined && !scrubber) {
         throw new Refused('EACCES', 'vault is locked: unlock it in the vault window');
