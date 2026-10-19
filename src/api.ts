@@ -385,6 +385,8 @@ export async function answer(
       return vault.exec.consume(ns, request);
     case 'sessionMaterialize':
       return vault.sessions.materialize(ns, request);
+    case 'sessionAnchors':
+      return vault.sessions.anchors(ns, request);
     case 'sealed':
       return { reply: await sealed(vault.context(ns), request.req, request.stamp) };
     case 'status':

@@ -20,6 +20,7 @@ export interface Policy {
   placeholder(name: string): string | null;
   rules(name: string): Rule[];
   sessionRules(name: string): { index: number; rule: Rule }[];
+  everySessionRule(): { secret: string; index: number; rule: Rule }[];
   exec(name: string): ExecMode;
   argv(name: string): string[][] | null;
   exits(name: string): ExitName[] | null;
@@ -61,6 +62,9 @@ export const NONE: Accepted = { config: null, extra: null };
 const DOMAIN = /^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]*[a-z0-9])?)+$/;
 const TOKEN = /^[!#$%&'*+.^_`|~0-9A-Za-z-]+$/;
 const EXIT = /^(?:page|proxy|tailscale|device:[A-Za-z0-9._:-]+)$/;
+const B64 = /^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/;
+const MAX_TRUST = 8;
+const MAX_ANCHOR = 8192;
 const POSITIONS: Record<string, string[]> = {
   smtp: ['auth-plain', 'auth-login'],
   pg: ['password-cleartext', 'scram-sha-256'],
@@ -76,11 +80,57 @@ function strings(value: TomlValue | undefined): string[] | null {
   return value as string[];
 }
 
+function decoded(text: string): Uint8Array | null {
+  return B64.test(text) && text.length > 0
+    ? Uint8Array.from(atob(text), (char) => char.charCodeAt(0))
+    : null;
+}
+
+function trust(entry: TomlTable, where: string, warnings: string[]): Partial<Rule> | null {
+  const anchors = strings(entry.anchors);
+  const pins = strings(entry.pins);
+  if (!anchors || !pins) {
+    warnings.push(`${where}: anchors and pins must be lists of base64 strings`);
+    return null;
+  }
+  if (anchors.length > MAX_TRUST || pins.length > MAX_TRUST) {
+    warnings.push(`${where}: at most ${MAX_TRUST} anchors and ${MAX_TRUST} pins`);
+    return null;
+  }
+  const certificate = (der: Uint8Array | null) =>
+    der !== null && der.length <= MAX_ANCHOR && der[0] === 0x30;
+  if (!anchors.every((anchor) => certificate(decoded(anchor)))) {
+    warnings.push(`${where}: an anchor must be base64 of a DER certificate of at most 8 KB`);
+    return null;
+  }
+  if (!pins.every((pin) => decoded(pin)?.length === 32)) {
+    warnings.push(`${where}: a pin must be base64 of a 32-byte SHA-256 of a public key`);
+    return null;
+  }
+  const { roots } = entry;
+  if (roots !== undefined && typeof roots !== 'boolean') {
+    warnings.push(`${where}: roots must be true or false`);
+    return null;
+  }
+  const anchored = anchors.length + pins.length > 0;
+  if (!anchored && roots === false) {
+    warnings.push(`${where}: a rule without anchors or pins can't refuse public roots`);
+    return null;
+  }
+  if (!anchored) return {};
+  return {
+    ...(anchors.length ? { anchors } : {}),
+    ...(pins.length ? { pins } : {}),
+    roots: roots === true,
+  };
+}
+
 function sessionFields(entry: TomlTable, where: string, warnings: string[]): Partial<Rule> | null {
   const { protocol, position, port } = entry;
   if (protocol === undefined) {
-    if (position === undefined && port === undefined) return {};
-    warnings.push(`${where}: port and position need a protocol`);
+    const trusted = [entry.anchors, entry.pins, entry.roots].some((v) => v !== undefined);
+    if (position === undefined && port === undefined && !trusted) return {};
+    warnings.push(`${where}: port, position, anchors, pins and roots need a protocol`);
     return null;
   }
   if (protocol !== 'http1' && protocol !== 'smtp' && protocol !== 'pg') {
@@ -91,8 +141,10 @@ function sessionFields(entry: TomlTable, where: string, warnings: string[]): Par
     warnings.push(`${where}: a ${protocol} rule needs a port from 1 to 65535`);
     return null;
   }
+  const anchored = trust(entry, where, warnings);
+  if (!anchored) return null;
   if (protocol === 'http1') {
-    if (position === undefined) return { protocol, port };
+    if (position === undefined) return { protocol, port, ...anchored };
     warnings.push(`${where}: an http1 rule's position is its header`);
     return null;
   }
@@ -110,6 +162,7 @@ function sessionFields(entry: TomlTable, where: string, warnings: string[]): Par
     position: position as Rule['position'],
     port,
     header: '',
+    ...anchored,
   };
 }
 
@@ -233,8 +286,19 @@ export function parseExtra(text: string, warnings: string[]): ExtraPolicy {
 }
 
 function ruleKey(secret: string, rule: Rule): string {
-  const { domain, header, methods, paths, protocol, position, port } = rule;
-  return JSON.stringify([secret, domain, header, methods, paths, protocol, position, port]);
+  const { domain, header, methods, paths, protocol, position, port, anchors, pins, roots } = rule;
+  const trusted = [anchors, pins, roots];
+  return JSON.stringify([
+    secret,
+    domain,
+    header,
+    methods,
+    paths,
+    protocol,
+    position,
+    port,
+    trusted,
+  ]);
 }
 
 export function diffConfig(before: ConfigPolicy | null, after: ConfigPolicy): PolicyChange[] {
@@ -297,6 +361,10 @@ export function build(accepted: Accepted, refuse: Refuse = () => false): Policy 
     refused: () => refused,
     placeholder: (name) => (Object.hasOwn(config.secrets, name) ? config.secrets[name] : null),
     rules: (name) => kept.filter((entry) => entry.secret === name).map((entry) => entry.rule),
+    everySessionRule: () =>
+      kept
+        .filter((entry) => entry.rule.protocol !== undefined)
+        .map((entry) => ({ secret: entry.secret, index: entry.index as number, rule: entry.rule })),
     sessionRules: (name) =>
       kept
         .filter((entry) => entry.secret === name && entry.rule.protocol !== undefined)
