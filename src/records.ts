@@ -493,12 +493,22 @@ export function rebind(
   bound: Binding,
   now: number
 ): Promise<VaultRecord> {
-  return transact(db, ['records'], 'readwrite', async (tx) => {
+  return transact(db, ['records', 'audit'], 'readwrite', async (tx) => {
     const store = tx.objectStore('records');
     const record = (await request(store.get([ns, kind, name]))) as VaultRecord | undefined;
     if (!record || removed(record)) throw new Refused('ENOENT', `no ${kind} record named ${name}`);
     const next = { ...record, ...bound, updatedAt: Math.max(now, record.updatedAt + 1) };
     await request(store.put(next));
+    await audit(tx, ns, {
+      type: 'seal',
+      name,
+      source: 'settings',
+      rotated: false,
+      rebound: true,
+      uid: null,
+      tag: null,
+      at: now,
+    });
     return next;
   });
 }

@@ -149,6 +149,11 @@ test('a key without tenant settings keeps reaching any tenant, and new settings 
     settings: { AZURE_OPENAI_RESOURCE_NAME: 'mine' },
   });
   assert.equal(rebound.placeholder, loose.placeholder);
+  const audit = (await page.evaluate(() => window.harness.call('audit', { limit: 1 }))).audit[0];
+  assert.deepEqual(
+    [audit.type, audit.name, audit.rebound, audit.rotated],
+    ['seal', 'AZURE_LOOSE_KEY', true, false]
+  );
   refused(
     await ask('azure', 'https://anyone.openai.azure.com/openai/v1/chat', loose.placeholder),
     'azure'

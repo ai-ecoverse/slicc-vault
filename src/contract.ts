@@ -225,6 +225,7 @@ export interface SealEntry extends AuditBase {
   type: 'seal';
   source: RecordSource;
   rotated: boolean;
+  rebound?: true;
 }
 
 export interface RemoveEntry extends AuditBase {

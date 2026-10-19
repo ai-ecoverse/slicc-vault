@@ -178,7 +178,7 @@ async function put(vault: Vault, ns: string, request: Fields): Promise<Fields> {
   if (request.value === undefined && kind !== 'secret' && request.request === undefined) {
     vault.keyring.use();
     const record = await rebind(vault.db, ns, kind, name, bound, vault.now());
-    await vault.changed(ns, ['secrets']);
+    await vault.changed(ns, ['secrets', 'audit']);
     return { ...result(vault, ns, record) };
   }
   const value = checkValue(request.value);
