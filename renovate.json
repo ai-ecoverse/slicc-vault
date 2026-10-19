@@ -1,4 +1,23 @@
 {
   "$schema": "https://docs.renovatebot.com/renovate-schema.json",
-  "extends": ["github>ai-ecoverse/slicc-shared-web"]
+  "extends": ["github>ai-ecoverse/slicc-shared-web"],
+  "packageRules": [
+    {
+      "description": "pi-ai's catalog is the built-in endpoint list, and package.json's piAi publishes the version it was built against: a bump updates both, never automerged, next to slicc-agent's PR with the same label.",
+      "matchPackageNames": ["@earendil-works/pi-ai"],
+      "groupName": "pi-ai",
+      "automerge": false,
+      "labels": ["pi-ai-lockstep"]
+    }
+  ],
+  "customManagers": [
+    {
+      "customType": "regex",
+      "description": "package.json's piAi, the pi-ai version the published package was built against",
+      "managerFilePatterns": ["/^package\\.json$/"],
+      "matchStrings": ["\"piAi\": \"(?<currentValue>[^\"]+)\""],
+      "depNameTemplate": "@earendil-works/pi-ai",
+      "datasourceTemplate": "npm"
+    }
+  ]
 }

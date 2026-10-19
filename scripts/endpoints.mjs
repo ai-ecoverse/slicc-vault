@@ -4,6 +4,8 @@ const data = new URL('../node_modules/@earendil-works/pi-ai/dist/providers/data/
 const out = new URL('../src/endpoints.json', import.meta.url);
 
 const EXTRA = [
+  ['https://aiplatform.googleapis.com', 'google-vertex'],
+  ['https://*.cognitiveservices.azure.com', 'azure'],
   ['https://bedrock-runtime.*.amazonaws.com', 'amazon-bedrock'],
   ['https://bedrock-runtime-fips.*.amazonaws.com', 'amazon-bedrock'],
   ['https://*.openai.azure.com', 'azure'],
