@@ -1,5 +1,6 @@
 import { compile, type Hit, type Scrubber } from '@ai-ecoverse/slicc-scrub';
 import { text } from './bytes.ts';
+import { all as every, request as idb, transact } from './db.ts';
 import { Refused } from './errors.ts';
 import { decrypt } from './keys.ts';
 import {
@@ -19,7 +20,9 @@ import {
   type McpServer,
   modelFor,
   modelRefused,
+  NO_ENDPOINTS,
   pageServer,
+  type Registered,
   serverFor,
   servers,
   tofu,
@@ -182,7 +185,10 @@ export class Preparer {
     return out;
   }
 
-  async prepare(request: Outgoing, make: () => Promise<Target>): Promise<Fields> {
+  async prepare(
+    request: Outgoing,
+    make: (registered?: Registered) => Promise<Target>
+  ): Promise<Fields> {
     const target = await make();
     const parsed = new URL(request.url);
     const loopback = target.loopback && kernelPort(parsed) !== null;
@@ -227,8 +233,19 @@ export class Preparer {
         "the vault's values changed meanwhile; prepare the request again"
       );
     }
-    const last = await make();
-    const live = await records(this.vault.db, this.ns);
+    const [registered, live] = await transact(
+      this.vault.db,
+      ['meta', 'records'],
+      'readonly',
+      (tx) =>
+        Promise.all([
+          idb(tx.objectStore('meta').get(`endpoints:${this.ns}`)).then(
+            (found) => (found as Registered | undefined) ?? NO_ENDPOINTS
+          ),
+          every<VaultRecord>(tx, 'records', this.ns),
+        ])
+    );
+    const last = await make(registered);
     still(last, seen.filled);
     const now = new Map(live.map((r) => [r.placeholder, r]));
     const moved = seen.filled.some((r) => {
@@ -271,8 +288,8 @@ export class Preparer {
     }
     const request = outgoing(fields.request);
     const provider = (given as string | undefined) ?? (await this.inferred(request));
-    return this.prepare(request, async () => {
-      const registered = await loadRegistered(this.vault.db, this.ns);
+    return this.prepare(request, async (given) => {
+      const registered = given ?? (await loadRegistered(this.vault.db, this.ns));
       return {
         who: provider ?? 'this request',
         owns: (record) =>
@@ -297,11 +314,11 @@ export class Preparer {
       await this.vault.loadPolicy(this.ns);
       await this.vault.changed(this.ns, ['secrets', 'audit', 'exits']);
     }
-    return this.prepare(request, () => this.mcpTarget(server, url));
+    return this.prepare(request, (given) => this.mcpTarget(server, url, given));
   }
 
-  async mcpTarget(server: string, url: URL): Promise<Target> {
-    const registered = await loadRegistered(this.vault.db, this.ns);
+  async mcpTarget(server: string, url: URL, given?: Registered): Promise<Target> {
+    const registered = given ?? (await loadRegistered(this.vault.db, this.ns));
     const entry = serverFor(registered, server, url);
     const loopback = entry !== null && new URL(entry.url).protocol === 'http:';
     const bound = (record: VaultRecord) =>
