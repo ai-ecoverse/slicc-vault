@@ -45,6 +45,13 @@ test('a typed-in MCP token pins to the agent server URL of its first fill, and a
     request: call('https://notes.example.com/mcp/tools', token.placeholder),
   });
   assert.deepEqual(first.request.headers, [['authorization', `Bearer ${TOKEN}`]]);
+  const view = (await page.evaluate(() => window.harness.call('list'))).list.secrets.find(
+    (r) => r.name === 'NOTES_MCP'
+  );
+  assert.deepEqual(
+    [view.server, view.url, view.pinned],
+    ['notes', 'https://notes.example.com/mcp', true]
+  );
   assert.deepEqual(await pins(page), [
     {
       pinned: { name: 'NOTES_MCP', server: 'notes', host: 'notes.example.com' },

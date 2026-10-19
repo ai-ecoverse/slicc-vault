@@ -181,6 +181,8 @@ function shownBinding(record: VaultRecord, clean: Clean): Partial<SecretView> {
   const out: Partial<SecretView> = {};
   if (record.provider !== undefined) out.provider = clean(record.provider);
   if (record.server !== undefined) out.server = clean(record.server);
+  if (record.kind === 'mcp' && record.url !== undefined) out.url = clean(record.url);
+  if (record.pinned) out.pinned = true;
   if (record.settings !== undefined) {
     out.settings = Object.fromEntries(
       Object.entries(record.settings)
