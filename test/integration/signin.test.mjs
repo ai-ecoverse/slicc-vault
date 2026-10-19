@@ -195,6 +195,20 @@ test("NEGATIVE a sign-in never writes a returned token into its name or settings
       }),
     ACCESS
   );
+  await page.evaluate(
+    (note) =>
+      window.harness.call('put', {
+        name: 'XAI_GONE',
+        value: 'fake-xai-gone-0821',
+        kind: 'model',
+        provider: 'xai',
+        settings: { NOTE: note },
+      }),
+    ACCESS
+  );
+  await page.evaluate(() => window.harness.call('remove', { name: 'XAI_GONE', kind: 'model' }));
+  const gone = await ask('grant', { provider: 'xai', name: 'XAI_GONE', response: response() });
+  assert.equal(gone.error.code, 'EINVAL');
   const inherited = await ask('grant', {
     provider: 'xai',
     name: 'XAI_NOTED',

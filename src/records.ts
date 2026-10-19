@@ -134,6 +134,7 @@ export interface SealInput {
   exclusive?: boolean;
   stash?: boolean;
   claim?: { grant: string; retire: boolean };
+  guard?: (settings: Record<string, string>) => void;
   placeholder?: string;
   answers?: Answers;
   now: number;
@@ -406,6 +407,7 @@ async function write(tx: IDBTransaction, input: SealInput, sealed: Sealed): Prom
   const live = existing && !removed(existing) ? existing : undefined;
   const underneath = input.stash ? stashed(input, live) : undefined;
   if (underneath) record.replaced = underneath;
+  input.guard?.(record.settings ?? {});
   if (input.claim) await claim(store, input, input.claim, live);
   await request(store.put(record));
   if (input.answers) await answered(tx, input.ns, input.answers, record.placeholder, input.now);

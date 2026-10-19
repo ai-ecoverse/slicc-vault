@@ -460,16 +460,15 @@ export class Preparer {
       })),
       { version: 0 }
     );
-    const current = (await records(this.vault.db, this.ns)).find(
-      (r) => r.kind === 'model' && r.name === name && !removed(r)
-    );
-    const settings = bound.settings ?? current?.settings ?? {};
-    const meta = [name, grantName, ...Object.entries(settings).flat()];
     const holds = (s: Scrubber) => (t: string) =>
       s.text(t).hits.some((hit) => hit.form !== 'fragment');
-    if (meta.some(holds(returned)) || meta.some(holds(scrubber))) {
-      throw new Refused('EINVAL', 'the name or settings hold a token or a stored value');
-    }
+    const guard = (settings: Record<string, string>) => {
+      const meta = [name, grantName, ...Object.entries(settings).flat()];
+      if (meta.some(holds(returned)) || meta.some(holds(scrubber))) {
+        throw new Refused('EINVAL', 'the name or settings hold a token or a stored value');
+      }
+    };
+    guard(bound.settings ?? {});
     const common = { ns: this.ns, source: `oauth:${provider}` as const, uid: null, tag: null, now };
     const access: SealInput = {
       ...common,
@@ -478,6 +477,7 @@ export class Preparer {
       value: got.access,
       ...bound,
       stash: true,
+      guard,
       claim: { grant: grantName, retire: got.refresh === null },
       ...(got.expires === null ? {} : { expiresAt: now + got.expires * 1000 }),
       ...(got.refresh !== null ? { refresh: grantName } : {}),

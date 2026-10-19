@@ -393,6 +393,7 @@ function underlying(record: VaultRecord): VaultRecord {
   if (!record.replaced) return record;
   const pasted: VaultRecord = { ...record, ...record.replaced };
   if (record.replaced.expiresAt === undefined) delete pasted.expiresAt;
+  if (record.replaced.settings === undefined) delete pasted.settings;
   return pasted;
 }
 
