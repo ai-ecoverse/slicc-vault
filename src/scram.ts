@@ -8,7 +8,9 @@ const NONCE = '[\\x21-\\x2b\\x2d-\\x7e]+';
 const B64 = '(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?';
 const FIRST = new RegExp(`^n=[^,]*,r=(${NONCE})$`);
 const SERVER = new RegExp(`^r=(${NONCE}),s=(${B64}),i=([1-9][0-9]{0,8})$`);
-const FINAL = new RegExp(`^c=biws,r=(${NONCE})$`);
+const FINAL = new RegExp(`^c=(${B64}),r=(${NONCE})$`);
+const ENDPOINT = 'p=tls-server-end-point,,';
+const DIGESTS = [32, 48, 64];
 const PROOF = new RegExp(`^${B64}$`);
 
 export interface Scram {
@@ -34,6 +36,11 @@ function field(given: Record<string, unknown>, name: string): string {
   return value;
 }
 
+function binding(header: string): boolean {
+  if (header === 'n,,' || header === 'y,,') return true;
+  return header.startsWith(ENDPOINT) && DIGESTS.includes(header.length - ENDPOINT.length);
+}
+
 export function parseScram(value: unknown): Scram {
   const given = (value ?? {}) as Record<string, unknown>;
   const first = field(given, 'clientFirstBare');
@@ -51,8 +58,12 @@ export function parseScram(value: unknown): Scram {
   const iterations = Number(count);
   if (iterations > SCRAM_ITERATIONS) invalid(`iterations must be at most ${SCRAM_ITERATIONS}`);
   const answer = FINAL.exec(final);
-  if (!answer || answer[1] !== nonce) {
-    invalid("clientFinalBare must be c=biws,r=<the server's nonce>: no channel binding");
+  if (!answer || answer[2] !== nonce) {
+    invalid("clientFinalBare must be c=<base64>,r=<the server's nonce>");
+  }
+  const header = atob(answer[1]);
+  if (btoa(header) !== answer[1] || !binding(header)) {
+    invalid('c= must be n,,, y,, or p=tls-server-end-point,, with a SHA-256, -384 or -512 digest');
   }
   if (salt.length === 0) invalid('the salt is empty');
   const decoded = PROOF.test(proof) ? bytes(proof) : null;
