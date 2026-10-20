@@ -61,7 +61,8 @@ export function parseScram(value: unknown): Scram {
   if (!answer || answer[2] !== nonce) {
     invalid("clientFinalBare must be c=<base64>,r=<the server's nonce>");
   }
-  if (!binding(atob(answer[1]))) {
+  const header = atob(answer[1]);
+  if (btoa(header) !== answer[1] || !binding(header)) {
     invalid('c= must be n,,, y,, or p=tls-server-end-point,, with a SHA-256, -384 or -512 digest');
   }
   if (salt.length === 0) invalid('the salt is empty');

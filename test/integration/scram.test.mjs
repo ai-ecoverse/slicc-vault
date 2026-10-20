@@ -136,6 +136,12 @@ test('a SCRAM proof made from a placeholder identifies its secret, which is hand
 const bound = (header, data = '') => `c=${btoa(header + data)},r=${NONCE}`;
 const digest = (n) =>
   String.fromCharCode(...Array.from({ length: n }, (_, i) => (i * 7 + 1) % 256));
+const ALPHABET = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/';
+const loose = (data) => {
+  const c = btoa(`p=tls-server-end-point,,${data}`);
+  const at = c.length - 2;
+  return `c=${c.slice(0, at)}${ALPHABET[ALPHABET.indexOf(c[at]) | 1]}=,r=${NONCE}`;
+};
 
 test('n,,, y,, and p=tls-server-end-point with each SHA-2 digest are matched on the program transcript as sent', async (t) => {
   const { page, placeholders } = await ready(t);
@@ -193,6 +199,7 @@ test('NEGATIVE broken nonce chain, iterations and channel binding are EINVAL bef
     [{ clientFinalBare: bound('n,,', digest(32)) }, /c= must be/],
     [{ clientFinalBare: `c=eSwr,r=${NONCE}` }, /c= must be/],
     [{ clientFinalBare: `c=e$ws,r=${NONCE}` }, /c=<base64>/],
+    [{ clientFinalBare: loose(digest(32)) }, /c= must be/],
     [{ clientFinalBare: `c=biws,r=${NONCE},p=x` }, /c=<base64>/],
     [{ clientFirstBare: `p=tls-server-end-point,,n=,r=${CNONCE}` }, /clientFirstBare must be n=/],
     [{ serverFirst: `r=${NONCE},s=,i=4096` }, /the salt is empty/],
