@@ -354,7 +354,9 @@ export async function sealAll(db: IDBDatabase, dek: Dek, inputs: SealInput[]): P
 }
 
 function stashed(input: SealInput, held: VaultRecord | undefined): Replaced | undefined {
-  if (!held) return undefined;
+  if (!held || (held.removedAt !== undefined && input.now - held.removedAt > RESTORABLE)) {
+    return undefined;
+  }
   if (held.provider !== input.provider) {
     throw new Refused(
       'EEXIST',

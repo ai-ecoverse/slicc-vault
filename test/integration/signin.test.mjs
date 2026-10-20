@@ -4,7 +4,7 @@ import { test } from 'node:test';
 import { SIGN_INS } from '../../src/providers.ts';
 import { setup } from './setup.mjs';
 
-const { embedder } = await setup();
+const { embedder, served } = await setup();
 
 const ACCESS = 'fake-xai-access-0801';
 const REFRESH = 'fake-xai-refresh-0802';
@@ -432,6 +432,55 @@ test('NEGATIVE a sign-in never overwrites the grant of a removed credential that
   assert.equal(refreshed.state, 'refreshed');
   const sent = await page.evaluate(() => window.harness.egress.requests.at(-1));
   assert.match(sent.body, /refresh_token=fake-mcp-parked-0830/);
+});
+
+test('NEGATIVE a sign-in over a key removed more than 30 days ago keeps nothing to restore', async (t) => {
+  const { page, ask } = await ready(t);
+  await page.evaluate(() =>
+    window.harness.call('put', {
+      name: 'XAI_OLD',
+      value: 'fake-xai-old-0832',
+      kind: 'model',
+      provider: 'xai',
+    })
+  );
+  await page.evaluate(() => window.harness.call('remove', { name: 'XAI_OLD', kind: 'model' }));
+  await page.goto(`${served.vault}/config.json`);
+  const aged = await page.evaluate(
+    (key) =>
+      new Promise((resolve, reject) => {
+        const open = indexedDB.open('slicc-vault', 1);
+        open.onerror = () => reject(open.error);
+        open.onsuccess = () => {
+          const tx = open.result.transaction(['records'], 'readwrite');
+          const store = tx.objectStore('records');
+          const got = store.get(key);
+          const at = Date.now() - 30 * 24 * 60 * 60 * 1000 + 3000;
+          got.onsuccess = () => store.put({ ...got.result, removedAt: at });
+          tx.oncomplete = () => resolve(at);
+          tx.onerror = () => reject(tx.error);
+        };
+      }),
+    [served.origin('seven'), 'model', 'XAI_OLD']
+  );
+  await embedder(t, 'seven', page);
+  await page.evaluate(() => window.harness.connect());
+  await page.evaluate(() => window.harness.agent());
+  await new Promise((resolve) =>
+    setTimeout(resolve, Math.max(0, aged + 30 * 24 * 60 * 60 * 1000 + 1000 - Date.now()))
+  );
+  const granted = await ask('grant', { provider: 'xai', name: 'XAI_OLD', response: response() });
+  const key = granted.records[0].placeholder;
+  const view = (await page.evaluate(() => window.harness.call('list'))).list.secrets.find(
+    (r) => r.name === 'XAI_OLD'
+  );
+  assert.equal(view.replaced, undefined);
+  await page.evaluate(() => window.harness.call('restore', { name: 'XAI_OLD', kind: 'model' }));
+  const filled = await ask('model', {
+    provider: 'xai',
+    request: chat('https://api.x.ai/v1/chat', key),
+  });
+  assert.deepEqual(filled.request.headers, [['authorization', `Bearer ${ACCESS}`]]);
 });
 
 test('removing a signed-in key removes its grant, and restore brings both back', async (t) => {
