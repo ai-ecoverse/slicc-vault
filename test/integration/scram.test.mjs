@@ -133,6 +133,33 @@ test('a SCRAM proof made from a placeholder identifies its secret, which is hand
   assert.ok(!JSON.stringify(audit).includes('fake-scram'));
 });
 
+const bound = (header, data = '') => `c=${btoa(header + data)},r=${NONCE}`;
+const digest = (n) =>
+  String.fromCharCode(...Array.from({ length: n }, (_, i) => (i * 7 + 1) % 256));
+
+test('n,,, y,, and p=tls-server-end-point with each SHA-2 digest are matched on the program transcript as sent', async (t) => {
+  const { page, placeholders } = await ready(t);
+  const finals = [
+    `c=biws,r=${NONCE}`,
+    `c=eSws,r=${NONCE}`,
+    bound('p=tls-server-end-point,,', digest(32)),
+    bound('p=tls-server-end-point,,', digest(48)),
+    bound('p=tls-server-end-point,,', digest(64)),
+  ];
+  for (const [i, clientFinalBare] of finals.entries()) {
+    const got = await ask(page, session(exchange(placeholders.PG_SCRAM, { clientFinalBare })));
+    assert.deepEqual(got.values, { [placeholders.PG_SCRAM]: VALUES.PG_SCRAM }, clientFinalBare);
+    const crossed = {
+      ...exchange(placeholders.PG_SCRAM, { clientFinalBare }),
+      clientFinalBare: finals[(i + 1) % finals.length],
+    };
+    await refused(page, session(crossed), 'EACCES', /no session rule's placeholder matches/);
+  }
+  const audit = JSON.stringify((await page.evaluate(() => window.harness.call('audit'))).audit);
+  assert.ok(!audit.includes('tls-server-end-point'));
+  assert.ok(!audit.includes(btoa(digest(32)).slice(0, 16)));
+});
+
 test('NEGATIVE no match: a proof from no rule-bound placeholder gets nothing', async (t) => {
   const { page, placeholders } = await ready(t);
   const message = /^session refused: no session rule's placeholder matches the SCRAM proof$/;
@@ -150,14 +177,23 @@ test('NEGATIVE broken nonce chain, iterations and channel binding are EINVAL bef
       { serverFirst: `r=${CNONCE},s=${SALT},i=4096`, clientFinalBare: `c=biws,r=${CNONCE}` },
       /doesn't extend/,
     ],
-    [{ clientFinalBare: `c=biws,r=${NONCE}x` }, /c=biws,r=<the server's nonce>/],
+    [{ clientFinalBare: `c=biws,r=${NONCE}x` }, /c=<base64>,r=<the server's nonce>/],
     [{ serverFirst: `r=${NONCE},s=${SALT},i=0` }, /serverFirst must be/],
     [{ serverFirst: `r=${NONCE},s=${SALT},i=100001` }, /iterations must be at most 100000/],
     [
-      { clientFinalBare: `c=${btoa('p=tls-server-end-point,,')}AAAA,r=${NONCE}` },
-      /no channel binding/,
+      { clientFinalBare: bound('p=tls-unique,,', digest(32)) },
+      /c= must be n,,, y,, or p=tls-server-end-point/,
     ],
-    [{ clientFinalBare: `c=${btoa('y,,')},r=${NONCE}` }, /no channel binding/],
+    [{ clientFinalBare: bound('p=tls-exporter,,', digest(32)) }, /c= must be/],
+    [{ clientFinalBare: bound('p=tls-server-end-point,,', digest(20)) }, /SHA-256, -384 or -512/],
+    [{ clientFinalBare: bound('p=tls-server-end-point,,', digest(33)) }, /SHA-256, -384 or -512/],
+    [{ clientFinalBare: bound('p=tls-server-end-point,,') }, /c= must be/],
+    [{ clientFinalBare: bound('p=tls-server-end-point,a=x,', digest(32)) }, /c= must be/],
+    [{ clientFinalBare: bound('y,a=x,') }, /c= must be/],
+    [{ clientFinalBare: bound('n,,', digest(32)) }, /c= must be/],
+    [{ clientFinalBare: `c=eSwr,r=${NONCE}` }, /c= must be/],
+    [{ clientFinalBare: `c=e$ws,r=${NONCE}` }, /c=<base64>/],
+    [{ clientFinalBare: `c=biws,r=${NONCE},p=x` }, /c=<base64>/],
     [{ clientFirstBare: `p=tls-server-end-point,,n=,r=${CNONCE}` }, /clientFirstBare must be n=/],
     [{ serverFirst: `r=${NONCE},s=,i=4096` }, /the salt is empty/],
   ];
