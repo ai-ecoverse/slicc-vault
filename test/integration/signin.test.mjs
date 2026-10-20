@@ -401,6 +401,39 @@ test('NEGATIVE an MCP grant never overwrites a sign-in grant of the same name', 
   assert.equal(refreshed.state, 'refreshed');
 });
 
+test('NEGATIVE a sign-in never overwrites the grant of a removed credential that can still be restored', async (t) => {
+  const { page, ask, answer } = await ready(t);
+  await ask('endpoints', {
+    mcp: [
+      {
+        server: 'docs',
+        url: 'https://docs.example.com/mcp',
+        tokenUrl: 'https://auth.example.com/token',
+      },
+    ],
+  });
+  await ask('grant', {
+    server: 'docs',
+    name: 'PARKED',
+    oauth: { tokenUrl: 'https://auth.example.com/token', clientId: 'fake-client' },
+    response: JSON.stringify({
+      token_type: 'Bearer',
+      access_token: 'fake-mcp-parked-0829',
+      refresh_token: 'fake-mcp-parked-0830',
+      expires_in: 60,
+    }),
+  });
+  await page.evaluate(() => window.harness.call('remove', { name: 'PARKED', kind: 'mcp' }));
+  const taken = await ask('grant', { provider: 'xai', name: 'PARKED', response: response() });
+  assert.equal(taken.error.code, 'EEXIST');
+  await page.evaluate(() => window.harness.call('restore', { name: 'PARKED', kind: 'mcp' }));
+  await answer({ token_type: 'Bearer', access_token: 'fake-mcp-parked-0831', expires_in: 3600 });
+  const refreshed = await ask('refresh', { server: 'docs', name: 'PARKED' });
+  assert.equal(refreshed.state, 'refreshed');
+  const sent = await page.evaluate(() => window.harness.egress.requests.at(-1));
+  assert.match(sent.body, /refresh_token=fake-mcp-parked-0830/);
+});
+
 test('removing a signed-in key removes its grant, and restore brings both back', async (t) => {
   const { page, ask } = await ready(t);
   await ask('grant', { provider: 'openai-codex', name: 'CODEX_TOKEN', response: response() });

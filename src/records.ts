@@ -695,7 +695,8 @@ async function shared(
   store: IDBObjectStore,
   grant: VaultRecord,
   kind: RecordKind,
-  name: string
+  name: string,
+  alive = true
 ): Promise<boolean> {
   const all = (await request(store.getAll())) as VaultRecord[];
   return all.some(
@@ -705,8 +706,16 @@ async function shared(
       !(other.kind === kind && other.name === name) &&
       other.refresh === grant.name &&
       other.source === grant.source &&
-      !removed(other)
+      !(alive && removed(other))
   );
+}
+
+async function retire(store: IDBObjectStore, input: SealInput, name: string): Promise<void> {
+  const grant = (await request(store.get([input.ns, 'grant', name]))) as VaultRecord | undefined;
+  if (!grant || removed(grant) || (await shared(store, grant, input.kind, input.name))) return;
+  const gone: VaultRecord = { ...grant, removedAt: input.now };
+  delete gone.removedWith;
+  await request(store.put(gone));
 }
 
 async function claim(
@@ -715,20 +724,22 @@ async function claim(
   wanted: { grant: string; retire: boolean },
   live: VaultRecord | undefined
 ): Promise<void> {
+  const before = live?.source.startsWith('oauth:') ? live.refresh : undefined;
+  if (before !== undefined && before !== wanted.grant) await retire(store, input, before);
   const grant = (await request(store.get([input.ns, 'grant', wanted.grant]))) as
     | VaultRecord
     | undefined;
-  if (!grant || removed(grant)) return;
-  if (grant.source !== input.source || live?.refresh !== wanted.grant) {
+  if (!grant) return;
+  const foreign = removed(grant)
+    ? await shared(store, grant, input.kind, input.name, false)
+    : grant.source !== input.source || live?.refresh !== wanted.grant;
+  if (foreign) {
     throw new Refused(
       'EEXIST',
       `${wanted.grant} belongs to another credential; sign in under another name`
     );
   }
-  if (!wanted.retire || (await shared(store, grant, input.kind, input.name))) return;
-  const gone: VaultRecord = { ...grant, removedAt: input.now };
-  delete gone.removedWith;
-  await request(store.put(gone));
+  if (wanted.retire && !removed(grant)) await retire(store, input, wanted.grant);
 }
 
 async function swap(
