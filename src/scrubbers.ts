@@ -29,12 +29,18 @@ export class Scrubbers {
     const key = this.vault.keyring.key;
     if (!key) return cached?.scrubber ?? null;
     const held = await records(this.vault.db, ns);
+    const sealed = held.flatMap((record) =>
+      [record.sealed, ...(record.replaced ? [record.replaced.sealed] : [])].map((blob) => ({
+        record,
+        blob,
+      }))
+    );
     const values = await Promise.all(
-      held.map(async (record) => ({
+      sealed.map(async ({ record, blob }) => ({
         kind: record.kind,
         name: record.name,
         placeholder: record.placeholder,
-        value: await decrypt(key, record.sealed, aad(record.ns, record.kind, record.name)),
+        value: await decrypt(key, blob, aad(record.ns, record.kind, record.name)),
       }))
     );
     const scrubber = compile(values, { version });

@@ -25,3 +25,8 @@ export function utf8(text: string): Uint8Array<ArrayBuffer> {
 export function text(bytes: ArrayBuffer | Uint8Array): string {
   return new TextDecoder().decode(bytes);
 }
+
+export function bytesOf(value: unknown): Uint8Array | null {
+  if (!ArrayBuffer.isView(value)) return null;
+  return new Uint8Array(value.buffer, value.byteOffset, value.byteLength);
+}

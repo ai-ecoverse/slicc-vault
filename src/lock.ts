@@ -35,7 +35,12 @@ async function reseal(
   for (const record of records) {
     const label = aad(record.ns, record.kind, record.name);
     const value = await decrypt(from, record.sealed, label);
-    resealed.push({ ...record, sealed: await encrypt(to, value, label) });
+    const next: VaultRecord = { ...record, sealed: await encrypt(to, value, label) };
+    if (record.replaced) {
+      const old = await decrypt(from, record.replaced.sealed, label);
+      next.replaced = { ...record.replaced, sealed: await encrypt(to, old, label) };
+    }
+    resealed.push(next);
   }
   return resealed;
 }

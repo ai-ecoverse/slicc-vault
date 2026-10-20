@@ -1,6 +1,6 @@
 import type { Scrubber } from '@ai-ecoverse/slicc-scrub';
 import { text } from './bytes.ts';
-import { request, transact } from './db.ts';
+import { all, request, transact } from './db.ts';
 import { Refused } from './errors.ts';
 import { decrypt } from './keys.ts';
 import { aad, type Rotation, records, removed, rotate, type VaultRecord } from './records.ts';
@@ -172,9 +172,9 @@ function precheck(response: EgressResponse, raw: string, scrubber: Scrubber | nu
         : parsed.error === undefined || parsed.error === null
           ? `status ${response.status}`
           : 'the IdP sent an unreadable error';
-    throw new Refused(
-      'EACCES',
-      `refresh failed: ${scrubber ? scrubber.text(reason).text : reason}`
+    throw Object.assign(
+      new Refused('EACCES', `refresh failed: ${scrubber ? scrubber.text(reason).text : reason}`),
+      { idp: reason }
     );
   }
   const type = parsed.token_type;
@@ -198,10 +198,12 @@ function precheck(response: EgressResponse, raw: string, scrubber: Scrubber | nu
 export async function tokens(
   response: EgressResponse,
   scrubber: Scrubber | null,
-  now: number = Date.now()
+  now: number = Date.now(),
+  bearer = false
 ) {
-  const raw = typeof response.body === 'string' ? response.body : text(response.body);
-  const replacement = precheck(response, raw, scrubber);
+  const body = typeof response.body === 'string' ? response.body : text(response.body);
+  const replacement = precheck(response, body, scrubber);
+  const raw = bearer ? withBearer(body) : body;
   const nowSecs = Math.floor(now / 1000);
   if (!Number.isSafeInteger(nowSecs)) {
     throw new Refused('EACCES', "refresh failed: the vault's clock is invalid");
@@ -219,6 +221,13 @@ export async function tokens(
   }
   const expires = got.expiresAt === undefined ? null : got.expiresAt - nowSecs;
   return { access: got.accessToken, expires, refresh: got.refreshToken ?? replacement ?? null };
+}
+
+function withBearer(raw: string): string {
+  const parsed = JSON.parse(raw) as Fields;
+  return parsed.token_type === undefined
+    ? JSON.stringify({ ...parsed, token_type: 'Bearer' })
+    : raw;
 }
 
 export class Refresher {
@@ -279,6 +288,7 @@ export class Refresher {
     const grant = held.find((r) => r.kind === 'grant' && r.name === record.refresh && !removed(r));
     if (!grant?.oauth || grant.source !== record.source)
       throw new Refused('ENOENT', `${name}'s grant ${record.refresh} is missing`);
+    if (grant.dead) throw new Refused('EACCES', 'refresh failed: invalid_grant');
     return this.oauth(ns, record, grant);
   }
 
@@ -296,12 +306,36 @@ export class Refresher {
     return { state: 'requested' };
   }
 
+  async bury(ns: string, grant: VaultRecord): Promise<void> {
+    const at = this.vault.now();
+    await transact(this.vault.db, ['records'], 'readwrite', async (tx) => {
+      const store = tx.objectStore('records');
+      const now = (await request(store.get([ns, 'grant', grant.name]))) as VaultRecord | undefined;
+      if (now?.updatedAt !== grant.updatedAt) return;
+      await request(store.put({ ...now, dead: true }));
+      for (const owner of await all<VaultRecord>(tx, 'records', ns)) {
+        if (owner.kind === 'grant' || owner.refresh !== grant.name) continue;
+        await request(store.put({ ...owner, updatedAt: Math.max(at, owner.updatedAt + 1) }));
+      }
+    });
+    await this.vault.changed(ns, ['secrets']);
+  }
+
   async oauth(ns: string, record: VaultRecord, grant: VaultRecord): Promise<Fields> {
     if (!this.send) throw new Refused('ENOTCONN', 'no page is connected to send the refresh');
     const dek = this.vault.keyring.use();
     const token = await decrypt(dek.key, grant.sealed, aad(grant.ns, grant.kind, grant.name));
     const response = await this.send(ns, await tokenRequest(grant.oauth as OAuth, token));
-    const got = await tokens(response, await this.vault.scrubbers.get(ns), this.vault.now());
+    const bearer = grant.oauth?.bearer === 'default';
+    const got = await tokens(
+      response,
+      await this.vault.scrubbers.get(ns),
+      this.vault.now(),
+      bearer
+    ).catch(async (error: Refused & { idp?: string }) => {
+      if (bearer && error.idp === 'invalid_grant') await this.bury(ns, grant);
+      throw error;
+    });
     const now = this.vault.now();
     const expiresAt = got.expires === null ? null : now + got.expires * 1000;
     const replaced = got.refresh !== null && got.refresh !== token ? got.refresh : undefined;

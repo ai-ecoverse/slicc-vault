@@ -1,10 +1,12 @@
 import { compile, type Hit, type Scrubber } from '@ai-ecoverse/slicc-scrub';
-import { text } from './bytes.ts';
+import { bytesOf, text } from './bytes.ts';
 import { all as every, transact } from './db.ts';
 import { Refused } from './errors.ts';
 import { decrypt } from './keys.ts';
+import { signIn } from './providers.ts';
 import {
   aad,
+  binding,
   checkValue,
   NAME,
   records,
@@ -166,6 +168,10 @@ export class Preparer {
       if (!target.reaches(found)) {
         throw new Refused('EACCES', `${found.name} is sent only to ${target.who}'s own endpoints`);
       }
+      const dead = [...held.values()].some(
+        (r) => r.kind === 'grant' && r.name === found.refresh && r.dead && !removed(r)
+      );
+      if (dead) throw new Refused('EACCES', `${found.name} expired; sign in again`);
       const record = await this.usable(found);
       if (record !== found) {
         seen.refreshes += 1;
@@ -399,14 +405,17 @@ export class Preparer {
     const shown = held.filter(
       (r) => (r.kind === 'model' || r.kind === 'mcp') && !removed(r) && plain(r)
     );
+    const dead = new Set(held.filter((r) => r.kind === 'grant' && r.dead).map((r) => r.name));
     return {
       records: shown.map((r) => {
         const expired = r.expiresAt !== undefined && r.expiresAt <= now;
+        const buried = r.refresh !== undefined && dead.has(r.refresh);
+        const renews = r.refresh !== undefined && !buried;
         return {
           kind: r.kind,
           name: r.name,
           placeholder: r.placeholder,
-          state: expired ? (r.refresh ? 'refreshing' : 'expired') : 'ready',
+          state: buried ? 'expired' : expired ? (renews ? 'refreshing' : 'expired') : 'ready',
           ...(r.provider === undefined ? {} : { provider: r.provider }),
           ...(r.server === undefined ? {} : { server: r.server }),
           ...(r.expiresAt === undefined || echoed(String(r.expiresAt))
@@ -415,6 +424,76 @@ export class Preparer {
           ...(r.settings === undefined ? {} : { settings: clean(r.settings) }),
         };
       }),
+    };
+  }
+
+  async signIn(fields: Fields): Promise<Fields> {
+    const provider = fields.provider as string;
+    const response = fields.response;
+    const oauth = typeof provider === 'string' ? signIn(provider) : null;
+    if (!oauth) throw new Refused('ENOTSUP', `the vault has no sign-in for ${String(provider)}`);
+    if (fields.server !== undefined || fields.oauth !== undefined) {
+      throw new Refused(
+        'EINVAL',
+        'a provider sign-in takes no server or oauth: the vault knows them'
+      );
+    }
+    const bytes = typeof response === 'string' ? response : bytesOf(response);
+    if (bytes === null) throw new Refused('EINVAL', 'response must be the token response body');
+    const name = fields.name;
+    if (typeof name !== 'string' || !NAME.test(name) || `${name}_GRANT`.length > 128) {
+      throw new Refused('EINVAL', "name must be the account's record name");
+    }
+    const scrubber = await this.scrubber();
+    if (scrubber.text(name).hits.length > 0) throw new Refused('EINVAL', 'the name holds a value');
+    const bound = binding('model', { provider, settings: fields.settings });
+    const now = this.vault.now();
+    const got = await tokens({ status: 200, headers: [], body: bytes }, scrubber, now, true);
+    checkValue(got.access);
+    if (got.refresh !== null) checkValue(got.refresh);
+    const grantName = `${name}_GRANT`;
+    const returned = compile(
+      [got.access, ...(got.refresh === null ? [] : [got.refresh])].map((value, i) => ({
+        name: `T${i}`,
+        placeholder: `fnox_proxy_${'0'.repeat(23)}${i}`,
+        value,
+      })),
+      { version: 0 }
+    );
+    const holds = (s: Scrubber) => (t: string) =>
+      s.text(t).hits.some((hit) => hit.form !== 'fragment');
+    const guard = (settings: Record<string, string>, version: number) => {
+      if (version !== scrubber.version) throw new Refused('EAGAIN', 'the vault changed meanwhile');
+      const meta = [name, grantName, ...Object.entries(settings).flat()];
+      if (meta.some(holds(returned)) || meta.some(holds(scrubber))) {
+        throw new Refused('EINVAL', 'the name or settings hold a token or a stored value');
+      }
+    };
+    guard(bound.settings ?? {}, scrubber.version);
+    const common = { ns: this.ns, source: `oauth:${provider}` as const, uid: null, tag: null, now };
+    const access: SealInput = {
+      ...common,
+      kind: 'model',
+      name,
+      value: got.access,
+      ...bound,
+      stash: true,
+      guard,
+      claim: { grant: grantName, retire: got.refresh === null },
+      ...(got.expires === null ? {} : { expiresAt: now + got.expires * 1000 }),
+      ...(got.refresh !== null ? { refresh: grantName } : {}),
+    };
+    const grant: SealInput[] =
+      got.refresh !== null
+        ? [{ ...common, kind: 'grant', name: grantName, value: got.refresh, oauth }]
+        : [];
+    const dek = this.vault.keyring.use();
+    const written = (await sealAll(this.vault.db, dek, [access, ...grant])).map((s) => s.record);
+    await this.vault.changed(this.ns, ['secrets', 'audit']);
+    const expiry = written[0].expiresAt;
+    return {
+      records: written.map((r) => ({ kind: r.kind, name: r.name, placeholder: r.placeholder })),
+      ...(expiry === undefined ? {} : { expiresAt: expiry }),
     };
   }
 
@@ -477,6 +556,7 @@ export class Preparer {
       value: got.access,
       server,
       exclusive: true,
+      claim: { grant: grantName, retire: got.refresh === null },
       ...(got.expires === null ? {} : { expiresAt: now + got.expires * 1000 }),
       ...(got.refresh !== null ? { refresh: grantName } : {}),
     };

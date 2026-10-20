@@ -39,6 +39,8 @@ export interface VaultRecord {
   url?: string;
   pinned?: boolean;
   unpins?: number;
+  replaced?: Replaced;
+  dead?: true;
   sealedBy?: number;
   removedAt?: number;
   removedWith?: string;
@@ -49,6 +51,17 @@ export interface OAuthConfig {
   clientId: string;
   scope?: string;
   resource?: string;
+  bearer?: 'default';
+}
+
+export interface Replaced {
+  sealed: Sealed;
+  source: RecordSource;
+  provider?: string;
+  settings?: Record<string, string>;
+  createdAt: number;
+  expiresAt?: number;
+  refresh?: string;
 }
 
 export interface Binding {
@@ -119,6 +132,9 @@ export interface SealInput {
   settings?: Record<string, string>;
   url?: string;
   exclusive?: boolean;
+  stash?: boolean;
+  claim?: { grant: string; retire: boolean };
+  guard?: (settings: Record<string, string>, version: number) => void;
   placeholder?: string;
   answers?: Answers;
   now: number;
@@ -183,6 +199,7 @@ function shownBinding(record: VaultRecord, clean: Clean): Partial<SecretView> {
   if (record.provider !== undefined) out.provider = clean(record.provider);
   if (record.server !== undefined) out.server = clean(record.server);
   if (record.kind === 'mcp' && record.url !== undefined) out.url = clean(record.url);
+  if (record.replaced) out.replaced = true;
   if (record.pinned) out.pinned = true;
   if (record.settings !== undefined) {
     out.settings = Object.fromEntries(
@@ -336,6 +353,28 @@ export async function sealAll(db: IDBDatabase, dek: Dek, inputs: SealInput[]): P
   });
 }
 
+function stashed(input: SealInput, held: VaultRecord | undefined): Replaced | undefined {
+  if (!held || (held.removedAt !== undefined && input.now - held.removedAt > RESTORABLE)) {
+    return undefined;
+  }
+  if (held.provider !== input.provider) {
+    throw new Refused(
+      'EEXIST',
+      `${input.name} is a ${String(held.provider)} key; sign in under another name`
+    );
+  }
+  if (held.source.startsWith('oauth:')) return held.replaced;
+  return {
+    sealed: held.sealed,
+    source: held.source,
+    createdAt: held.createdAt,
+    provider: held.provider,
+    ...(held.settings === undefined ? {} : { settings: held.settings }),
+    ...(held.expiresAt === undefined ? {} : { expiresAt: held.expiresAt }),
+    ...(held.refresh === undefined ? {} : { refresh: held.refresh }),
+  };
+}
+
 async function write(tx: IDBTransaction, input: SealInput, sealed: Sealed): Promise<Sealing> {
   const store = tx.objectStore('records');
   const existing = (await request(store.get([input.ns, input.kind, input.name]))) as
@@ -367,6 +406,11 @@ async function write(tx: IDBTransaction, input: SealInput, sealed: Sealed): Prom
   if (record.kind === 'model' && record.provider === undefined) {
     throw new Refused('EINVAL', 'a model record needs its provider');
   }
+  const live = existing && !removed(existing) ? existing : undefined;
+  const underneath = input.stash ? stashed(input, existing) : undefined;
+  if (underneath) record.replaced = underneath;
+  input.guard?.(record.settings ?? {}, await scrubIn(tx, input.ns));
+  if (input.claim) await claim(store, input, input.claim, live);
   await request(store.put(record));
   if (input.answers) await answered(tx, input.ns, input.answers, record.placeholder, input.now);
   await bump(tx, input.ns);
@@ -628,6 +672,7 @@ async function mark(
     const record = (await request(store.get([ns, kind, name]))) as VaultRecord | undefined;
     const gone = record?.removedAt !== undefined && now - record.removedAt > RESTORABLE;
     if (!record || gone) throw new Refused('ENOENT', `no record named ${name}`);
+    if (!removing && record.replaced) return swap(tx, store, record, now);
     if (removing === removed(record)) return record;
     if (removing) record.removedAt = now;
     else delete record.removedAt;
@@ -646,6 +691,103 @@ async function mark(
     });
     return record;
   });
+}
+
+async function shared(
+  store: IDBObjectStore,
+  grant: VaultRecord,
+  kind: RecordKind,
+  name: string,
+  alive = true
+): Promise<boolean> {
+  const all = (await request(store.getAll())) as VaultRecord[];
+  return all.some(
+    (other) =>
+      other.ns === grant.ns &&
+      other.kind !== 'grant' &&
+      !(other.kind === kind && other.name === name) &&
+      other.refresh === grant.name &&
+      other.source === grant.source &&
+      !(alive && removed(other))
+  );
+}
+
+async function retire(store: IDBObjectStore, input: SealInput, name: string): Promise<void> {
+  const grant = (await request(store.get([input.ns, 'grant', name]))) as VaultRecord | undefined;
+  if (!grant || removed(grant) || (await shared(store, grant, input.kind, input.name))) return;
+  const gone: VaultRecord = { ...grant, removedAt: input.now };
+  delete gone.removedWith;
+  await request(store.put(gone));
+}
+
+async function claim(
+  store: IDBObjectStore,
+  input: SealInput,
+  wanted: { grant: string; retire: boolean },
+  live: VaultRecord | undefined
+): Promise<void> {
+  const before = live?.source.startsWith('oauth:') ? live.refresh : undefined;
+  if (before !== undefined && before !== wanted.grant) await retire(store, input, before);
+  const grant = (await request(store.get([input.ns, 'grant', wanted.grant]))) as
+    | VaultRecord
+    | undefined;
+  if (!grant) return;
+  const foreign = removed(grant)
+    ? await shared(store, grant, input.kind, input.name, false)
+    : grant.source !== input.source || live?.refresh !== wanted.grant;
+  if (foreign) {
+    throw new Refused(
+      'EEXIST',
+      `${wanted.grant} belongs to another credential; sign in under another name`
+    );
+  }
+  if (wanted.retire && !removed(grant)) await retire(store, input, wanted.grant);
+}
+
+async function swap(
+  tx: IDBTransaction,
+  store: IDBObjectStore,
+  record: VaultRecord,
+  now: number
+): Promise<VaultRecord> {
+  const old = record.replaced as Replaced;
+  if (record.refresh) {
+    const grant = (await request(store.get([record.ns, 'grant', record.refresh]))) as
+      | VaultRecord
+      | undefined;
+    if (grant && !removed(grant) && !(await shared(store, grant, record.kind, record.name))) {
+      const next: VaultRecord = { ...grant, removedAt: now };
+      delete next.removedWith;
+      await request(store.put(next));
+    }
+  }
+  const back: VaultRecord = {
+    ...record,
+    sealed: old.sealed,
+    source: old.source,
+    createdAt: old.createdAt,
+    updatedAt: Math.max(now, record.updatedAt + 1),
+  };
+  for (const field of ['refresh', 'expiresAt', 'replaced', 'removedAt', 'removedWith'] as const) {
+    delete back[field];
+  }
+  delete back.settings;
+  if (old.provider !== undefined) back.provider = old.provider;
+  if (old.settings !== undefined) back.settings = old.settings;
+  if (old.expiresAt !== undefined) back.expiresAt = old.expiresAt;
+  if (old.refresh !== undefined) back.refresh = old.refresh;
+  await request(store.put(back));
+  await bump(tx, record.ns);
+  await audit(tx, record.ns, {
+    type: 'restore',
+    name: record.name,
+    replaced: true,
+    uid: null,
+    tag: null,
+    at: now,
+    ...(record.refresh ? { grant: record.refresh } : {}),
+  });
+  return back;
 }
 
 export function remove(
