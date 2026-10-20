@@ -373,6 +373,34 @@ test('NEGATIVE a sign-in over a removed pasted key keeps it restorable, and a re
   assert.equal(crossed.error.code, 'EEXIST');
 });
 
+test('NEGATIVE an MCP grant never overwrites a sign-in grant of the same name', async (t) => {
+  const { ask, answer } = await ready(t);
+  await ask('grant', { provider: 'xai', name: 'SHARED', response: response() });
+  await ask('endpoints', {
+    mcp: [
+      {
+        server: 'docs',
+        url: 'https://docs.example.com/mcp',
+        tokenUrl: 'https://auth.example.com/token',
+      },
+    ],
+  });
+  const mcp = await ask('grant', {
+    server: 'docs',
+    name: 'SHARED',
+    response: JSON.stringify({
+      token_type: 'Bearer',
+      access_token: 'fake-mcp-shared-0826',
+      refresh_token: 'fake-mcp-shared-0827',
+    }),
+    oauth: { tokenUrl: 'https://auth.example.com/token', clientId: 'fake-client' },
+  });
+  assert.equal(mcp.error.code, 'EEXIST');
+  await answer({ access_token: 'fake-xai-shared-0828', expires_in: 3600 });
+  const refreshed = await ask('refresh', { provider: 'xai', name: 'SHARED' });
+  assert.equal(refreshed.state, 'refreshed');
+});
+
 test('removing a signed-in key removes its grant, and restore brings both back', async (t) => {
   const { page, ask } = await ready(t);
   await ask('grant', { provider: 'openai-codex', name: 'CODEX_TOKEN', response: response() });
