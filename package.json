@@ -48,7 +48,7 @@
   },
   "devDependencies": {
     "@ai-ecoverse/jerk-oauth": "1.2.1",
-    "@ai-ecoverse/slicc-cdp": "1.30.21",
+    "@ai-ecoverse/slicc-cdp": "1.30.22",
     "@ai-ecoverse/slicc-kernel": "1.142.2",
     "@ai-ecoverse/slicc-scrub": "1.0.0",
     "@ai-ecoverse/slicc-shared-web": "2.4.2",
