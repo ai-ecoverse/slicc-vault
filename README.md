@@ -22,7 +22,7 @@ The bundles hold this repo's code, `@ai-ecoverse/slicc-scrub`, and `@ai-ecoverse
 - `Cross-Origin-Embedder-Policy: require-corp`, `Cross-Origin-Resource-Policy: same-site`, `Cross-Origin-Opener-Policy: same-origin`;
 - `Origin-Agent-Cluster: ?1`, `nosniff`, `Referrer-Policy: no-referrer`, `no-cache` with an ETag, and `no-store` on the HTML documents.
 
-To stay out of the back/forward cache, `index.html` and `button.html` add an `unload` listener, and all three documents reload on a `pageshow` with `persisted`; `bfcache.test.mjs` proves `index.html` is never restored.
+To stay out of the back/forward cache, `index.html` and `button.html` add an `unload` listener, which keeps an embedder's page out of it too, and all three documents reload on a `pageshow` with `persisted`; `bfcache.test.mjs` proves `index.html` is never restored.
 
 `GET /embedders.json` is answered by the Worker, not by this tree. It returns `{ "embedders": [...] }`, the same sources as `frame-ancestors`. The vault reads it at start and accepts only those origins. When it's missing or malformed, only `vault.sliccy.ai` falls back to `config.json`; on every other host (`vault-preview.sliccy.ai`, branch previews, local) that means no embedders, so it fails closed. An embedder source is `http(s)://host`, optionally with `:port` or `:*`, matched exactly.
 
