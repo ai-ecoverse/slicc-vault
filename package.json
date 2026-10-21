@@ -14,7 +14,7 @@
   },
   "fledgling": {
     "provider": "github",
-    "workflow": "release.yml",
+    "workflow": "ci.yml",
     "repo": "ai-ecoverse/slicc-vault",
     "publish": true
   },
@@ -36,7 +36,7 @@
     "build": "node scripts/endpoints.mjs && node scripts/jerk-wasm.mjs && node build.mjs && tsc -p tsconfig.build.json",
     "prepack": "npm run build",
     "start": "npm run build && node test/integration/serve.mjs",
-    "pretest": "npm run build && playwright-core install --no-shell chromium",
+    "pretest": "npm run build && slicc-cdp install-browser",
     "test": "node --test --test-timeout=300000 --test-global-setup=node_modules/@ai-ecoverse/slicc-shared-web/harness/global.mjs 'test/integration/*.test.mjs'",
     "test:unit": "node scripts/endpoints.mjs && node scripts/jerk-wasm.mjs && NODE_NO_WARNINGS=1 mcr -c node_modules/@ai-ecoverse/slicc-shared-web/mcr.config.mjs node --import fake-indexeddb/auto --test --test-force-exit 'test/unit/**/*.test.mjs'",
     "typecheck": "tsc",
@@ -48,9 +48,10 @@
   },
   "devDependencies": {
     "@ai-ecoverse/jerk-oauth": "1.2.0",
+    "@ai-ecoverse/slicc-cdp": "1.30.20",
     "@ai-ecoverse/slicc-kernel": "1.141.2",
     "@ai-ecoverse/slicc-scrub": "1.0.0",
-    "@ai-ecoverse/slicc-shared-web": "1.29.7",
+    "@ai-ecoverse/slicc-shared-web": "2.4.0",
     "@ai-ecoverse/wasm-bash": "5.3.0-22",
     "@ai-ecoverse/wasm-coreutils": "9.12.0-12",
     "@biomejs/biome": "2.5.15",
@@ -67,7 +68,6 @@
     "kdbxweb": "2.1.1",
     "lefthook": "2.2.2",
     "monocart-coverage-reports": "2.13.2",
-    "playwright-core": "1.64.0",
     "semantic-release": "25.0.9",
     "typescript": "7.0.2"
   }
