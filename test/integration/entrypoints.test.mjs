@@ -44,12 +44,12 @@ async function oidcServer(t) {
 
 test('the verdict line matches exactly what the publish steps grep for, and needs an https URL', async () => {
   const { isMain, publish, verdict } = await import('../../edge/publish.mjs');
-  const workflows = await Promise.all(
-    ['release.yml', 'deploy.yml'].map((name) =>
+  const texts = await Promise.all(
+    ['deploy.yml', 'ci.yml'].map((name) =>
       readFile(new URL(`../../.github/workflows/${name}`, import.meta.url), 'utf8')
     )
   );
-  const patterns = workflows.map((text) => /grep '(\^publish: PASS [^']*)'/.exec(text)[1]);
+  const patterns = texts.map((text) => /grep '(\^publish: PASS [^']*)'/.exec(text)[1]);
   assert.deepEqual(patterns, ['^publish: PASS https://', '^publish: PASS https://']);
   const line = verdict('https://vault.sliccy.ai/', 'abc123');
   assert.equal(line, 'publish: PASS https://vault.sliccy.ai/ abc123');
