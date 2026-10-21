@@ -84,6 +84,7 @@ export async function serveVault({ port = 0, embedders = EMBEDDERS, frameAncesto
     if (!info?.isFile()) return response.writeHead(404, headers).end();
     response.writeHead(200, {
       ...headers,
+      ...(vault && extname(file) === '.html' ? { 'cache-control': 'no-store' } : {}),
       'content-type': types[extname(file)] ?? 'application/octet-stream',
       'content-length': info.size,
     });

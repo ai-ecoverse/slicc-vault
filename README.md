@@ -20,7 +20,9 @@ The build (`npm run build`) writes a flat static tree to `dist/site/`:
 The bundles hold this repo's code, `@ai-ecoverse/slicc-scrub`, and `@ai-ecoverse/jerk-oauth` (exact-pinned, for token refresh): its wasm is inlined into a separate chunk under `chunks/` (about 970 KB) that loads only on the first refresh or MCP `grant`, never fetched. The only third-party code is for KeePass imports: `kdbxweb` (with `@xmldom/xmldom` and `fflate`) and `hash-wasm`'s argon2, exact-pinned and bundled into a separate chunk under `chunks/` that the core frame loads only when a KeePass import starts; its wasm is inlined, never fetched. The sliccy-ai Worker serves the tree from the network on every load, never from OPFS, with:
 - `Content-Security-Policy` with `script-src 'self'`, no inline scripts or styles, and `frame-ancestors` listing the seven origins;
 - `Cross-Origin-Embedder-Policy: require-corp`, `Cross-Origin-Resource-Policy: same-site`, `Cross-Origin-Opener-Policy: same-origin`;
-- `Origin-Agent-Cluster: ?1`, `nosniff`, `Referrer-Policy: no-referrer`, `no-cache` with an ETag.
+- `Origin-Agent-Cluster: ?1`, `nosniff`, `Referrer-Policy: no-referrer`, `no-cache` with an ETag, and `no-store` on the HTML documents.
+
+To stay out of the back/forward cache, `index.html` and `button.html` add an `unload` listener, and all three documents reload on a `pageshow` with `persisted`; `bfcache.test.mjs` proves `index.html` is never restored.
 
 `GET /embedders.json` is answered by the Worker, not by this tree. It returns `{ "embedders": [...] }`, the same sources as `frame-ancestors`. The vault reads it at start and accepts only those origins. When it's missing or malformed, only `vault.sliccy.ai` falls back to `config.json`; on every other host (`vault-preview.sliccy.ai`, branch previews, local) that means no embedders, so it fails closed. An embedder source is `http(s)://host`, optionally with `:port` or `:*`, matched exactly.
 
