@@ -32,7 +32,7 @@
     "dist/types"
   ],
   "scripts": {
-    "prepare": "node scripts/endpoints.mjs && node scripts/jerk-wasm.mjs && { [ ! -e .git ] || lefthook install; }",
+    "prepare": "node scripts/endpoints.mjs && node scripts/jerk-wasm.mjs && slicc-install-hooks",
     "build": "node scripts/endpoints.mjs && node scripts/jerk-wasm.mjs && node build.mjs && tsc -p tsconfig.build.json",
     "prepack": "npm run build",
     "start": "npm run build && node test/integration/serve.mjs",
@@ -50,7 +50,7 @@
     "@ai-ecoverse/jerk-oauth": "1.0.0",
     "@ai-ecoverse/slicc-kernel": "1.140.0",
     "@ai-ecoverse/slicc-scrub": "1.0.0",
-    "@ai-ecoverse/slicc-shared-web": "1.29.3",
+    "@ai-ecoverse/slicc-shared-web": "1.29.7",
     "@ai-ecoverse/wasm-bash": "5.3.0-22",
     "@ai-ecoverse/wasm-coreutils": "9.12.0-12",
     "@biomejs/biome": "2.5.15",
