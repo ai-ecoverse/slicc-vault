@@ -47,7 +47,7 @@
     "release": "semantic-release"
   },
   "devDependencies": {
-    "@ai-ecoverse/jerk-oauth": "1.2.0",
+    "@ai-ecoverse/jerk-oauth": "1.2.1",
     "@ai-ecoverse/slicc-cdp": "1.30.21",
     "@ai-ecoverse/slicc-kernel": "1.141.2",
     "@ai-ecoverse/slicc-scrub": "1.0.0",
