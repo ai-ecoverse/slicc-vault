@@ -52,7 +52,7 @@
   },
   "devDependencies": {
     "@ai-ecoverse/slicc-cdp": "1.30.23",
-    "@ai-ecoverse/slicc-kernel": "1.143.1",
+    "@ai-ecoverse/slicc-kernel": "1.143.4",
     "@ai-ecoverse/slicc-shared-web": "2.4.5",
     "@ai-ecoverse/wasm-bash": "5.3.0-22",
     "@ai-ecoverse/wasm-coreutils": "9.12.0-12",
