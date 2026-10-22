@@ -13,12 +13,14 @@ const EXTRA = [
   ['https://{AZURE_OPENAI_RESOURCE_NAME}.openai.azure.com', 'azure'],
   ['https://{AZURE_OPENAI_RESOURCE_NAME}.services.ai.azure.com', 'azure'],
   ['https://adobe-llm-proxy.paolo-moz.workers.dev', 'adobe'],
+  ['https://cli-chat-proxy.grok.com/v1/billing', 'xai', { exact: true, methods: ['GET'] }],
 ];
 
-function add(found, url, provider) {
-  const providers = found.get(url) ?? new Set();
-  if (provider) providers.add(provider);
-  found.set(url, providers);
+function add(found, url, provider, only = {}) {
+  const key = JSON.stringify([url, only.exact === true, only.methods ?? null]);
+  const known = found.get(key) ?? { url, only, providers: new Set() };
+  if (provider) known.providers.add(provider);
+  found.set(key, known);
 }
 
 function walk(value, found) {
@@ -41,14 +43,14 @@ function pattern(url) {
 }
 
 const found = new Map();
-for (const [url, provider] of EXTRA) add(found, url, provider);
+for (const [url, provider, only] of EXTRA) add(found, url, provider, only);
 for (const file of readdirSync(data).filter((name) => name.endsWith('.json'))) {
   walk(JSON.parse(readFileSync(new URL(file, data), 'utf8')), found);
 }
 const merged = new Map();
-for (const [url, providers] of found) {
-  const p = pattern(url);
-  const key = `${p.host}${p.path}`;
+for (const { url, only, providers } of found.values()) {
+  const p = { ...pattern(url), ...only };
+  const key = JSON.stringify([p.host, p.path, p.exact === true, p.methods ?? null]);
   const known = merged.get(key) ?? { ...p, providers: new Set() };
   if (p.vars.length) known.vars = p.vars;
   for (const provider of providers) known.providers.add(provider);
@@ -60,6 +62,8 @@ const unique = [...merged.values()]
     path: p.path,
     providers: [...p.providers].sort(),
     ...(p.vars.length ? { vars: p.vars } : {}),
+    ...(p.exact ? { exact: true } : {}),
+    ...(p.methods ? { methods: p.methods } : {}),
   }))
   .sort((a, b) => `${a.host}${a.path}`.localeCompare(`${b.host}${b.path}`));
 writeFileSync(out, `${JSON.stringify(unique, null, 2)}\n`);

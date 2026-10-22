@@ -5,6 +5,8 @@ export interface Endpoint {
   path: string;
   providers?: string[];
   vars?: string[];
+  exact?: boolean;
+  methods?: string[];
 }
 
 export const TENANTS = new Set([
@@ -129,7 +131,7 @@ export function coveredByBuiltIn(provider: string, url: string): boolean {
   if (!parsed) return false;
   const host = hostOf(parsed);
   return BUILT_IN_ENDPOINTS.filter((e) => e.providers.includes(provider)).some((pattern) =>
-    covers(pattern, host, parsed.pathname)
+    admits(pattern, host, parsed.pathname, null)
   );
 }
 
@@ -176,6 +178,23 @@ export function covers(pattern: Endpoint, host: string, path: string): boolean {
   const want = segments(pattern.path);
   const have = segments(path);
   return want.every((segment, i) => i < have.length && (segment === '*' || segment === have[i]));
+}
+
+export function admits(
+  pattern: Endpoint,
+  host: string,
+  path: string,
+  method: string | null
+): boolean {
+  if (!covers(pattern, host, path)) return false;
+  if (pattern.methods && (method === null || !pattern.methods.includes(method))) return false;
+  if (!pattern.exact) return true;
+  const want = pattern.path.split('/');
+  const have = path.split('/');
+  return (
+    want.length === have.length &&
+    want.every((segment, i) => (segment === '*' ? have[i] !== '' : segment === have[i]))
+  );
 }
 
 export function contains(pattern: Endpoint, domain: string, paths: string[]): boolean {
@@ -232,14 +251,15 @@ export function modelFor(
   provider: string,
   url: URL,
   name: string | null = null,
-  settings?: Record<string, string>
+  settings?: Record<string, string>,
+  method: string | null = null
 ): boolean {
   if (url.protocol !== 'https:' || !plain(url, '')) return false;
   const host = hostOf(url);
   const built = BUILT_IN_ENDPOINTS.filter(
     (e) =>
       e.providers.includes(provider) &&
-      covers(e, host, url.pathname) &&
+      admits(e, host, url.pathname, method) &&
       tenant(e, host, url.pathname, settings)
   );
   const owned = (registered.page ?? NO_PAGE).custom
