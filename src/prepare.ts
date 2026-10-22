@@ -308,7 +308,14 @@ export class Preparer {
           provider !== null && record.kind === 'model' && record.provider === provider,
         reaches: (record) =>
           provider !== null &&
-          modelFor(registered, provider, new URL(request.url), record.name, record.settings),
+          modelFor(
+            registered,
+            provider,
+            new URL(request.url),
+            record.name,
+            record.settings,
+            request.method
+          ),
         loopback: false,
       };
     });

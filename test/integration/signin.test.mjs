@@ -578,3 +578,61 @@ test("the vault's sign-in table matches the installed pi-ai", async () => {
   assert.ok(codex.includes('"https://auth.openai.com"') && codex.includes('/oauth/token`'));
   assert.equal(SIGN_INS['openai-codex'].tokenUrl, 'https://auth.openai.com/oauth/token');
 });
+
+const BILLING = 'https://cli-chat-proxy.grok.com/v1/billing';
+const billing = (method, url, placeholder) => ({
+  method,
+  url,
+  headers: [['authorization', `Bearer ${placeholder}`]],
+});
+
+async function signedIn(t) {
+  const given = await ready(t);
+  const granted = await given.ask('grant', {
+    provider: 'xai',
+    name: 'XAI_OAUTH_TOKEN',
+    response: response(),
+  });
+  return { ...given, key: granted.records[0].placeholder };
+}
+
+test('an xAI sign-in fills on a GET of the SuperGrok billing endpoint', async (t) => {
+  const { ask, key } = await signedIn(t);
+  const got = await ask('model', { provider: 'xai', request: billing('GET', BILLING, key) });
+  assert.deepEqual(got.request?.headers, [['authorization', `Bearer ${ACCESS}`]]);
+  assert.equal(got.request.url, BILLING);
+});
+
+test('the SuperGrok billing endpoint takes an xAI sign-in only by GET at exactly that path', async (t) => {
+  const { ask, key } = await signedIn(t);
+  for (const [method, url] of [
+    ['POST', BILLING],
+    ['PUT', BILLING],
+    ['GET', `${BILLING}/x`],
+    ['GET', `${BILLING}/`],
+    ['GET', 'https://cli-chat-proxy.grok.com//v1/billing'],
+    ['GET', 'https://cli-chat-proxy.grok.com/v1/chat/completions'],
+  ]) {
+    const got = await ask('model', { provider: 'xai', request: billing(method, url, key) });
+    assert.equal(got.request, undefined, `${method} ${url}`);
+    assert.match(got.error.message, /sent only to xai's own endpoints/, `${method} ${url}`);
+  }
+});
+
+test("another provider's key is refused at the SuperGrok billing endpoint", async (t) => {
+  const { page, ask } = await ready(t);
+  const openai = await page.evaluate(() =>
+    window.harness.call('put', {
+      name: 'OPENAI_API_KEY',
+      value: 'fake-openai-key-0890',
+      kind: 'model',
+      provider: 'openai',
+    })
+  );
+  const got = await ask('model', {
+    provider: 'openai',
+    request: billing('GET', BILLING, openai.placeholder),
+  });
+  assert.equal(got.request, undefined);
+  assert.match(got.error.message, /sent only to openai's own endpoints/);
+});
