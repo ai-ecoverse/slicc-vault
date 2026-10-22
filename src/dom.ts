@@ -70,3 +70,14 @@ export function field(
   );
   return { field: wrap, input: control };
 }
+
+export function reloadOnRestore(win: Window = window): void {
+  win.addEventListener('pageshow', (event) => {
+    if ((event as PageTransitionEvent).persisted) win.location.reload();
+  });
+}
+
+export function holdOutOfCache(win: Window = window): void {
+  win.addEventListener('unload', () => undefined);
+  reloadOnRestore(win);
+}
