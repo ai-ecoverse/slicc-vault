@@ -78,6 +78,7 @@ test('CI is the shared pipeline at the slicc-shared-web version in package.json'
     'pull-requests': 'write',
     statuses: 'write',
     'id-token': 'write',
+    attestations: 'write',
   });
   assert.equal(ci.concurrency['cancel-in-progress'], "${{ github.event_name == 'pull_request' }}");
   assert.equal(pkg.fledgling.workflow, 'ci.yml');
