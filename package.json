@@ -2,7 +2,7 @@
   "name": "@ai-ecoverse/slicc-vault",
   "version": "0.0.0",
   "description": "The separate-origin vault at vault.sliccy.ai: sealed secrets, OAuth tokens, and model and MCP credentials for SLICC seven, used only by its injector",
-  "piAi": "1.3.0",
+  "piAi": "1.4.0",
   "type": "module",
   "license": "Apache-2.0",
   "repository": {
@@ -57,7 +57,7 @@
     "@ai-ecoverse/wasm-bash": "5.3.0-23",
     "@ai-ecoverse/wasm-coreutils": "9.12.0-15",
     "@biomejs/biome": "2.5.15",
-    "@earendil-works/pi-ai": "1.3.0",
+    "@earendil-works/pi-ai": "1.4.0",
     "@happy-dom/global-registrator": "20.14.6",
     "@spectrum-css/button": "14.2.0",
     "@spectrum-css/textfield": "8.2.0",
