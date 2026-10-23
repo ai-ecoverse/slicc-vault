@@ -26,6 +26,13 @@ jobs:
     with:
       node-version: '26'
       test-glob: test/integration/*.test.mjs
+      deploy: |
+        set -eo pipefail
+        export VAULT_VERSION="0.0.0-$GITHUB_SHA"
+        npm run build
+        verdict="$(node edge/publish.mjs | tee -a "$GITHUB_STEP_SUMMARY" | grep '^publish: PASS https://')"
+        read -r _ _ url _ <<< "$verdict"
+        echo "url=$url" >> "$GITHUB_OUTPUT"
       release-environment: production
       after-release: |
         set -eo pipefail
