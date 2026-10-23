@@ -25,26 +25,19 @@ const named = async (name) => (await workflows()).find((w) => w.name === name).d
 const script = (job) =>
   (job.steps ?? []).map((step) => `${step.run ?? ''} ${step.uses ?? ''}`).join('\n');
 
-test('the only workflows are the CI caller and the branch preview', async () => {
-  assert.deepEqual((await workflows()).map((w) => w.name).sort(), ['ci.yml', 'deploy.yml']);
+test('the only workflow is the CI caller', async () => {
+  assert.deepEqual((await workflows()).map((w) => w.name).sort(), ['ci.yml']);
 });
 
-test('only main releases: the pipeline releases and deploys vault.sliccy.ai, and the preview publishes only branches', async () => {
+test('deploys run only through the pipeline: the release to vault.sliccy.ai, and a pull request to its branch preview', async () => {
   const seen = [];
   for (const { name, doc } of await workflows()) {
     for (const [id, job] of Object.entries(doc.jobs ?? {})) {
-      if (!RELEASING.test(script(job))) continue;
+      if (job.uses || !RELEASING.test(script(job))) continue;
       seen.push(`${name}:${id}`);
     }
   }
-  assert.deepEqual(seen, ['deploy.yml:preview']);
-  const deploy = await named('deploy.yml');
-  assert.deepEqual(deploy.on, { push: { 'branches-ignore': ['main', 'gh-readonly-queue/**'] } });
-  const { preview } = deploy.jobs;
-  assert.equal(preview.if, undefined);
-  assert.equal(preview.environment, undefined);
-  assert.deepEqual(preview.permissions, { contents: 'read', 'id-token': 'write' });
-  assert.doesNotMatch(script(preview), /semantic-release|npm publish|gh release|git tag/);
+  assert.deepEqual(seen, []);
   const { ci } = (await named('ci.yml')).jobs;
   assert.equal(ci.with['release-environment'], 'production');
   assert.match(ci.with['after-release'], /^set -eo pipefail\n/);
@@ -53,7 +46,11 @@ test('only main releases: the pipeline releases and deploys vault.sliccy.ai, and
     /export VAULT_VERSION="\$RELEASE_VERSION"\nnpm run build\n/
   );
   assert.match(ci.with['after-release'], /node edge\/publish\.mjs/);
-  assert.equal(ci.with.deploy, undefined);
+  assert.match(ci.with.deploy, /^set -eo pipefail\n/);
+  assert.match(ci.with.deploy, /export VAULT_VERSION="0\.0\.0-\$GITHUB_SHA"\nnpm run build\n/);
+  assert.match(ci.with.deploy, /node edge\/publish\.mjs/);
+  assert.doesNotMatch(ci.with.deploy, /semantic-release|npm publish|gh release|git tag/);
+  assert.equal(ci.with['deploy-secrets'], undefined);
 });
 
 test('CI is the shared pipeline at the slicc-shared-web version in package.json', async () => {
@@ -115,25 +112,24 @@ async function step(t, run, publish, flags) {
     PATH: `${bin}:/usr/bin:/bin`,
     GITHUB_STEP_SUMMARY: summary,
     RELEASE_VERSION: '1.2.3',
+    GITHUB_SHA: 'abc123',
+    GITHUB_OUTPUT: join(bin, 'output'),
   };
   return new Promise((resolve) => {
     execFile('bash', ['--noprofile', '--norc', ...flags, '-c', run], { env }, async (error) =>
       resolve({
         code: error ? error.code : 0,
         summary: await readFile(summary, 'utf8').catch(() => ''),
+        output: await readFile(env.GITHUB_OUTPUT, 'utf8').catch(() => ''),
       })
     );
   });
 }
 
 test('a publish fails unless edge/publish.mjs prints its verdict, even when it exits 0', async (t) => {
-  const preview = (await named('deploy.yml')).jobs.preview.steps.find((s) =>
-    /edge\/publish\.mjs/.test(s.run ?? '')
-  );
-  assert.equal(preview.shell, 'bash');
-  const release = (await named('ci.yml')).jobs.ci.with['after-release'];
+  const { deploy, 'after-release': release } = (await named('ci.yml')).jobs.ci.with;
   const runs = [
-    ['preview', preview.run, ['-eo', 'pipefail']],
+    ['deploy', deploy, []],
     ['after-release', release, []],
   ];
   for (const [name, run, flags] of runs) {
@@ -149,4 +145,10 @@ test('a publish fails unless edge/publish.mjs prints its verdict, even when it e
   }
   const built = await step(t, release, 'echo "publish: PASS https://vault.sliccy.ai/ abc123"', []);
   assert.match(built.summary, /^built 1\.2\.3$/m, 'after-release builds with the release version');
+  const preview = 'echo "publish: PASS https://vault-feat-x.sliccy.ai/ abc123"';
+  const staged = await step(t, deploy, preview, []);
+  assert.match(staged.summary, /^built 0\.0\.0-abc123$/m, 'deploy builds with the commit');
+  assert.equal(staged.output, 'url=https://vault-feat-x.sliccy.ai/\n', 'deploy hands on the URL');
+  const failed = await step(t, deploy, 'echo published', []);
+  assert.equal(failed.output, '', 'deploy hands on no URL without a verdict');
 });
