@@ -51,7 +51,7 @@
     "@ai-ecoverse/slicc-scrub": "1.1.0"
   },
   "devDependencies": {
-    "@ai-ecoverse/slicc-cdp": "1.41.17",
+    "@ai-ecoverse/slicc-cdp": "1.41.21",
     "@ai-ecoverse/slicc-kernel": "1.166.5",
     "@ai-ecoverse/slicc-shared-web": "2.12.3",
     "@ai-ecoverse/wasm-bash": "5.3.0-23",
