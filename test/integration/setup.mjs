@@ -6,7 +6,12 @@ import { serveVault } from './serve.mjs';
 export async function setup(options = {}) {
   const served = await serveVault(options);
   const coverage = env.SLICC_COVERAGE ? ['/'] : [];
-  const chrome = await launch({ roots: [['/', 'test/integration/page/']], coverage });
+  const chrome = await launch({
+    roots: [['/', 'test/integration/page/']],
+    coverage,
+    args: options.args ?? [],
+    persistent: options.persistent ?? false,
+  });
   after(async () => {
     await chrome.close();
     await served.close();
