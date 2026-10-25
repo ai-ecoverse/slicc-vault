@@ -40,6 +40,13 @@ export async function load(
   return { version, embedders };
 }
 
+let shared: Promise<Config> | null = null;
+
+export function loaded(): Promise<Config> {
+  shared ??= load();
+  return shared;
+}
+
 export function embedded(config: Config, origin: string): boolean {
   return allowed(config.embedders, origin);
 }

@@ -1,4 +1,4 @@
-import { type Config, load } from './config.ts';
+import { type Config, loaded } from './config.ts';
 
 export const HANDLE = 'slicc-vault';
 
@@ -13,12 +13,15 @@ interface CaptureHandleConfig {
 type Media = { setCaptureHandleConfig?: (config: CaptureHandleConfig) => void };
 
 export function permitted(config: Config): string[] {
-  return config.embedders.filter((source) => ORIGIN.test(source));
+  const origins = config.embedders
+    .filter((source) => ORIGIN.test(source))
+    .map((source) => URL.parse(source)?.origin);
+  return [...new Set(origins)].filter((origin): origin is string => !!origin);
 }
 
 export async function announce(
   win: Window = window,
-  config: () => Promise<Config> = load
+  config: () => Promise<Config> = loaded
 ): Promise<void> {
   const media = win.navigator.mediaDevices as Media | undefined;
   if (win.top !== win || typeof media?.setCaptureHandleConfig !== 'function') return;

@@ -1,5 +1,5 @@
 import { type Channel, channel, type Message, type Part } from './channel.ts';
-import { type Config, load } from './config.ts';
+import { type Config, loaded } from './config.ts';
 import type { ScrubState, VaultEvent, VaultStatus } from './contract.ts';
 import { open } from './db.ts';
 import { Exec } from './exec.ts';
@@ -45,7 +45,7 @@ export interface Options {
 }
 
 export async function start(options: Options = {}): Promise<Vault> {
-  const [db, config] = await Promise.all([options.db ?? open(), options.config ?? load()]);
+  const [db, config] = await Promise.all([options.db ?? open(), options.config ?? loaded()]);
   const bus = options.bus ?? channel();
   const keyring = new Keyring(db, bus);
   const now = options.now ?? Date.now;
