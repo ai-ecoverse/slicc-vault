@@ -56,7 +56,7 @@
     "@ai-ecoverse/slicc-shared-web": "2.13.4",
     "@ai-ecoverse/wasm-bash": "5.3.0-23",
     "@ai-ecoverse/wasm-coreutils": "9.12.0-15",
-    "@biomejs/biome": "2.5.15",
+    "@biomejs/biome": "2.6.2",
     "@earendil-works/pi-ai": "1.4.0",
     "@happy-dom/global-registrator": "21.0.4",
     "@spectrum-css/button": "14.2.0",
