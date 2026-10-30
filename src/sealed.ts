@@ -4,9 +4,22 @@ import type { Exec } from './exec.ts';
 import { prepare } from './inject.ts';
 import type { Keyring } from './lock.ts';
 import type { Policy } from './policy.ts';
-import { checkName, checkValue, find, records, removed, rulesFor, seal, state } from './records.ts';
+import {
+  checkName,
+  checkValue,
+  find,
+  MAX_PROVIDER,
+  records,
+  removed,
+  rulesFor,
+  seal,
+  serverRecord,
+  state,
+  usableRecords,
+  type VaultRecord,
+} from './records.ts';
 import { kernelPort } from './refusal.ts';
-import { create, current, get, settle } from './requests.ts';
+import { create, current, get, type HumanRequest, settle } from './requests.ts';
 import { loadRegistered } from './rules.ts';
 
 export const MAX_REQUEST = 64 * 1024;
@@ -99,8 +112,19 @@ const sealOp: Handler = async (ctx, req, stamp) => {
   return { placeholder: sealed.placeholder, state: state(sealed, ctx.policy(), now) };
 };
 
-const placeholderOp: Handler = async (ctx, req) => {
-  const found = await record(ctx, checkName(req.name));
+function root(stamp: Stamp): boolean {
+  return stamp.uid === 0 && stamp.users === 'enforce';
+}
+
+async function rootMcp(ctx: Context, name: string, server: unknown, stamp: Stamp) {
+  if (!root(stamp) || typeof server !== 'string') return undefined;
+  const found = await find(ctx.db, ctx.ns, 'mcp', name);
+  return found && serverRecord(found) && found.server === server ? found : undefined;
+}
+
+const placeholderOp: Handler = async (ctx, req, stamp) => {
+  const name = checkName(req.name);
+  const found = (await rootMcp(ctx, name, req.server, stamp)) ?? (await record(ctx, name));
   return { placeholder: found.placeholder, state: state(found, ctx.policy(), ctx.now()) };
 };
 
@@ -158,7 +182,7 @@ function jerkFields(req: Fields): Fields {
   if (typeof req.jop !== 'string' || !JOPS.has(req.jop)) {
     throw new Refused('EINVAL', 'jop must be list, status or create');
   }
-  const provider = optional(req, 'provider', 128);
+  const provider = optional(req, 'provider', MAX_PROVIDER);
   const scope = optional(req, 'scope', 1024);
   if (req.jop !== 'list' && !provider)
     throw new Refused('EINVAL', `jop ${req.jop} needs a provider`);
@@ -226,6 +250,33 @@ const requestOp: Handler = async (ctx, req, stamp) => {
   return refused ? { state: 'done', id: entry.id, ...answer } : { state: 'pending', id: entry.id };
 };
 
+function mcpStatus(
+  ctx: Context,
+  entry: HumanRequest,
+  stamp: Stamp,
+  held: VaultRecord[],
+  reply: Fields
+): Fields {
+  const provider = entry.provider ?? '';
+  if (entry.kind !== 'jerk' || entry.jop !== 'status' || !provider.startsWith('mcp:')) return reply;
+  if (reply.placeholder !== undefined) return reply;
+  const server = provider.slice('mcp:'.length);
+  const usable = usableRecords(held, ctx.now()).filter((r) => r.server === server);
+  const [found, ...others] = usable;
+  if (!found || !root(stamp) || !root(entry.stamp)) {
+    const message = `no token for ${provider} in seven's vault: run jerk ${provider} create`;
+    return { state: 'done', ...(entry.jerk ? { jerk: entry.jerk } : {}), exit: 3, message };
+  }
+  if (reply.exit !== 0) return reply;
+  if (others.length > 0)
+    throw new Refused('EINVAL', `several mcp records are bound to ${server}; ask for one by name`);
+  return {
+    ...reply,
+    placeholder: found.placeholder,
+    record: state(found, ctx.policy(), ctx.now()),
+  };
+}
+
 const statusOp: Handler = async (ctx, req, stamp) => {
   const entry = await get(ctx.db, ctx.ns, req.id, stamp.uid);
   const now = ctx.now();
@@ -237,7 +288,7 @@ const statusOp: Handler = async (ctx, req, stamp) => {
   if (reply.state !== 'done') return reply;
   const held = await records(ctx.db, ctx.ns);
   const found = held.find((r) => r.kind === 'secret' && r.placeholder === entry.placeholder);
-  if (!found) return reply;
+  if (!found) return mcpStatus(ctx, entry, stamp, held, reply);
   const recordState = state(found, ctx.policy(), now);
   return { ...reply, placeholder: found.placeholder, record: recordState };
 };

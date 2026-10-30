@@ -1,6 +1,8 @@
 import { hex, random } from './bytes.ts';
 import type {
+  AgentRecord,
   BackupReminder,
+  McpView,
   RecordKind,
   RecordSource,
   RecordState,
@@ -18,6 +20,7 @@ export const SOURCE = /^(?:settings|process|jerk:[^@\s]+@\S+|oauth:\S+|import:\S
 export const PLACEHOLDER = /^fnox_proxy_[0-9a-f]{24}$/;
 export const RESTORABLE = 30 * 24 * 60 * 60 * 1000;
 export const MIN_VALUE = 8;
+export const MAX_PROVIDER = 128;
 const CONTAINS_PLACEHOLDER = /fnox_proxy_[0-9a-f]{24}/;
 
 export interface VaultRecord {
@@ -191,7 +194,45 @@ export function device(source: RecordSource): string | null {
   return at < 0 ? null : source.slice(at + 1);
 }
 
+export function deadGrants(held: VaultRecord[]): Set<string> {
+  return new Set(held.filter((r) => r.kind === 'grant' && r.dead).map((r) => r.name));
+}
+
+export function readiness(
+  record: VaultRecord,
+  dead: Set<string>,
+  now: number
+): AgentRecord['state'] {
+  if (record.refresh !== undefined && dead.has(record.refresh)) return 'expired';
+  if (record.expiresAt === undefined || record.expiresAt > now) return 'ready';
+  return record.refresh === undefined ? 'expired' : 'refreshing';
+}
+
 export type Clean = ((text: string) => string) | null;
+
+export function serverRecord(record: VaultRecord): boolean {
+  return record.kind === 'mcp' && record.source !== 'process' && !removed(record);
+}
+
+export function usableRecords(held: VaultRecord[], now: number): VaultRecord[] {
+  const dead = deadGrants(held);
+  return held.filter(
+    (record) => serverRecord(record) && readiness(record, dead, now) !== 'expired'
+  );
+}
+
+export function usableMcp(held: VaultRecord[], now: number, clean: Clean): McpView[] {
+  if (!clean) return [];
+  const dead = deadGrants(held);
+  const views: McpView[] = [];
+  for (const record of usableRecords(held, now)) {
+    const { name, server } = record;
+    const addressable = server && `mcp:${server}`.length <= MAX_PROVIDER;
+    if (addressable && clean(name) === name && clean(server) === server)
+      views.push({ name, server, state: readiness(record, dead, now) as McpView['state'] });
+  }
+  return views.sort((a, b) => a.name.localeCompare(b.name));
+}
 
 function shownBinding(record: VaultRecord, clean: Clean): Partial<SecretView> {
   if (!clean) return {};
@@ -254,6 +295,10 @@ async function chosen(store: IDBObjectStore, wanted: string | undefined): Promis
     throw new Refused('EEXIST', 'that placeholder is already in use in this vault');
   }
   return wanted;
+}
+
+function disowned(existing: VaultRecord, input: SealInput): boolean {
+  return existing.source === 'process' && input.source !== 'process' && input.kind !== 'secret';
 }
 
 async function unused(store: IDBObjectStore): Promise<string> {
@@ -391,9 +436,11 @@ async function write(tx: IDBTransaction, input: SealInput, sealed: Sealed): Prom
     ns: input.ns,
     kind: input.kind,
     name: input.name,
-    placeholder: existing
-      ? kept(existing, input.placeholder)
-      : await chosen(store, input.placeholder),
+    placeholder: !existing
+      ? await chosen(store, input.placeholder)
+      : disowned(existing, input)
+        ? await unused(store)
+        : kept(existing, input.placeholder),
     sealed,
     source: input.source,
     createdAt: existing && !removed(existing) ? existing.createdAt : input.now,

@@ -387,8 +387,15 @@ export interface PolicyResult {
   warnings: string[];
 }
 
+export interface McpView {
+  name: string;
+  server: string;
+  state: 'ready' | 'refreshing';
+}
+
 export interface VaultList {
   secrets: SecretView[];
+  mcp: McpView[];
   refused: RefusedRule[];
   audit: AuditEntry[];
   auditMore: boolean;
