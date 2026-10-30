@@ -12,7 +12,9 @@ import {
   removed,
   rulesFor,
   seal,
+  serverRecord,
   state,
+  usableRecords,
   type VaultRecord,
 } from './records.ts';
 import { kernelPort } from './refusal.ts';
@@ -116,7 +118,7 @@ function root(stamp: Stamp): boolean {
 async function rootMcp(ctx: Context, name: string, server: unknown, stamp: Stamp) {
   if (!root(stamp) || typeof server !== 'string') return undefined;
   const found = await find(ctx.db, ctx.ns, 'mcp', name);
-  return found && !removed(found) && found.server === server ? found : undefined;
+  return found && serverRecord(found) && found.server === server ? found : undefined;
 }
 
 const placeholderOp: Handler = async (ctx, req, stamp) => {
@@ -256,15 +258,15 @@ function mcpStatus(
 ): Fields {
   const provider = entry.provider ?? '';
   if (entry.kind !== 'jerk' || entry.jop !== 'status' || !provider.startsWith('mcp:')) return reply;
-  if ((reply.exit ?? 0) !== 0 || reply.placeholder !== undefined) return reply;
+  if (reply.placeholder !== undefined) return reply;
   const server = provider.slice('mcp:'.length);
-  const bound = held.filter((r) => r.kind === 'mcp' && r.server === server);
-  if (bound.length === 0) return reply;
-  const [found, ...others] = bound.filter((r) => !removed(r));
+  const usable = usableRecords(held, ctx.now()).filter((r) => r.server === server);
+  const [found, ...others] = usable;
   if (!found || !root(stamp) || !root(entry.stamp)) {
     const message = `no token for ${provider} in seven's vault: run jerk ${provider} create`;
     return { state: 'done', exit: 3, message };
   }
+  if (reply.exit !== 0) return reply;
   if (others.length > 0)
     throw new Refused('EINVAL', `several mcp records are bound to ${server}; ask for one by name`);
   return {

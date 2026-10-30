@@ -209,16 +209,25 @@ export function readiness(
 
 export type Clean = ((text: string) => string) | null;
 
+export function serverRecord(record: VaultRecord): boolean {
+  return record.kind === 'mcp' && record.source !== 'process' && !removed(record);
+}
+
+export function usableRecords(held: VaultRecord[], now: number): VaultRecord[] {
+  const dead = deadGrants(held);
+  return held.filter(
+    (record) => serverRecord(record) && readiness(record, dead, now) !== 'expired'
+  );
+}
+
 export function usableMcp(held: VaultRecord[], now: number, clean: Clean): McpView[] {
   if (!clean) return [];
   const dead = deadGrants(held);
   const views: McpView[] = [];
-  for (const record of held) {
+  for (const record of usableRecords(held, now)) {
     const { name, server } = record;
-    if (record.kind !== 'mcp' || removed(record) || !server) continue;
-    const state = readiness(record, dead, now);
-    if (state !== 'expired' && clean(name) === name && clean(server) === server)
-      views.push({ name, server, state });
+    if (server && clean(name) === name && clean(server) === server)
+      views.push({ name, server, state: readiness(record, dead, now) as McpView['state'] });
   }
   return views.sort((a, b) => a.name.localeCompare(b.name));
 }
@@ -284,6 +293,10 @@ async function chosen(store: IDBObjectStore, wanted: string | undefined): Promis
     throw new Refused('EEXIST', 'that placeholder is already in use in this vault');
   }
   return wanted;
+}
+
+function disowned(existing: VaultRecord, input: SealInput): boolean {
+  return existing.source === 'process' && input.source !== 'process' && input.kind !== 'secret';
 }
 
 async function unused(store: IDBObjectStore): Promise<string> {
@@ -421,9 +434,11 @@ async function write(tx: IDBTransaction, input: SealInput, sealed: Sealed): Prom
     ns: input.ns,
     kind: input.kind,
     name: input.name,
-    placeholder: existing
-      ? kept(existing, input.placeholder)
-      : await chosen(store, input.placeholder),
+    placeholder: !existing
+      ? await chosen(store, input.placeholder)
+      : disowned(existing, input)
+        ? await unused(store)
+        : kept(existing, input.placeholder),
     sealed,
     source: input.source,
     createdAt: existing && !removed(existing) ? existing.createdAt : input.now,
