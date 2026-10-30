@@ -8,6 +8,7 @@ import {
   checkName,
   checkValue,
   find,
+  MAX_PROVIDER,
   records,
   removed,
   rulesFor,
@@ -181,7 +182,7 @@ function jerkFields(req: Fields): Fields {
   if (typeof req.jop !== 'string' || !JOPS.has(req.jop)) {
     throw new Refused('EINVAL', 'jop must be list, status or create');
   }
-  const provider = optional(req, 'provider', 128);
+  const provider = optional(req, 'provider', MAX_PROVIDER);
   const scope = optional(req, 'scope', 1024);
   if (req.jop !== 'list' && !provider)
     throw new Refused('EINVAL', `jop ${req.jop} needs a provider`);
@@ -264,7 +265,7 @@ function mcpStatus(
   const [found, ...others] = usable;
   if (!found || !root(stamp) || !root(entry.stamp)) {
     const message = `no token for ${provider} in seven's vault: run jerk ${provider} create`;
-    return { state: 'done', exit: 3, message };
+    return { state: 'done', ...(entry.jerk ? { jerk: entry.jerk } : {}), exit: 3, message };
   }
   if (reply.exit !== 0) return reply;
   if (others.length > 0)

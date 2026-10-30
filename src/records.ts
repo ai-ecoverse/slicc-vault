@@ -20,6 +20,7 @@ export const SOURCE = /^(?:settings|process|jerk:[^@\s]+@\S+|oauth:\S+|import:\S
 export const PLACEHOLDER = /^fnox_proxy_[0-9a-f]{24}$/;
 export const RESTORABLE = 30 * 24 * 60 * 60 * 1000;
 export const MIN_VALUE = 8;
+export const MAX_PROVIDER = 128;
 const CONTAINS_PLACEHOLDER = /fnox_proxy_[0-9a-f]{24}/;
 
 export interface VaultRecord {
@@ -226,7 +227,8 @@ export function usableMcp(held: VaultRecord[], now: number, clean: Clean): McpVi
   const views: McpView[] = [];
   for (const record of usableRecords(held, now)) {
     const { name, server } = record;
-    if (server && clean(name) === name && clean(server) === server)
+    const addressable = server && `mcp:${server}`.length <= MAX_PROVIDER;
+    if (addressable && clean(name) === name && clean(server) === server)
       views.push({ name, server, state: readiness(record, dead, now) as McpView['state'] });
   }
   return views.sort((a, b) => a.name.localeCompare(b.name));

@@ -434,6 +434,16 @@ test('list.mcp leaves out a name that holds a value', async (t) => {
   assert.deepEqual((await call(page, 'list')).list.mcp, []);
 });
 
+test('list.mcp leaves out a server too long for a jerk provider', async (t) => {
+  const page = await connected(t);
+  const server = 'x'.repeat(124);
+  await settings(page, 'LONGEST_MCP', server);
+  await settings(page, 'TOO_LONG_MCP', `${server}x`);
+  assert.deepEqual((await call(page, 'list')).list.mcp, [
+    { name: 'LONGEST_MCP', server, state: 'ready' },
+  ]);
+});
+
 test('list.mcp is empty while the vault is locked before its first unlock', async (t) => {
   const page = await connected(t);
   await settings(page);
