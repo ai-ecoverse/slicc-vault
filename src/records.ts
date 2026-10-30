@@ -1,6 +1,8 @@
 import { hex, random } from './bytes.ts';
 import type {
+  AgentRecord,
   BackupReminder,
+  McpView,
   RecordKind,
   RecordSource,
   RecordState,
@@ -191,7 +193,35 @@ export function device(source: RecordSource): string | null {
   return at < 0 ? null : source.slice(at + 1);
 }
 
+export function deadGrants(held: VaultRecord[]): Set<string> {
+  return new Set(held.filter((r) => r.kind === 'grant' && r.dead).map((r) => r.name));
+}
+
+export function readiness(
+  record: VaultRecord,
+  dead: Set<string>,
+  now: number
+): AgentRecord['state'] {
+  if (record.refresh !== undefined && dead.has(record.refresh)) return 'expired';
+  if (record.expiresAt === undefined || record.expiresAt > now) return 'ready';
+  return record.refresh === undefined ? 'expired' : 'refreshing';
+}
+
 export type Clean = ((text: string) => string) | null;
+
+export function usableMcp(held: VaultRecord[], now: number, clean: Clean): McpView[] {
+  if (!clean) return [];
+  const dead = deadGrants(held);
+  const views: McpView[] = [];
+  for (const record of held) {
+    const { name, server } = record;
+    if (record.kind !== 'mcp' || removed(record) || !server) continue;
+    const state = readiness(record, dead, now);
+    if (state !== 'expired' && clean(name) === name && clean(server) === server)
+      views.push({ name, server, state });
+  }
+  return views.sort((a, b) => a.name.localeCompare(b.name));
+}
 
 function shownBinding(record: VaultRecord, clean: Clean): Partial<SecretView> {
   if (!clean) return {};

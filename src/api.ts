@@ -30,6 +30,7 @@ import {
   SOURCE,
   seal,
   state,
+  usableMcp,
   type VaultRecord,
   view,
   withGrantBindings,
@@ -141,6 +142,7 @@ export async function list(vault: Vault, ns: string): Promise<VaultList> {
   const { audit: entries, more } = await audit(vault, ns);
   return {
     secrets,
+    mcp: usableMcp(held, now, clean),
     refused: policy.refused(),
     audit: entries,
     auditMore: more,

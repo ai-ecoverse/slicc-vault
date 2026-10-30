@@ -8,7 +8,9 @@ import {
   aad,
   binding,
   checkValue,
+  deadGrants,
   NAME,
+  readiness,
   records,
   removed,
   type SealInput,
@@ -412,25 +414,20 @@ export class Preparer {
     const shown = held.filter(
       (r) => (r.kind === 'model' || r.kind === 'mcp') && !removed(r) && plain(r)
     );
-    const dead = new Set(held.filter((r) => r.kind === 'grant' && r.dead).map((r) => r.name));
+    const dead = deadGrants(held);
     return {
-      records: shown.map((r) => {
-        const expired = r.expiresAt !== undefined && r.expiresAt <= now;
-        const buried = r.refresh !== undefined && dead.has(r.refresh);
-        const renews = r.refresh !== undefined && !buried;
-        return {
-          kind: r.kind,
-          name: r.name,
-          placeholder: r.placeholder,
-          state: buried ? 'expired' : expired ? (renews ? 'refreshing' : 'expired') : 'ready',
-          ...(r.provider === undefined ? {} : { provider: r.provider }),
-          ...(r.server === undefined ? {} : { server: r.server }),
-          ...(r.expiresAt === undefined || echoed(String(r.expiresAt))
-            ? {}
-            : { expiresAt: r.expiresAt }),
-          ...(r.settings === undefined ? {} : { settings: clean(r.settings) }),
-        };
-      }),
+      records: shown.map((r) => ({
+        kind: r.kind,
+        name: r.name,
+        placeholder: r.placeholder,
+        state: readiness(r, dead, now),
+        ...(r.provider === undefined ? {} : { provider: r.provider }),
+        ...(r.server === undefined ? {} : { server: r.server }),
+        ...(r.expiresAt === undefined || echoed(String(r.expiresAt))
+          ? {}
+          : { expiresAt: r.expiresAt }),
+        ...(r.settings === undefined ? {} : { settings: clean(r.settings) }),
+      })),
     };
   }
 
