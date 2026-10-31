@@ -396,6 +396,6 @@ export function build(accepted: Accepted, refuse: Refuse = () => false): Policy 
 export const EMPTY: Policy = build(NONE);
 
 export function running(policy: Policy): Policy {
-  if (policy.paused()) throw new Refused('EACCES', PAUSED);
+  if (policy.paused()) throw new Refused('EACCES', PAUSED, 'policy-paused');
   return policy;
 }

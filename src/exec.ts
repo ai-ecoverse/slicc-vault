@@ -4,7 +4,7 @@ import type { ExecMode, Stamp } from './contract.ts';
 import { all, request, transact } from './db.ts';
 import { Refused } from './errors.ts';
 import { decrypt } from './keys.ts';
-import { PAUSED, type Policy, running } from './policy.ts';
+import { type Policy, running } from './policy.ts';
 import { aad, audit, checkName, records, removed, type VaultRecord } from './records.ts';
 import { policyIn } from './rules.ts';
 import type { Vault } from './vault.ts';
@@ -324,10 +324,8 @@ export class Exec {
     const { policy, accepted } = await transact(this.vault.db, ['meta'], 'readonly', (tx) =>
       policyIn(tx, ns)
     );
-    if (policy.paused()) {
-      this.tickets.set(id, found);
-      throw new Refused('EACCES', PAUSED);
-    }
+    if (policy.paused()) this.tickets.set(id, found);
+    running(policy);
     granted(policy, found, chainOf(found, req));
     const key = this.vault.keyring.key;
     if (!key) throw new Refused('EACCES', 'vault is locked: unlock it in the vault window');
@@ -357,10 +355,8 @@ export class Exec {
       const { policy, accepted } = await policyIn(tx, ns);
       if (JSON.stringify(accepted) !== print) {
         this.tickets.set(found.ticket, found);
-        throw new Refused(
-          'EACCES',
-          policy.paused() ? PAUSED : 'ticket refused: the policy changed meanwhile'
-        );
+        running(policy);
+        throw new Refused('EACCES', 'ticket refused: the policy changed meanwhile');
       }
       const store = tx.objectStore('audit');
       for (const entry of await all<StoredReveal & { ticket: string }>(tx, 'audit', ns)) {

@@ -1,4 +1,5 @@
-import type { ExitName, Rule, Stamp } from './contract.ts';
+import type { ErrorCause, ExitName, Rule, Stamp } from './contract.ts';
+import { caused } from './errors.ts';
 import { decrypt } from './keys.ts';
 import { PAUSED, type Policy } from './policy.ts';
 import { aad, removed, rulesFor, type VaultRecord } from './records.ts';
@@ -38,7 +39,7 @@ export type Prepared =
       path: string;
       server: McpServer | null;
     }
-  | { ok: false; status: number; reason: string };
+  | { ok: false; status: number; reason: string; cause?: ErrorCause };
 
 export interface Inputs {
   ns: string;
@@ -56,10 +57,12 @@ export interface Inputs {
 
 class Refusal extends Error {
   readonly status: number;
+  override readonly cause?: ErrorCause;
 
-  constructor(reason: string, status = 403) {
+  constructor(reason: string, status = 403, cause?: ErrorCause) {
     super(reason);
     this.status = status;
+    this.cause = cause;
   }
 }
 
@@ -189,7 +192,7 @@ class Injector {
 
   rule(record: VaultRecord, header: string): Rule {
     const { policy, exit } = this.input;
-    if (policy.paused()) throw new Refusal(PAUSED);
+    if (policy.paused()) throw new Refusal(PAUSED, 403, 'policy-paused');
     const rules = rulesFor(record, policy).filter((rule) => rule.protocol === undefined);
     const found = rules.find((rule) => matches(rule, this.method, this.host, this.path, header));
     if (!found) {
@@ -315,7 +318,10 @@ export async function prepare(input: Inputs): Promise<Prepared> {
   try {
     return await new Injector(input).run();
   } catch (error) {
-    if (error instanceof Refusal) return { ok: false, status: error.status, reason: error.message };
+    if (error instanceof Refusal) {
+      const { status, message: reason, cause } = error;
+      return { ok: false, status, reason, ...caused(cause) };
+    }
     throw error;
   }
 }
