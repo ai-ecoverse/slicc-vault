@@ -98,6 +98,11 @@ export async function start(options: Options = {}): Promise<Vault> {
         changed: () => vault.changed(ns, ['secrets', 'requests', 'audit']),
         emit: (event) => vault.emit(ns, event),
         sudoGid: () => vault.sudoGids.get(ns) ?? null,
+        clean: async () => {
+          const scrubber = await vault.scrubbers.get(ns);
+          return scrubber ? (text) => scrubber.text(text).text : null;
+        },
+        holdsAnother: (record, value) => vault.scrubbers.holdsAnother(ns, record, value),
       };
     },
     async scrub(ns) {
@@ -115,6 +120,7 @@ export async function start(options: Options = {}): Promise<Vault> {
       return {
         version: config.version,
         protocol: 1,
+        capabilities: { forward: 1 },
         origin: ns,
         locked: keyring.locked,
         lock: keyring.mode,

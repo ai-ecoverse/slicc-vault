@@ -5,6 +5,8 @@ import { prepare } from './inject.ts';
 import type { Keyring } from './lock.ts';
 import type { Policy } from './policy.ts';
 import {
+  addressable,
+  type Clean,
   checkName,
   checkValue,
   find,
@@ -13,7 +15,6 @@ import {
   removed,
   rulesFor,
   seal,
-  serverRecord,
   state,
   usableRecords,
   type VaultRecord,
@@ -35,6 +36,8 @@ export interface Context {
   changed(): Promise<void>;
   emit(event: VaultEvent): void;
   sudoGid(): number | null;
+  clean(): Promise<Clean>;
+  holdsAnother(record: VaultRecord, value: string): Promise<boolean>;
 }
 
 type Fields = Record<string, unknown>;
@@ -116,15 +119,27 @@ function root(stamp: Stamp): boolean {
   return stamp.uid === 0 && stamp.users === 'enforce';
 }
 
-async function rootMcp(ctx: Context, name: string, server: unknown, stamp: Stamp) {
-  if (!root(stamp) || typeof server !== 'string') return undefined;
-  const found = await find(ctx.db, ctx.ns, 'mcp', name);
-  return found && serverRecord(found) && found.server === server ? found : undefined;
+async function rootMcp(ctx: Context, req: Fields, server: string) {
+  const name = req.name === undefined ? undefined : checkName(req.name);
+  const held = await records(ctx.db, ctx.ns);
+  const bound = addressable(held, ctx.now(), await ctx.clean()).filter(
+    (r) => r.server === server && (name === undefined || r.name === name)
+  );
+  const [found, ...others] = bound;
+  if (!found) {
+    const none =
+      name === undefined ? `no mcp record is bound to ${server}` : `no record named ${name}`;
+    throw new Refused('ENOENT', none);
+  }
+  if (others.length > 0)
+    throw new Refused('EINVAL', `several mcp records are bound to ${server}; ask for one by name`);
+  const placeholder = found.placeholder;
+  return { placeholder, state: state(found, ctx.policy(), ctx.now()), kind: 'mcp' };
 }
 
 const placeholderOp: Handler = async (ctx, req, stamp) => {
-  const name = checkName(req.name);
-  const found = (await rootMcp(ctx, name, req.server, stamp)) ?? (await record(ctx, name));
+  if (root(stamp) && typeof req.server === 'string') return rootMcp(ctx, req, req.server);
+  const found = await record(ctx, checkName(req.name));
   return { placeholder: found.placeholder, state: state(found, ctx.policy(), ctx.now()) };
 };
 
@@ -162,12 +177,13 @@ const testOp: Handler = async (ctx, req, stamp) => {
     head: { method, url: url.href, headers: [[header, `Bearer ${found.placeholder}`]] },
     owner: stamp,
     exit: exit as ExitName,
-    traits: { manualRedirects: exit !== 'page', encodedBodies: false },
+    traits: { manualRedirects: true, encodedBodies: false },
     records: held,
     policy: ctx.policy(),
     registered,
     key: ctx.keyring.key,
     now: ctx.now(),
+    holdsAnother: ctx.holdsAnother,
   });
   if (!prepared.ok) return { verdict: 'refuse', reason: prepared.reason };
   return {

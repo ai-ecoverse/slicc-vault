@@ -1,0 +1,31 @@
+{
+  "description": "/etc writable by others",
+  "trusted": false,
+  "reason": "a parent directory isn't root-owned",
+  "attestation": {
+    "path": "/etc/fnox/config.toml",
+    "absent": true,
+    "users": "enforce",
+    "onRootFs": true,
+    "parents": [
+      {
+        "path": "/",
+        "uid": 0,
+        "gid": 0,
+        "mode": 16877
+      },
+      {
+        "path": "/etc",
+        "uid": 0,
+        "gid": 0,
+        "mode": 16895
+      },
+      {
+        "path": "/etc/fnox",
+        "uid": 0,
+        "gid": 0,
+        "mode": 16877
+      }
+    ]
+  }
+}

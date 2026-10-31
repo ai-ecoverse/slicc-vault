@@ -1,6 +1,6 @@
 import type { ExitName, Rule, Stamp } from './contract.ts';
 import { decrypt } from './keys.ts';
-import type { Policy } from './policy.ts';
+import { PAUSED, type Policy } from './policy.ts';
 import { aad, removed, rulesFor, type VaultRecord } from './records.ts';
 import {
   holds,
@@ -26,6 +26,7 @@ export interface Traits {
 export interface Injection {
   name: string;
   rule: Rule | null;
+  record: VaultRecord;
 }
 
 export type Prepared =
@@ -50,6 +51,7 @@ export interface Inputs {
   registered: Registered;
   key: CryptoKey | null;
   now: number;
+  holdsAnother(record: VaultRecord, value: string): Promise<boolean>;
 }
 
 class Refusal extends Error {
@@ -186,7 +188,8 @@ class Injector {
   }
 
   rule(record: VaultRecord, header: string): Rule {
-    const { policy, exit, traits } = this.input;
+    const { policy, exit } = this.input;
+    if (policy.paused()) throw new Refusal(PAUSED);
     const rules = rulesFor(record, policy).filter((rule) => rule.protocol === undefined);
     const found = rules.find((rule) => matches(rule, this.method, this.host, this.path, header));
     if (!found) {
@@ -202,9 +205,6 @@ class Injector {
     const exits = policy.exits(record.name);
     if (exits && !exits.includes(exit)) {
       throw new Refusal(`${record.name} isn't allowed on ${exit} (/etc/slicc/secrets-policy.toml)`);
-    }
-    if (header !== 'authorization' && !traits.manualRedirects) {
-      throw new Refusal(`${record.name} in ${header} needs an exit that doesn't follow redirects`);
     }
     return found;
   }
@@ -229,13 +229,19 @@ class Injector {
         );
       }
       const rule = kind === 'secret' ? this.rule(record, header) : null;
+      if (!this.input.traits.manualRedirects) {
+        throw new Refusal(`${record.name} needs an exit that doesn't follow redirects`);
+      }
       const value = await decrypt(
         this.input.key as CryptoKey,
         record.sealed,
         aad(record.ns, record.kind, record.name)
       );
+      if (await this.input.holdsAnother(record, value)) {
+        throw new Refusal(`${record.name}'s value contains another stored value`);
+      }
       out = out.replace(placeholder, value);
-      this.injected.push({ name: record.name, rule });
+      this.injected.push({ name: record.name, rule, record });
     }
     return out;
   }

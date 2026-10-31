@@ -210,7 +210,8 @@ test('endpoints the page registers are refused for secrets, at parse and at requ
     },
     owner: OWNER,
     exit: 'page',
-    rawTraits: {},
+    bodyPresent: false,
+    rawTraits: { manualRedirects: true },
   });
   assert.match(mcpPath.reply.refused.reason, /docs.example.com is a model or MCP endpoint/);
   const elsewhere = await page.evaluate((fields) => window.harness.forward(fields), {
@@ -221,7 +222,8 @@ test('endpoints the page registers are refused for secrets, at parse and at requ
     },
     owner: OWNER,
     exit: 'page',
-    rawTraits: {},
+    bodyPresent: false,
+    rawTraits: { manualRedirects: true },
   });
   assert.ok(elsewhere.reply.head);
   const sent = await page.evaluate((fields) => window.harness.forward(fields), {
@@ -232,7 +234,8 @@ test('endpoints the page registers are refused for secrets, at parse and at requ
     },
     owner: OWNER,
     exit: 'page',
-    rawTraits: {},
+    bodyPresent: false,
+    rawTraits: { manualRedirects: true },
   });
   assert.match(sent.reply.refused.reason, /model or MCP endpoint/);
   for (const bad of [
@@ -275,7 +278,8 @@ test('a kernel request to a registered MCP server gets only that server credenti
     body,
     owner: OWNER,
     exit: 'page',
-    rawTraits: {},
+    bodyPresent: body !== undefined,
+    rawTraits: { manualRedirects: true },
   });
   const response = {
     head: { status: 200, statusText: 'OK', url: `${SERVER}/call`, headers: [] },
@@ -340,7 +344,8 @@ test('a kernel request to a registered MCP server gets no credential while kerne
     body: '{}',
     owner: { ...OWNER, users: 'off' },
     exit: 'page',
-    rawTraits: {},
+    bodyPresent: true,
+    rawTraits: { manualRedirects: true },
   });
   assert.deepEqual(sent.reply.refused, { status: 403, reason: 'kernel users must be enforce' });
   assert.ok(!JSON.stringify(sent).includes(VALUE_M));

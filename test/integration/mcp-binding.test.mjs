@@ -119,7 +119,8 @@ test('NEGATIVE an MCP credential is never filled on a model endpoint or, unless 
     body: '{}',
     owner: OWNER,
     exit: 'page',
-    rawTraits: {},
+    bodyPresent: true,
+    rawTraits: { manualRedirects: true },
   });
   assert.match(
     forwarded.reply.refused.reason,
@@ -174,7 +175,8 @@ test('NEGATIVE an agent cannot add names or a tokenUrl to a page server', async 
     body: '{}',
     owner: OWNER,
     exit: 'page',
-    rawTraits: {},
+    bodyPresent: true,
+    rawTraits: { manualRedirects: true },
   });
   assert.match(
     forwarded.reply.refused.reason,
@@ -202,7 +204,8 @@ test('NEGATIVE an agent server on the same host never shadows a page server for 
     body: '{}',
     owner: OWNER,
     exit: 'page',
-    rawTraits: {},
+    bodyPresent: true,
+    rawTraits: { manualRedirects: true },
   });
   assert.deepEqual(sent.reply.head.headers, [['Authorization', `Bearer ${DOCS}`]]);
   const audit = (await page.evaluate(() => window.harness.call('audit', { limit: 1 }))).audit[0];

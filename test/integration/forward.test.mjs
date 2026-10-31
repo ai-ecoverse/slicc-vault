@@ -43,7 +43,8 @@ test('forward injects within the rule and scrubs the response', async (t) => {
     head: head('https://api.example.com/v1/items', [['Authorization', `Bearer ${a}`]]),
     owner: OWNER,
     exit: 'page',
-    rawTraits: {},
+    bodyPresent: false,
+    rawTraits: { manualRedirects: true },
   };
   const response = {
     head: {
@@ -91,7 +92,8 @@ test('an [exits] line names a same-computer CLI by its local device id, colon in
     head: head('https://api.example.com/v1/items', [['Authorization', `Bearer ${a}`]]),
     owner: OWNER,
     exit,
-    rawTraits: {},
+    bodyPresent: false,
+    rawTraits: { manualRedirects: true },
   });
   const sent = await send(page, fields(local));
   assert.deepEqual(sent.reply.head.headers, [['Authorization', `Bearer ${VALUE_A}`]]);
@@ -183,7 +185,8 @@ test('Basic credentials are decoded, injected and re-encoded', async (t) => {
     head: head('https://api.example.com/v1/repo', headers),
     owner: OWNER,
     exit: 'page',
-    rawTraits: {},
+    bodyPresent: false,
+    rawTraits: { manualRedirects: true },
   });
   const pass = await send(page, fields(basic(`x-access-token:${a}`)));
   assert.deepEqual(pass.reply.head.headers, basic(`x-access-token:${VALUE_A}`));
@@ -232,7 +235,8 @@ test('lock has no effect on an auto-unlocking vault, which keeps injecting and s
     head: head('https://api.example.com/v1/items', [['Authorization', `Bearer ${a}`]]),
     owner: OWNER,
     exit: 'page',
-    rawTraits: {},
+    bodyPresent: false,
+    rawTraits: { manualRedirects: true },
   };
   await page.evaluate(() => window.harness.call('lock'));
   const locked = await page.evaluate(() => window.harness.call('status'));
@@ -250,7 +254,8 @@ test('forward injects nothing while kernel users is not enforce', async (t) => {
       head: head('https://api.example.com/v1/items', [['Authorization', `Bearer ${a}`]]),
       owner: users ? { ...bare, users } : bare,
       exit: 'page',
-      rawTraits: {},
+      bodyPresent: false,
+      rawTraits: { manualRedirects: true },
     });
     assert.deepEqual(reply.refused, { status: 403, reason: 'kernel users must be enforce' });
     assert.ok(!JSON.stringify(reply).includes(VALUE_A));

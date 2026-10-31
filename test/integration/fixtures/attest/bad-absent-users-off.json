@@ -1,0 +1,31 @@
+{
+  "description": "users 'off'",
+  "trusted": false,
+  "reason": "kernel users must be enforce",
+  "attestation": {
+    "path": "/etc/fnox/config.toml",
+    "absent": true,
+    "users": "off",
+    "onRootFs": true,
+    "parents": [
+      {
+        "path": "/",
+        "uid": 0,
+        "gid": 0,
+        "mode": 16877
+      },
+      {
+        "path": "/etc",
+        "uid": 0,
+        "gid": 0,
+        "mode": 16877
+      },
+      {
+        "path": "/etc/fnox",
+        "uid": 0,
+        "gid": 0,
+        "mode": 16877
+      }
+    ]
+  }
+}

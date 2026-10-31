@@ -2,10 +2,11 @@ import type { Scrubber, Stream } from '@ai-ecoverse/slicc-scrub';
 import type { ExitName } from './contract.ts';
 import { all, request, transact } from './db.ts';
 import { Refused } from './errors.ts';
-import { type Head, type Prepared, prepare, type Traits } from './inject.ts';
-import { audit, records, type VaultRecord } from './records.ts';
+import { type Head, type Injection, type Prepared, prepare, type Traits } from './inject.ts';
+import { MAX_BODY } from './prepare.ts';
+import { audit, records, removed, scrubIn, type VaultRecord } from './records.ts';
 import { holds, type McpServer, mcpServer, modelRefused, refusedUrl, tofu } from './refusal.ts';
-import { endpointsIn, loadRegistered, migrate, pin } from './rules.ts';
+import { loadRegistered, migrate, pin, policyIn } from './rules.ts';
 import { checkStamp } from './sealed.ts';
 import type { Vault } from './vault.ts';
 
@@ -55,6 +56,35 @@ function bodyOf(value: unknown): Uint8Array | null {
   throw new Refused('EINVAL', 'body must be bytes or a string');
 }
 
+function unsendable(present: unknown, body: Uint8Array | null): Fields | null {
+  if (typeof present !== 'boolean') {
+    return { refused: { status: 400, reason: 'an MCP request must say whether it has a body' } };
+  }
+  if (present && !body) return { needsBody: true };
+  if (!present && body) {
+    return {
+      refused: { status: 400, reason: 'an MCP request that says it has no body carries one' },
+    };
+  }
+  if (body && body.byteLength > MAX_BODY) {
+    throw new Refused('EINVAL', 'request bodies are at most 32 MiB');
+  }
+  return null;
+}
+
+function moved(injected: Injection[], live: VaultRecord[]): boolean {
+  return injected.some(({ record }) => {
+    const found = live.find((r) => r.kind === record.kind && r.name === record.name);
+    return (
+      !found ||
+      removed(found) ||
+      found.placeholder !== record.placeholder ||
+      found.updatedAt !== record.updatedAt ||
+      found.unpins !== record.unpins
+    );
+  });
+}
+
 async function record(
   vault: Vault,
   ns: string,
@@ -93,7 +123,8 @@ async function record(
 export function relay(
   port: MessagePort,
   scrubber: Scrubber,
-  succeeded: () => void = () => {}
+  succeeded: () => void = () => {},
+  credit = false
 ): void {
   const stream: Stream = scrubber.stream();
   let timer: ReturnType<typeof setTimeout> | undefined;
@@ -121,7 +152,9 @@ export function relay(
         headers: headers.map((pair) => [text(pair[0]), text(pair[1])]),
       });
     } else if (data.op === 'body' && data.chunk instanceof Uint8Array) {
+      const bytes = data.chunk.byteLength;
       send(stream.push(data.chunk));
+      if (credit) port.postMessage({ op: 'credit', bytes });
       timer = setTimeout(() => send(stream.idle()), scrubber.idleMs);
     } else if (data.op === 'end') {
       send(stream.end());
@@ -144,7 +177,6 @@ export async function forward(
   const head = checkHead(fields.head);
   const exit = checkExit(fields.exit);
   const traits = checkTraits(fields.rawTraits);
-  const body = bodyOf(fields.body);
   const early = await vault.scrubbers.get(ns);
   const tidy = early ? (text: string) => early.text(text).text : null;
   if (tidy && (await migrate(vault.db, ns, vault.now(), tidy))) {
@@ -162,20 +194,28 @@ export async function forward(
     exit,
     traits,
     records: held,
-    policy: vault.policy(ns),
+    policy: await vault.loadPolicy(ns),
     registered,
     key: vault.keyring.key,
     now: vault.now(),
+    holdsAnother: (found, value) => vault.scrubbers.holdsAnother(ns, found, value),
   });
   if (!prepared.ok) return { refused: { status: prepared.status, reason: prepared.reason } };
+  const body = prepared.server ? bodyOf(fields.body) : null;
+  const unready = prepared.server ? unsendable(fields.bodyPresent, body) : null;
+  if (unready) return unready;
   const scrubber = (await vault.scrubbers.get(ns)) as Scrubber;
   const current = async () => {
-    const [fresh, live] = await transact(vault.db, ['meta', 'records'], 'readonly', (tx) =>
-      Promise.all([endpointsIn(tx, ns), all<VaultRecord>(tx, 'records', ns)])
+    const [{ policy, registered: fresh }, live, version] = await transact(
+      vault.db,
+      ['meta', 'records'],
+      'readonly',
+      (tx) => Promise.all([policyIn(tx, ns), all<VaultRecord>(tx, 'records', ns), scrubIn(tx, ns)])
     );
+    if (version !== scrubber.version || moved(prepared.injected, live)) return false;
     const url = new URL(head.url);
     const server = prepared.server;
-    if (!server) return !refusedUrl(fresh, url);
+    if (!server) return !refusedUrl(fresh, url) && !policy.paused();
     const now = mcpServer(fresh, url);
     return (
       now?.server === server.server &&
@@ -207,8 +247,10 @@ export async function forward(
       done.pinned ? vault.changed(ns, ['secrets', 'audit']) : undefined
     );
   };
-  const scrubbed = prepared.server && body ? { body: scrubber.bytes(body).bytes } : {};
+  const scrubbed = server && body ? { body: scrubber.bytes(body).bytes } : {};
   if (!(await current())) return stale;
-  if (port) relay(port, scrubber, succeeded);
-  return { head: prepared.head, ...scrubbed };
+  if (port) relay(port, scrubber, succeeded, fields.streamCredit === true);
+  return server
+    ? { mode: 'mcp', head: prepared.head, bodyComplete: true, ...scrubbed }
+    : { mode: 'secret', head: prepared.head };
 }

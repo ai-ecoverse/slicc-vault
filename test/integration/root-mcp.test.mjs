@@ -55,7 +55,7 @@ test('root gets the placeholder of a Settings mcp record by name and server', as
   const page = await connected(t);
   const put = await settings(page);
   const got = await sealed(page, { op: 'placeholder', name: 'DOCS_MCP', server: 'docs' }, ROOT);
-  assert.deepEqual(got, { v: 1, placeholder: put.placeholder, state: 'inert' });
+  assert.deepEqual(got, { v: 1, placeholder: put.placeholder, state: 'inert', kind: 'mcp' });
 });
 
 test('NEGATIVE a cone in the sudo group gets the answer for no record', async (t) => {
@@ -121,14 +121,95 @@ test('NEGATIVE root gets nothing for a removed mcp record', async (t) => {
   assert.deepEqual(got, noRecord('DOCS_MCP'));
 });
 
-test('NEGATIVE a secret-only name keeps its answer, with a server or without', async (t) => {
+test('NEGATIVE a secret-only name keeps its answer but for root with a server', async (t) => {
   const page = await connected(t);
   const put = await call(page, 'put', { name: 'PLAIN_KEY', value: VALUE });
   const today = { v: 1, placeholder: put.placeholder, state: 'inert' };
-  for (const stamp of [ROOT, SUDOER]) {
-    const got = await sealed(page, { op: 'placeholder', name: 'PLAIN_KEY', server: 'docs' }, stamp);
-    assert.deepEqual(got, today);
+  const request = { op: 'placeholder', name: 'PLAIN_KEY', server: 'docs' };
+  assert.deepEqual(await sealed(page, request, SUDOER), today);
+  assert.deepEqual(await sealed(page, request, REPORT), today);
+  assert.deepEqual(await sealed(page, { ...request, server: undefined }, ROOT), today);
+  assert.deepEqual(await sealed(page, request, ROOT), noRecord('PLAIN_KEY'));
+});
+
+test('root gets the one usable record of a server without a name', async (t) => {
+  const page = await connected(t);
+  const put = await settings(page);
+  await bridge(page, 'BRIDGE_TOKEN');
+  const got = await sealed(page, { op: 'placeholder', server: 'docs' }, ROOT);
+  assert.deepEqual(got, { v: 1, placeholder: put.placeholder, state: 'inert', kind: 'mcp' });
+});
+
+test('several usable records of a server are EINVAL for root without a name', async (t) => {
+  const page = await connected(t);
+  await settings(page);
+  await settings(page, 'DOCS_OTHER');
+  const got = await sealed(page, { op: 'placeholder', server: 'docs' }, ROOT);
+  assert.deepEqual(got.error, {
+    code: 'EINVAL',
+    message: 'several mcp records are bound to docs; ask for one by name',
+  });
+  const named = await sealed(page, { op: 'placeholder', name: 'DOCS_OTHER', server: 'docs' }, ROOT);
+  assert.equal(named.kind, 'mcp');
+});
+
+test('NEGATIVE root gets ENOENT from a server with no usable record', async (t) => {
+  const page = await connected(t);
+  const none = (server) => ({
+    v: 1,
+    error: { code: 'ENOENT', message: `no mcp record is bound to ${server}` },
+  });
+  const ask = (server) => sealed(page, { op: 'placeholder', server }, ROOT);
+  assert.deepEqual(await ask('docs'), none('docs'));
+  await settings(page);
+  assert.deepEqual(await ask('other'), none('other'));
+  await call(page, 'remove', { name: 'DOCS_MCP', kind: 'mcp' });
+  assert.deepEqual(await ask('docs'), none('docs'));
+  await call(page, 'put', { name: 'PLAIN_DOCS', value: VALUE });
+  await bridge(page, 'BRIDGE_TOKEN', 'loop');
+  assert.deepEqual(await ask('loop'), none('loop'));
+  await call(page, 'seal', {
+    name: 'OLD_MCP',
+    value: 'fake-expired-mcp-0703',
+    kind: 'mcp',
+    server: 'old',
+    source: 'settings',
+    expiresAt: Date.now() - 1,
+  });
+  assert.deepEqual(await ask('old'), none('old'));
+  const held = await sealed(
+    page,
+    { op: 'seal', name: 'HELD_SERVER', value: 'fake-held-0704' },
+    CONE
+  );
+  assert.ok(held.placeholder);
+  await call(page, 'put', {
+    name: 'NAMED_MCP',
+    value: VALUE,
+    kind: 'mcp',
+    server: 'fake-held-0704',
+  });
+  assert.deepEqual(await ask('fake-held-0704'), none('fake-held-0704'));
+});
+
+test('NEGATIVE only root gets a server-only answer, and no other caller a kind', async (t) => {
+  const page = await connected(t);
+  await settings(page);
+  const secret = await call(page, 'put', { name: 'DOCS_MCP', value: 'fake-secret-name-0705' });
+  const invalid = {
+    v: 1,
+    error: { code: 'EINVAL', message: 'name must match ^[A-Za-z_][A-Za-z0-9_]*$' },
+  };
+  for (const stamp of [SUDOER, CONE, SCOOP, REPORT, UNSTAMPED]) {
+    assert.deepEqual(await sealed(page, { op: 'placeholder', server: 'docs' }, stamp), invalid);
+    assert.deepEqual(
+      await sealed(page, { op: 'placeholder', name: 'DOCS_MCP', server: 'docs' }, stamp),
+      { v: 1, placeholder: secret.placeholder, state: 'inert' }
+    );
   }
+  assert.deepEqual(await sealed(page, { op: 'placeholder' }, ROOT), invalid);
+  const plain = await sealed(page, { op: 'placeholder', name: 'DOCS_MCP' }, ROOT);
+  assert.deepEqual(plain, { v: 1, placeholder: secret.placeholder, state: 'inert' });
 });
 
 test('a name held by a secret and an mcp record answers by the caller and the server', async (t) => {
@@ -344,7 +425,8 @@ test('NEGATIVE a process placeholder is not filled after a page write', async (t
     body: '{}',
     owner: SCOOP,
     exit: 'page',
-    rawTraits: {},
+    bodyPresent: true,
+    rawTraits: { manualRedirects: true },
   });
   assert.ok(sent.reply.refused);
   assert.ok(!JSON.stringify(sent).includes(VALUE));
@@ -432,6 +514,8 @@ test('list.mcp leaves out a name that holds a value', async (t) => {
   await call(page, 'put', { name: 'NAMED_KEY', value: 'FAKE_NAME_VALUE_0708' });
   await settings(page, 'FAKE_NAME_VALUE_0708');
   assert.deepEqual((await call(page, 'list')).list.mcp, []);
+  const got = await sealed(page, { op: 'placeholder', server: 'docs' }, ROOT);
+  assert.equal(got.error.code, 'ENOENT');
 });
 
 test('list.mcp leaves out a server too long for a jerk provider', async (t) => {
@@ -476,7 +560,8 @@ const forwarded = (page, url, placeholder, status) =>
       body: '{}',
       owner: ROOT,
       exit: 'page',
-      rawTraits: {},
+      bodyPresent: true,
+      rawTraits: { manualRedirects: true },
     },
     status
   );

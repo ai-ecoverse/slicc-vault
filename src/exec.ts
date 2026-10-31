@@ -4,7 +4,7 @@ import type { ExecMode, Stamp } from './contract.ts';
 import { all, request, transact } from './db.ts';
 import { Refused } from './errors.ts';
 import { decrypt } from './keys.ts';
-import type { Policy } from './policy.ts';
+import { type Policy, running } from './policy.ts';
 import { aad, audit, checkName, records, removed, type VaultRecord } from './records.ts';
 import type { Vault } from './vault.ts';
 
@@ -252,7 +252,7 @@ export class Exec {
     if (stamp.users !== 'enforce') throw new Refused('EACCES', ENFORCE);
     this.sweep(this.vault.now());
     const ask = asked(req);
-    const policy = await this.vault.loadPolicy(ns);
+    const policy = running(await this.vault.loadPolicy(ns));
     if (this.vault.keyring.locked)
       throw new Refused('EACCES', 'vault is locked: unlock it in the vault window');
     const names = [...new Set([...ask.names, ...(ask.shellGrants ? policy.shells() : [])])];
@@ -320,7 +320,7 @@ export class Exec {
     if (!found || found.ns !== ns) return fail('unknown or already used');
     if ((req.stamp as Partial<Stamp> | undefined)?.users !== 'enforce') fail(ENFORCE);
     matching(found, req, this.vault.now());
-    granted(await this.vault.loadPolicy(ns), found, chainOf(found, req));
+    granted(running(await this.vault.loadPolicy(ns)), found, chainOf(found, req));
     const key = this.vault.keyring.key;
     if (!key) throw new Refused('EACCES', 'vault is locked: unlock it in the vault window');
     const held = await records(this.vault.db, ns);

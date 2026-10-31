@@ -221,17 +221,23 @@ export function usableRecords(held: VaultRecord[], now: number): VaultRecord[] {
   );
 }
 
-export function usableMcp(held: VaultRecord[], now: number, clean: Clean): McpView[] {
+export function addressable(held: VaultRecord[], now: number, clean: Clean): VaultRecord[] {
   if (!clean) return [];
+  return usableRecords(held, now).filter(({ name, server }) => {
+    const fits = server && `mcp:${server}`.length <= MAX_PROVIDER;
+    return fits && clean(name) === name && clean(server) === server;
+  });
+}
+
+export function usableMcp(held: VaultRecord[], now: number, clean: Clean): McpView[] {
   const dead = deadGrants(held);
-  const views: McpView[] = [];
-  for (const record of usableRecords(held, now)) {
-    const { name, server } = record;
-    const addressable = server && `mcp:${server}`.length <= MAX_PROVIDER;
-    if (addressable && clean(name) === name && clean(server) === server)
-      views.push({ name, server, state: readiness(record, dead, now) as McpView['state'] });
-  }
-  return views.sort((a, b) => a.name.localeCompare(b.name));
+  return addressable(held, now, clean)
+    .map((record) => ({
+      name: record.name,
+      server: record.server as string,
+      state: readiness(record, dead, now) as McpView['state'],
+    }))
+    .sort((a, b) => a.name.localeCompare(b.name));
 }
 
 function shownBinding(record: VaultRecord, clean: Clean): Partial<SecretView> {

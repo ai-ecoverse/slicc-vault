@@ -171,7 +171,8 @@ test("NEGATIVE denial of service: an agent's registrations never make a user's s
       head: { method: 'GET', url, headers: [['Authorization', `Bearer ${gh.placeholder}`]] },
       owner: OWNER,
       exit: 'page',
-      rawTraits: {},
+      bodyPresent: false,
+      rawTraits: { manualRedirects: true },
     });
     assert.deepEqual(sent.reply.head.headers, [['Authorization', `Bearer ${GH}`]], url);
   }

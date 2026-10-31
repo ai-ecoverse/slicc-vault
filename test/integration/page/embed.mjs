@@ -118,13 +118,23 @@ async function forward(fields, response = null) {
   if (!response || !reply.head) return { reply, parts };
   channel.port1.postMessage({ op: 'response', ...response.head });
   for (const chunk of response.chunks) {
+    if (typeof chunk !== 'string') {
+      channel.port1.postMessage({ op: 'body', chunk });
+      continue;
+    }
     const bytes = new TextEncoder().encode(chunk);
     channel.port1.postMessage({ op: 'body', chunk: bytes }, [bytes.buffer]);
   }
+  if (response.wait) await new Promise((resolve) => setTimeout(resolve, response.wait));
   channel.port1.postMessage(
     response.error ? { op: 'error', message: response.error } : { op: 'end' }
   );
+  if (response.late) {
+    const bytes = new TextEncoder().encode(response.late);
+    channel.port1.postMessage({ op: 'body', chunk: bytes }, [bytes.buffer]);
+  }
   await done;
+  if (response.late) await new Promise((resolve) => setTimeout(resolve, 100));
   return { reply, parts };
 }
 
