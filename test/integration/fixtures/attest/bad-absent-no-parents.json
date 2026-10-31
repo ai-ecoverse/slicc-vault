@@ -1,0 +1,11 @@
+{
+  "description": "no parents",
+  "trusted": false,
+  "reason": "isn't in the kernel's format",
+  "attestation": {
+    "path": "/etc/fnox/config.toml",
+    "absent": true,
+    "users": "enforce",
+    "onRootFs": true
+  }
+}

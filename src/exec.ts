@@ -4,8 +4,9 @@ import type { ExecMode, Stamp } from './contract.ts';
 import { all, request, transact } from './db.ts';
 import { Refused } from './errors.ts';
 import { decrypt } from './keys.ts';
-import type { Policy } from './policy.ts';
+import { PAUSED, type Policy, running } from './policy.ts';
 import { aad, audit, checkName, records, removed, type VaultRecord } from './records.ts';
+import { policyIn } from './rules.ts';
 import type { Vault } from './vault.ts';
 
 export const TICKET_LIFETIME = 30 * 1000;
@@ -252,7 +253,7 @@ export class Exec {
     if (stamp.users !== 'enforce') throw new Refused('EACCES', ENFORCE);
     this.sweep(this.vault.now());
     const ask = asked(req);
-    const policy = await this.vault.loadPolicy(ns);
+    const policy = running(await this.vault.loadPolicy(ns));
     if (this.vault.keyring.locked)
       throw new Refused('EACCES', 'vault is locked: unlock it in the vault window');
     const names = [...new Set([...ask.names, ...(ask.shellGrants ? policy.shells() : [])])];
@@ -320,7 +321,14 @@ export class Exec {
     if (!found || found.ns !== ns) return fail('unknown or already used');
     if ((req.stamp as Partial<Stamp> | undefined)?.users !== 'enforce') fail(ENFORCE);
     matching(found, req, this.vault.now());
-    granted(await this.vault.loadPolicy(ns), found, chainOf(found, req));
+    const { policy, accepted } = await transact(this.vault.db, ['meta'], 'readonly', (tx) =>
+      policyIn(tx, ns)
+    );
+    if (policy.paused()) {
+      this.tickets.set(id, found);
+      throw new Refused('EACCES', PAUSED);
+    }
+    granted(policy, found, chainOf(found, req));
     const key = this.vault.keyring.key;
     if (!key) throw new Refused('EACCES', 'vault is locked: unlock it in the vault window');
     const held = await records(this.vault.db, ns);
@@ -333,7 +341,7 @@ export class Exec {
       if (expired(record, this.vault.now())) fail(`${name} expired`);
       values[name] = await decrypt(key, record.sealed, aad(record.ns, record.kind, record.name));
     }
-    await this.mark(ns, found);
+    await this.mark(ns, found, JSON.stringify(accepted));
     return {
       values: Object.fromEntries(Object.entries(values)),
       placeholders: Object.fromEntries(
@@ -344,8 +352,16 @@ export class Exec {
     };
   }
 
-  async mark(ns: string, found: Ticket): Promise<void> {
-    await transact(this.vault.db, ['audit'], 'readwrite', async (tx) => {
+  async mark(ns: string, found: Ticket, print: string): Promise<void> {
+    await transact(this.vault.db, ['meta', 'audit'], 'readwrite', async (tx) => {
+      const { policy, accepted } = await policyIn(tx, ns);
+      if (JSON.stringify(accepted) !== print) {
+        this.tickets.set(found.ticket, found);
+        throw new Refused(
+          'EACCES',
+          policy.paused() ? PAUSED : 'ticket refused: the policy changed meanwhile'
+        );
+      }
       const store = tx.objectStore('audit');
       for (const entry of await all<StoredReveal & { ticket: string }>(tx, 'audit', ns)) {
         if (entry.type === 'materialize' && entry.ticket === found.ticket) {

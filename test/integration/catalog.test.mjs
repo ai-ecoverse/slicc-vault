@@ -129,7 +129,8 @@ test('retired and new model hosts stay refused for secrets, and Azure Speech rul
       head: { method: 'POST', url, headers: [['Authorization', `Bearer ${gh.placeholder}`]] },
       owner: { pid: 9, ppid: 1, uid: 1000, gid: 1000, tag: 'cone', users: 'enforce' },
       exit: 'page',
-      rawTraits: {},
+      bodyPresent: false,
+      rawTraits: { manualRedirects: true },
     });
   for (const url of [
     'https://opencode.ai/zen/v1/chat/completions',

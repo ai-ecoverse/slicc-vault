@@ -5,7 +5,7 @@ import { open } from './db.ts';
 import { Exec } from './exec.ts';
 import { Keyring } from './lock.ts';
 import { EMPTY, type Policy } from './policy.ts';
-import { backupState, records, reminder, scrubVersion } from './records.ts';
+import { backupState, onBump, records, reminder, scrubVersion } from './records.ts';
 import { Refresher } from './refresh.ts';
 import { pending, waiting } from './requests.ts';
 import { loadPolicy, loadStored } from './rules.ts';
@@ -94,10 +94,16 @@ export async function start(options: Options = {}): Promise<Vault> {
         keyring,
         exec: vault.exec,
         policy: () => vault.policy(ns),
+        loadPolicy: () => vault.loadPolicy(ns),
         now,
         changed: () => vault.changed(ns, ['secrets', 'requests', 'audit']),
         emit: (event) => vault.emit(ns, event),
         sudoGid: () => vault.sudoGids.get(ns) ?? null,
+        clean: async () => {
+          const scrubber = await vault.scrubbers.get(ns);
+          return scrubber ? (text) => scrubber.text(text).text : null;
+        },
+        holdsAnother: (record, value) => vault.scrubbers.holdsAnother(ns, record, value),
       };
     },
     async scrub(ns) {
@@ -115,6 +121,7 @@ export async function start(options: Options = {}): Promise<Vault> {
       return {
         version: config.version,
         protocol: 1,
+        capabilities: { forward: 1 },
         origin: ns,
         locked: keyring.locked,
         lock: keyring.mode,
@@ -128,9 +135,14 @@ export async function start(options: Options = {}): Promise<Vault> {
   };
   bus.listen((message: Message) => {
     if (message.type === 'changed') void reload(message.ns, message.parts);
+    else if (message.type === 'scrub') vault.scrubbers.touch(message.ns);
     else if (message.type !== 'popup') void keyring.receive(message);
   });
   vault.scrubbers = new Scrubbers(vault);
+  onBump((ns) => {
+    vault.scrubbers.touch(ns);
+    bus.post({ type: 'scrub', ns });
+  });
   vault.exec = new Exec(vault);
   vault.sessions = new Sessions(vault);
   vault.refresher = new Refresher(vault);

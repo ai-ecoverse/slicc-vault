@@ -118,14 +118,70 @@ async function forward(fields, response = null) {
   if (!response || !reply.head) return { reply, parts };
   channel.port1.postMessage({ op: 'response', ...response.head });
   for (const chunk of response.chunks) {
+    if (typeof chunk !== 'string') {
+      channel.port1.postMessage({ op: 'body', chunk });
+      continue;
+    }
     const bytes = new TextEncoder().encode(chunk);
     channel.port1.postMessage({ op: 'body', chunk: bytes }, [bytes.buffer]);
   }
+  if (response.wait) await new Promise((resolve) => setTimeout(resolve, response.wait));
   channel.port1.postMessage(
     response.error ? { op: 'error', message: response.error } : { op: 'end' }
   );
+  if (response.late) {
+    const bytes = new TextEncoder().encode(response.late);
+    channel.port1.postMessage({ op: 'body', chunk: bytes }, [bytes.buffer]);
+  }
   await done;
+  if (response.late) await new Promise((resolve) => setTimeout(resolve, 100));
   return { reply, parts };
+}
+
+async function stream(fields, steps) {
+  const channel = new MessageChannel();
+  const parts = [];
+  const pause = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+  channel.port1.onmessage = (event) => {
+    const data = event.data;
+    parts.push(
+      data.op === 'body' ? { op: 'body', text: new TextDecoder().decode(data.chunk) } : data
+    );
+  };
+  const reply = await call('forward', fields, [channel.port2]);
+  if (!reply.head) return { reply, parts };
+  for (const step of steps) {
+    if (step.call) await call(step.call, step.fields, [], step.twin ? twins[0] : null);
+    else if (step.pause) await pause(step.pause);
+    else if (step.text !== undefined) {
+      const bytes = new TextEncoder().encode(step.text);
+      channel.port1.postMessage({ op: 'body', chunk: bytes }, [bytes.buffer]);
+    } else channel.port1.postMessage(step);
+    await pause(20);
+  }
+  await pause(100);
+  return { reply, parts };
+}
+
+async function open(fields) {
+  const channel = new MessageChannel();
+  const parts = [];
+  channel.port1.onmessage = (event) => {
+    const data = event.data;
+    parts.push(
+      data.op === 'body' ? { op: 'body', text: new TextDecoder().decode(data.chunk) } : data
+    );
+  };
+  const reply = await call('forward', fields, [channel.port2]);
+  window.harness.opened = { port: channel.port1, parts };
+  return reply;
+}
+
+function post(step) {
+  const { port } = window.harness.opened;
+  if (step.text === undefined) return port.postMessage(step);
+  const bytes = new TextEncoder().encode(step.text);
+  port.postMessage({ op: 'body', chunk: bytes }, [bytes.buffer]);
 }
 
 let agentPort = null;
@@ -198,6 +254,9 @@ window.harness = {
   twinEvents,
   policy,
   forward,
+  stream,
+  open,
+  post,
   agent,
   ask,
   vault,

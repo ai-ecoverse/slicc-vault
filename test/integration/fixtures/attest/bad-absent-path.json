@@ -1,0 +1,25 @@
+{
+  "description": "a path that is not a policy file",
+  "trusted": false,
+  "reason": "isn't a policy file",
+  "attestation": {
+    "path": "/etc/passwd",
+    "absent": true,
+    "users": "enforce",
+    "onRootFs": true,
+    "parents": [
+      {
+        "path": "/",
+        "uid": 0,
+        "gid": 0,
+        "mode": 16877
+      },
+      {
+        "path": "/etc",
+        "uid": 0,
+        "gid": 0,
+        "mode": 16877
+      }
+    ]
+  }
+}

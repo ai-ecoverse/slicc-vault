@@ -609,6 +609,7 @@ export class Server {
     } catch (error) {
       reply = { v: 1, id, error: refusal(error) };
     }
+    if (request.op !== 'forward' || !('head' in reply)) for (const port of ports) port.close();
     session.port.postMessage(reply);
   }
 

@@ -1,9 +1,10 @@
 import { hex } from './bytes.ts';
-import type { Attestation, PolicyFile } from './contract.ts';
+import type { Attestation, MissingPolicyFile, PolicyFile } from './contract.ts';
 import { FILES } from './policy.ts';
 
 export type Verdict =
   | { trusted: true; path: PolicyFile; sha256: string; text: string }
+  | { trusted: true; path: PolicyFile; absent: true }
   | { trusted: false; path: string; sha256: string | null; warning: string };
 
 const WRITABLE = 0o022;
@@ -23,6 +24,7 @@ const FIELDS = [
   'onRootFs',
   'parents',
 ];
+const ABSENT_FIELDS = ['path', 'absent', 'users', 'onRootFs', 'parents'];
 const PARENT_FIELDS = ['path', 'uid', 'gid', 'mode'];
 const USERS = new Set(['off', 'report', 'enforce']);
 
@@ -68,6 +70,19 @@ export function wellFormed(value: unknown): value is Attestation {
   );
 }
 
+export function wellFormedAbsent(value: unknown): value is MissingPolicyFile {
+  if (!exactly(value, ABSENT_FIELDS)) return false;
+  return (
+    typeof value.path === 'string' &&
+    value.absent === true &&
+    typeof value.users === 'string' &&
+    USERS.has(value.users) &&
+    typeof value.onRootFs === 'boolean' &&
+    Array.isArray(value.parents) &&
+    value.parents.every(wellFormedParent)
+  );
+}
+
 export function ancestors(path: string): string[] {
   const parts = path.split('/').slice(1, -1);
   return ['/', ...parts.map((_, i) => `/${parts.slice(0, i + 1).join('/')}`)];
@@ -77,11 +92,7 @@ function safe(mode: number, type: number): boolean {
   return (mode & TYPE) === type && (mode & WRITABLE) === 0;
 }
 
-function problem(attestation: Attestation, sha256: string): string | null {
-  if (sha256 !== attestation.sha256) return "its bytes don't match the attestation";
-  if (attestation.uid !== 0) return "it isn't root-owned";
-  if (!safe(attestation.mode, FILE))
-    return "it isn't a regular file, or is writable by group or others";
+function misplaced(attestation: Attestation | MissingPolicyFile): string | null {
   const expected = ancestors(attestation.path);
   const parents = attestation.parents;
   const listed =
@@ -95,6 +106,14 @@ function problem(attestation: Attestation, sha256: string): string | null {
   return null;
 }
 
+function problem(attestation: Attestation, sha256: string): string | null {
+  if (sha256 !== attestation.sha256) return "its bytes don't match the attestation";
+  if (attestation.uid !== 0) return "it isn't root-owned";
+  if (!safe(attestation.mode, FILE))
+    return "it isn't a regular file, or is writable by group or others";
+  return misplaced(attestation);
+}
+
 async function digest(bytes: Uint8Array): Promise<string> {
   return hex(new Uint8Array(await crypto.subtle.digest('SHA-256', new Uint8Array(bytes))));
 }
@@ -105,6 +124,11 @@ export async function verify(value: unknown): Promise<Verdict> {
   if (!FILES.includes(path as PolicyFile)) {
     const warning = `rules not trusted: ${path || 'a file'} isn't a policy file`;
     return { trusted: false, path, sha256: null, warning };
+  }
+  if (wellFormedAbsent(value)) {
+    const issue = misplaced(value);
+    if (!issue) return { trusted: true, path: path as PolicyFile, absent: true };
+    return { trusted: false, path, sha256: null, warning: `rules not trusted: ${path}: ${issue}` };
   }
   if (!wellFormed(value)) {
     const warning = `rules not trusted: ${path}: the attestation isn't in the kernel's format`;

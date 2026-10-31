@@ -10,6 +10,7 @@ import {
   diffConfig,
   diffExtra,
   type ExtraPolicy,
+  LIMITS,
   NONE,
   type Policy,
   parseConfig,
@@ -78,7 +79,8 @@ export async function policyIn(tx: IDBTransaction, ns: string) {
     request(meta.get(`endpoints:${ns}`)),
   ])) as [Stored | undefined, Registered | undefined];
   const registered = endpoints ?? NO_ENDPOINTS;
-  return { policy: build((stored ?? EMPTY_STORE).accepted, refuser(registered)), registered };
+  const { accepted } = stored ?? EMPTY_STORE;
+  return { policy: build(accepted, refuser(registered)), registered, accepted };
 }
 
 export async function loadPolicy(db: IDBDatabase, ns: string): Promise<Policy> {
@@ -487,6 +489,7 @@ export const SEEN = 64;
 
 type Evaluation =
   | { path: string; sha256: string | null; trusted: false; warnings: string[] }
+  | { path: string; sha256: null; trusted: true; warnings: string[]; absent: true }
   | {
       path: string;
       sha256: string;
@@ -503,6 +506,9 @@ async function evaluate(upload: unknown): Promise<Evaluation> {
     return { path, sha256, trusted: false, warnings: [warning] };
   }
   const warnings: string[] = [];
+  if ('absent' in verdict) {
+    return { path: verdict.path, sha256: null, trusted: true, warnings, absent: true };
+  }
   const { path, sha256 } = verdict;
   try {
     if (path === CONFIG_FILE) {
@@ -519,32 +525,65 @@ function current(accepted: Accepted, path: string): string | null {
   return (path === CONFIG_FILE ? accepted.config?.sha256 : accepted.extra?.sha256) ?? null;
 }
 
+function pausedIn(accepted: Accepted, path: string): boolean {
+  return (accepted.paused ?? []).includes(path as PolicyFile);
+}
+
+function missing(accepted: Accepted, path: PolicyFile) {
+  if (pausedIn(accepted, path)) return { next: accepted, changes: [] };
+  const paused = [...(accepted.paused ?? []), path];
+  if (path === CONFIG_FILE) {
+    const changes = diffConfig(accepted.config?.parsed ?? null, { secrets: {}, rules: [] });
+    return { next: { ...accepted, config: null, paused }, changes };
+  }
+  const none = { exec: {}, exits: {}, limits: LIMITS };
+  const changes = diffExtra(accepted.extra?.parsed ?? null, none);
+  return { next: { ...accepted, extra: null, paused }, changes };
+}
+
 function merge(
   accepted: Accepted,
   evaluation: Evaluation
 ): { next: Accepted; changes: PolicyChange[] } {
-  if (!evaluation.trusted || current(accepted, evaluation.path) === evaluation.sha256) {
+  if (!evaluation.trusted) return { next: accepted, changes: [] };
+  if ('absent' in evaluation) return missing(accepted, evaluation.path as PolicyFile);
+  if (current(accepted, evaluation.path) === evaluation.sha256) {
     return { next: accepted, changes: [] };
   }
+  const paused = (accepted.paused ?? []).filter((path) => path !== evaluation.path);
   if (evaluation.config) {
     const changes = diffConfig(accepted.config?.parsed ?? null, evaluation.config);
     return {
-      next: { ...accepted, config: { sha256: evaluation.sha256, parsed: evaluation.config } },
+      next: {
+        ...accepted,
+        config: { sha256: evaluation.sha256, parsed: evaluation.config },
+        paused,
+      },
       changes,
     };
   }
   const extra = evaluation.extra as ExtraPolicy;
   const changes = diffExtra(accepted.extra?.parsed ?? null, extra);
-  return { next: { ...accepted, extra: { sha256: evaluation.sha256, parsed: extra } }, changes };
+  return {
+    next: { ...accepted, extra: { sha256: evaluation.sha256, parsed: extra }, paused },
+    changes,
+  };
 }
 
-function states(evaluations: Evaluation[]): PolicyFileState[] {
-  return evaluations.map(({ path, sha256, trusted, warnings }) => ({
+function states(evaluations: Evaluation[], accepted: Accepted): PolicyFileState[] {
+  const marks = (path: string) =>
+    pausedIn(accepted, path) ? { absent: true as const, paused: true as const } : {};
+  const uploaded = evaluations.map(({ path, sha256, trusted, warnings }) => ({
     path,
     sha256,
     accepted: trusted,
     warnings,
+    ...marks(path),
   }));
+  const others = (accepted.paused ?? [])
+    .filter((path) => !evaluations.some((evaluation) => evaluation.path === path))
+    .map((path) => ({ path, sha256: null, accepted: true, warnings: [], ...marks(path) }));
+  return [...uploaded, ...others];
 }
 
 function remember(seen: Record<string, string[]>, path: string, sha256: string): boolean {
@@ -571,10 +610,12 @@ export async function apply(
     let moved = false;
     for (const evaluation of evaluations) {
       const merged = merge(next, evaluation);
+      const flipped = pausedIn(merged.next, evaluation.path) !== pausedIn(next, evaluation.path);
       moved ||= merged.next !== next;
       next = merged.next;
       const mark = `${evaluation.trusted ? 'trusted' : 'refused'}:${evaluation.sha256}`;
-      if (evaluation.sha256 === null || !remember(seen, evaluation.path, mark)) continue;
+      const fresh = evaluation.sha256 !== null && remember(seen, evaluation.path, mark);
+      if (!fresh && !flipped) continue;
       moved = true;
       await audit(tx, ns, {
         type: 'policy',
@@ -582,13 +623,16 @@ export async function apply(
         tag: null,
         file: evaluation.path as PolicyFile,
         sha256: evaluation.sha256,
+        ...('absent' in evaluation ? { absent: true } : {}),
         accepted: evaluation.trusted,
         changes: merged.changes,
         ...(evaluation.warnings.length ? { warning: evaluation.warnings.join('; ') } : {}),
         at: now,
       });
     }
-    await request(meta.put({ accepted: next, seen, last: states(evaluations) }, `policy:${ns}`));
+    await request(
+      meta.put({ accepted: next, seen, last: states(evaluations, next) }, `policy:${ns}`)
+    );
     return { accepted: next, changed: moved };
   });
   const rules = (accepted.config?.parsed.rules ?? []).map(({ secret, rule }) => ({
@@ -597,7 +641,7 @@ export async function apply(
   }));
   const result: PolicyResult = {
     accepted: evaluations.length > 0 && evaluations.every((e) => e.trusted),
-    files: states(evaluations),
+    files: states(evaluations, accepted),
     rules,
     warnings: evaluations.flatMap((e) => e.warnings),
   };

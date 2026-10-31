@@ -1,0 +1,31 @@
+{
+  "description": "a directory that is not above the path",
+  "trusted": false,
+  "reason": "parents aren't exactly",
+  "attestation": {
+    "path": "/etc/fnox/config.toml",
+    "absent": true,
+    "users": "enforce",
+    "onRootFs": true,
+    "parents": [
+      {
+        "path": "/",
+        "uid": 0,
+        "gid": 0,
+        "mode": 16877
+      },
+      {
+        "path": "/etc",
+        "uid": 0,
+        "gid": 0,
+        "mode": 16877
+      },
+      {
+        "path": "/tmp",
+        "uid": 0,
+        "gid": 0,
+        "mode": 16877
+      }
+    ]
+  }
+}

@@ -221,17 +221,23 @@ export function usableRecords(held: VaultRecord[], now: number): VaultRecord[] {
   );
 }
 
-export function usableMcp(held: VaultRecord[], now: number, clean: Clean): McpView[] {
+export function addressable(held: VaultRecord[], now: number, clean: Clean): VaultRecord[] {
   if (!clean) return [];
+  return usableRecords(held, now).filter(({ name, server }) => {
+    const fits = server && `mcp:${server}`.length <= MAX_PROVIDER;
+    return fits && clean(name) === name && clean(server) === server;
+  });
+}
+
+export function usableMcp(held: VaultRecord[], now: number, clean: Clean): McpView[] {
   const dead = deadGrants(held);
-  const views: McpView[] = [];
-  for (const record of usableRecords(held, now)) {
-    const { name, server } = record;
-    const addressable = server && `mcp:${server}`.length <= MAX_PROVIDER;
-    if (addressable && clean(name) === name && clean(server) === server)
-      views.push({ name, server, state: readiness(record, dead, now) as McpView['state'] });
-  }
-  return views.sort((a, b) => a.name.localeCompare(b.name));
+  return addressable(held, now, clean)
+    .map((record) => ({
+      name: record.name,
+      server: record.server as string,
+      state: readiness(record, dead, now) as McpView['state'],
+    }))
+    .sort((a, b) => a.name.localeCompare(b.name));
 }
 
 function shownBinding(record: VaultRecord, clean: Clean): Partial<SecretView> {
@@ -524,7 +530,18 @@ export async function rotate(
   });
 }
 
+const watchers = new Set<(ns: string) => void>();
+
+export function onBump(watcher: (ns: string) => void): void {
+  watchers.add(watcher);
+}
+
 export async function bump(tx: IDBTransaction, ns: string): Promise<number> {
+  const tell = () => {
+    for (const watcher of watchers) watcher(ns);
+  };
+  tell();
+  tx.addEventListener('complete', tell);
   const meta = tx.objectStore('meta');
   const next = (((await request(meta.get(`scrub:${ns}`))) as number | undefined) ?? 0) + 1;
   await request(meta.put(next, `scrub:${ns}`));
@@ -533,6 +550,23 @@ export async function bump(tx: IDBTransaction, ns: string): Promise<number> {
 
 export async function scrubIn(tx: IDBTransaction, ns: string): Promise<number> {
   return ((await request(tx.objectStore('meta').get(`scrub:${ns}`))) as number | undefined) ?? 0;
+}
+
+export function atVersion(
+  db: IDBDatabase,
+  ns: string,
+  version: number,
+  work: () => void,
+  stale: () => void
+): Promise<void> {
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction(['meta'], 'readonly');
+    const read = tx.objectStore('meta').get(`scrub:${ns}`);
+    read.onsuccess = () => ((read.result ?? 0) === version ? work() : stale());
+    tx.oncomplete = () => resolve();
+    tx.onerror = () => reject(tx.error);
+    tx.onabort = () => reject(tx.error);
+  });
 }
 
 export function scrubVersion(db: IDBDatabase, ns: string): Promise<number> {

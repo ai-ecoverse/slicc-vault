@@ -4,7 +4,7 @@ import { Refused } from './errors.ts';
 import { checkExit } from './forward.ts';
 import { AMBIGUOUS, matches } from './inject.ts';
 import { decrypt } from './keys.ts';
-import type { Policy } from './policy.ts';
+import { type Policy, running } from './policy.ts';
 import { aad, audit, PLACEHOLDER, records, removed, type VaultRecord } from './records.ts';
 import { type Registered, refusedUrl } from './refusal.ts';
 import { policyIn } from './rules.ts';
@@ -286,7 +286,7 @@ export class Sessions {
 
   async anchors(ns: string, req: Fields): Promise<Fields> {
     const want = target(req);
-    const policy = await this.vault.loadPolicy(ns);
+    const policy = running(await this.vault.loadPolicy(ns));
     const anchors = new Set<string>();
     const pins = new Set<string>();
     for (const { secret, rule } of policy.everySessionRule()) {
@@ -311,6 +311,7 @@ export class Sessions {
     const { policy, registered } = await transact(this.vault.db, ['meta'], 'readonly', (tx) =>
       policyIn(tx, ns)
     );
+    running(policy);
     this.endpoint(ask, registered);
     for (const { rule } of policy.everySessionRule()) {
       for (const der of rule.anchors ?? []) ask.ids.set(der, await digest(der));
@@ -345,6 +346,7 @@ export class Sessions {
     const kept: Handed[] = [];
     await transact(this.vault.db, ['meta', 'records', 'audit'], 'readwrite', async (tx) => {
       const { policy, registered } = await policyIn(tx, ns);
+      running(policy);
       const now = this.vault.now();
       this.timely(ask, now);
       this.endpoint(ask, registered);

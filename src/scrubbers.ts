@@ -13,9 +13,18 @@ interface Compiled {
 export class Scrubbers {
   readonly vault: Vault;
   readonly cache = new Map<string, Compiled>();
+  readonly epochs = new Map<string, number>();
 
   constructor(vault: Vault) {
     this.vault = vault;
+  }
+
+  touch(ns: string): void {
+    this.epochs.set(ns, this.epoch(ns) + 1);
+  }
+
+  epoch(ns: string): number {
+    return this.epochs.get(ns) ?? 0;
   }
 
   ready(ns: string, needed: boolean): boolean {

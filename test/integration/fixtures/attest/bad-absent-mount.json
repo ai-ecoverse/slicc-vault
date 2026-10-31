@@ -1,0 +1,31 @@
+{
+  "description": "under a mount",
+  "trusted": false,
+  "reason": "isn't on the root file system",
+  "attestation": {
+    "path": "/etc/fnox/config.toml",
+    "absent": true,
+    "users": "enforce",
+    "onRootFs": false,
+    "parents": [
+      {
+        "path": "/",
+        "uid": 0,
+        "gid": 0,
+        "mode": 16877
+      },
+      {
+        "path": "/etc",
+        "uid": 0,
+        "gid": 0,
+        "mode": 16877
+      },
+      {
+        "path": "/etc/fnox",
+        "uid": 0,
+        "gid": 0,
+        "mode": 16877
+      }
+    ]
+  }
+}

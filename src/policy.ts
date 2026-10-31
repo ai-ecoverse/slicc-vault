@@ -8,14 +8,17 @@ import type {
   Rule,
   SessionProtocol,
 } from './contract.ts';
+import { Refused } from './errors.ts';
 import { PLACEHOLDER } from './records.ts';
 import { parseToml, type TomlTable, type TomlValue } from './toml.ts';
 
 export const CONFIG_FILE = '/etc/fnox/config.toml';
 export const POLICY_FILE = '/etc/slicc/secrets-policy.toml';
 export const FILES: readonly PolicyFile[] = [CONFIG_FILE, POLICY_FILE];
+export const PAUSED = 'policy file missing: paused';
 
 export interface Policy {
+  paused(): boolean;
   refused(): RefusedRule[];
   placeholder(name: string): string | null;
   rules(name: string): Rule[];
@@ -55,6 +58,7 @@ export interface ExtraPolicy {
 export interface Accepted {
   config: { sha256: string; parsed: ConfigPolicy } | null;
   extra: { sha256: string; parsed: ExtraPolicy } | null;
+  paused?: PolicyFile[];
 }
 
 export const NONE: Accepted = { config: null, extra: null };
@@ -358,6 +362,7 @@ export function build(accepted: Accepted, refuse: Refuse = () => false): Policy 
       reason: `${secret}: ${rule.domain} is a model or MCP endpoint; the vault never injects there`,
     }));
   return {
+    paused: () => (accepted.paused ?? []).length > 0,
     refused: () => refused,
     placeholder: (name) => (Object.hasOwn(config.secrets, name) ? config.secrets[name] : null),
     rules: (name) => kept.filter((entry) => entry.secret === name).map((entry) => entry.rule),
@@ -389,3 +394,8 @@ export function build(accepted: Accepted, refuse: Refuse = () => false): Policy 
 }
 
 export const EMPTY: Policy = build(NONE);
+
+export function running(policy: Policy): Policy {
+  if (policy.paused()) throw new Refused('EACCES', PAUSED);
+  return policy;
+}

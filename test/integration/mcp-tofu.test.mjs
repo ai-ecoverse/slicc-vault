@@ -241,7 +241,8 @@ test('a kernel forward pins a typed-in token at its first 2xx, never at a failur
         body: '{}',
         owner: OWNER,
         exit: 'page',
-        rawTraits: {},
+        bodyPresent: true,
+        rawTraits: { manualRedirects: true },
       },
       status
     );
@@ -332,7 +333,8 @@ test('NEGATIVE the upgrade adopts the one agent server of a typed-in token, neve
     body: '{}',
     owner: OWNER,
     exit: 'page',
-    rawTraits: {},
+    bodyPresent: true,
+    rawTraits: { manualRedirects: true },
   });
   assert.deepEqual(kernel.reply.head.headers, [['Authorization', `Bearer ${TOKEN}`]]);
 });

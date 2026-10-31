@@ -144,9 +144,14 @@ export interface ScrubState {
   ready: boolean;
 }
 
+export interface Capabilities {
+  forward: 1;
+}
+
 export interface VaultStatus {
   version: string;
   protocol: Protocol;
+  capabilities: Capabilities;
   origin: string;
   locked: boolean;
   lock: LockMode;
@@ -242,7 +247,8 @@ export interface PolicyEntry {
   uid: null;
   tag: null;
   file: PolicyFile;
-  sha256: string;
+  sha256: string | null;
+  absent?: true;
   accepted: boolean;
   changes: PolicyChange[];
   warning?: string;
@@ -289,7 +295,9 @@ export interface RawTraits {
 }
 
 export type ForwardResult =
-  | { head: RequestHead; body?: Uint8Array }
+  | { mode: 'secret'; head: RequestHead }
+  | { mode: 'mcp'; head: RequestHead; bodyComplete: true; body?: Uint8Array }
+  | { needsBody: true }
   | { refused: { status: number; reason: string } };
 
 export type ResponsePart =
@@ -304,6 +312,8 @@ export type ResponsePart =
   | { op: 'body'; chunk: Uint8Array }
   | { op: 'end' }
   | { op: 'error'; message: string };
+
+export type ResponseAck = ResponsePart | { op: 'credit'; bytes: number };
 
 export interface McpServerEntry {
   server: string;
@@ -373,11 +383,21 @@ export interface Attestation {
   parents: { path: string; uid: number; gid: number; mode: number }[];
 }
 
+export interface MissingPolicyFile {
+  path: string;
+  absent: true;
+  users: string;
+  onRootFs: boolean;
+  parents: { path: string; uid: number; gid: number; mode: number }[];
+}
+
 export interface PolicyFileState {
   path: string;
   sha256: string | null;
   accepted: boolean;
   warnings: string[];
+  absent?: true;
+  paused?: true;
 }
 
 export interface PolicyResult {
@@ -503,7 +523,7 @@ export type Op =
   | { op: 'export'; passphrase: string }
   | { op: 'lock' }
   | { op: 'dismissBackupReminder' }
-  | { op: 'policy'; files: Attestation[] }
+  | { op: 'policy'; files: (Attestation | MissingPolicyFile)[] }
   | {
       op: 'endpoints';
       model?: (string | { name: string; url: string })[];
@@ -517,10 +537,12 @@ export type Op =
   | {
       op: 'forward';
       head: RequestHead;
+      bodyPresent: boolean;
       body?: Uint8Array | string;
       owner: Stamp;
       exit: ExitName;
       rawTraits: RawTraits;
+      streamCredit?: boolean;
     }
   | {
       op: 'materializeConsume';
