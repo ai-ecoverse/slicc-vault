@@ -1,7 +1,7 @@
 import type { Scrubber, Stream } from '@ai-ecoverse/slicc-scrub';
 import type { ExitName, Stamp } from './contract.ts';
 import { all, request, transact } from './db.ts';
-import { Refused } from './errors.ts';
+import { caused, Refused } from './errors.ts';
 import { type Head, type Prepared, prepare, type Traits } from './inject.ts';
 import { MAX_BODY } from './prepare.ts';
 import { atVersion, audit, records, scrubIn, scrubVersion, type VaultRecord } from './records.ts';
@@ -270,7 +270,10 @@ export async function forward(
     key: vault.keyring.key,
     now: vault.now(),
   });
-  if (!prepared.ok) return { refused: { status: prepared.status, reason: prepared.reason } };
+  if (!prepared.ok) {
+    const { status, reason, cause } = prepared;
+    return { refused: { status, reason, ...caused(cause) } };
+  }
   const server = prepared.server;
   const body = server ? bodyOf(fields.body) : null;
   const unready = server ? unsendable(fields.bodyPresent, body) : null;

@@ -37,9 +37,12 @@ export interface Stamp {
   groups?: number[];
 }
 
+export type ErrorCause = 'policy-paused';
+
 export interface VaultError {
   code: ErrorCode;
   message: string;
+  cause?: ErrorCause;
 }
 
 export type SessionProtocol = 'http1' | 'smtp' | 'pg';
@@ -298,7 +301,13 @@ export type ForwardResult =
   | { mode: 'secret'; head: RequestHead }
   | { mode: 'mcp'; head: RequestHead; bodyComplete: true; body?: Uint8Array }
   | { needsBody: true }
-  | { refused: { status: number; reason: string } };
+  | { refused: { status: number; reason: string; cause?: ErrorCause } };
+
+export interface TestVerdict {
+  verdict: 'inject' | 'refuse';
+  reason: string;
+  cause?: ErrorCause;
+}
 
 export type ResponsePart =
   | {

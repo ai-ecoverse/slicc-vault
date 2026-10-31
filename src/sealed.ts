@@ -1,5 +1,5 @@
 import type { ExitName, SealedReply, Stamp, VaultEvent } from './contract.ts';
-import { Refused, refusal } from './errors.ts';
+import { caused, Refused, refusal } from './errors.ts';
 import type { Exec } from './exec.ts';
 import { prepare } from './inject.ts';
 import type { Keyring } from './lock.ts';
@@ -195,7 +195,9 @@ const testOp: Handler = async (ctx, req, stamp) => {
     now: ctx.now(),
     holdsAnother: ctx.holdsAnother,
   });
-  if (!prepared.ok) return { verdict: 'refuse', reason: prepared.reason };
+  if (!prepared.ok) {
+    return { verdict: 'refuse', reason: prepared.reason, ...caused(prepared.cause) };
+  }
   return {
     verdict: 'inject',
     reason: `${name} would be sent in ${header.toLowerCase()} to ${prepared.host}`,
