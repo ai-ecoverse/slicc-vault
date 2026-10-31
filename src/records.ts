@@ -552,6 +552,23 @@ export async function scrubIn(tx: IDBTransaction, ns: string): Promise<number> {
   return ((await request(tx.objectStore('meta').get(`scrub:${ns}`))) as number | undefined) ?? 0;
 }
 
+export function atVersion(
+  db: IDBDatabase,
+  ns: string,
+  version: number,
+  work: () => void,
+  stale: () => void
+): Promise<void> {
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction(['meta'], 'readonly');
+    const read = tx.objectStore('meta').get(`scrub:${ns}`);
+    read.onsuccess = () => ((read.result ?? 0) === version ? work() : stale());
+    tx.oncomplete = () => resolve();
+    tx.onerror = () => reject(tx.error);
+    tx.onabort = () => reject(tx.error);
+  });
+}
+
 export function scrubVersion(db: IDBDatabase, ns: string): Promise<number> {
   return transact(db, ['meta'], 'readonly', (tx) => scrubIn(tx, ns));
 }

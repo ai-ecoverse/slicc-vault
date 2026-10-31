@@ -576,3 +576,99 @@ test('forward audits request text scrubbed', async (t) => {
   assert.ok(!JSON.stringify(entry).includes(TOKEN));
   assert.ok(entry.path.startsWith('/v1/items/'));
 });
+
+const SEAMS = {
+  head: { before: [], message: { ...HEAD, statusText: NEW } },
+  chunk: { before: [HEAD], message: { text: `${'x'.repeat(64)}${NEW}` } },
+  error: { before: [HEAD], message: { op: 'error', message: NEW } },
+  end: { before: [HEAD, { text: held }], message: { op: 'end' } },
+  idle: { before: [HEAD, { text: held }], message: null },
+};
+
+for (const [channel, { before, message }] of Object.entries(SEAMS)) {
+  test(`nothing goes out at the ${channel} after a version read a write followed`, async (t) => {
+    const { page, a } = await ready(t);
+    const frame = await cdp.target(new RegExp(`^${served.vault}/$`));
+    await page.evaluate(() => window.harness.twin());
+    await frame.evaluate(() => {
+      const data = Object.getOwnPropertyDescriptor(MessageEvent.prototype, 'data');
+      Object.defineProperty(MessageEvent.prototype, 'data', {
+        get() {
+          const deaf = this.target instanceof BroadcastChannel;
+          return deaf ? { type: 'popup' } : data.get.call(this);
+        },
+      });
+      window.landed = new Promise((resolve) => {
+        window.release = resolve;
+      });
+      const complete = Object.getOwnPropertyDescriptor(IDBTransaction.prototype, 'oncomplete');
+      const add = IDBTransaction.prototype.addEventListener;
+      const late = (tx, handler) => (event) => {
+        const only = tx.mode === 'readonly' && [...tx.objectStoreNames].join() === 'meta';
+        if (!window.armed || !only) return handler.call(tx, event);
+        window.armed = false;
+        window.held = true;
+        window.landed.then(() => handler.call(tx, event));
+      };
+      Object.defineProperty(IDBTransaction.prototype, 'oncomplete', {
+        set(handler) {
+          complete.set.call(this, late(this, handler));
+        },
+        get() {
+          return complete.get.call(this);
+        },
+      });
+      IDBTransaction.prototype.addEventListener = function delayed(type, handler, options) {
+        const held = type === 'complete' ? late(this, handler) : handler;
+        return add.call(this, type, held, options);
+      };
+    });
+    await page.evaluate((f) => window.harness.open(f), secretCall(a));
+    for (const step of before) {
+      await page.evaluate((s) => window.harness.post(s), step);
+      await new Promise((resolve) => setTimeout(resolve, 20));
+    }
+    await frame.evaluate(() => {
+      window.armed = true;
+    });
+    if (message) await page.evaluate((s) => window.harness.post(s), message);
+    await frame.until(() => window.held === true);
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    const count = () => page.evaluate(() => window.harness.opened.parts.length);
+    const checked = await count();
+    await page.evaluate((value) => {
+      const h = window.harness;
+      return h.call('put', { name: 'TOKEN_A', value }, [], h.twins[0]);
+    }, NEW);
+    await frame.evaluate(() => window.release());
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    assert.equal(await count(), checked);
+  });
+}
+
+test('the stored audit entry holds no value in its rule, tag or exit', async (t) => {
+  const { page, a } = await ready(t);
+  const rule = { secret: 'TOKEN_A', domain: 'api.example.com', paths: [`/v1/${TOKEN}`] };
+  await page.evaluate(
+    (list) => window.harness.policy(list),
+    [attest(CONFIG, config({ TOKEN_A: a }, [rule]))]
+  );
+  const fields = secretCall(a, { exit: `device:${TOKEN}`, owner: { ...OWNER, tag: TOKEN } });
+  fields.head.url = `https://api.example.com/v1/${TOKEN}`;
+  assert.equal((await send(page, fields)).reply.mode, 'secret');
+  const frame = await cdp.target(new RegExp(`^${served.vault}/$`));
+  const stored = await frame.evaluate(
+    () =>
+      new Promise((resolve, reject) => {
+        const opening = indexedDB.open('slicc-vault');
+        opening.onerror = reject;
+        opening.onsuccess = () => {
+          const read = opening.result.transaction('audit').objectStore('audit').getAll();
+          read.onsuccess = () =>
+            resolve(JSON.stringify(read.result.filter((entry) => entry.type === 'forward')));
+        };
+      })
+  );
+  assert.ok(stored.includes('"type":"forward"'));
+  assert.ok(!stored.includes(TOKEN));
+});

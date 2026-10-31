@@ -163,6 +163,27 @@ async function stream(fields, steps) {
   return { reply, parts };
 }
 
+async function open(fields) {
+  const channel = new MessageChannel();
+  const parts = [];
+  channel.port1.onmessage = (event) => {
+    const data = event.data;
+    parts.push(
+      data.op === 'body' ? { op: 'body', text: new TextDecoder().decode(data.chunk) } : data
+    );
+  };
+  const reply = await call('forward', fields, [channel.port2]);
+  window.harness.opened = { port: channel.port1, parts };
+  return reply;
+}
+
+function post(step) {
+  const { port } = window.harness.opened;
+  if (step.text === undefined) return port.postMessage(step);
+  const bytes = new TextEncoder().encode(step.text);
+  port.postMessage({ op: 'body', chunk: bytes }, [bytes.buffer]);
+}
+
 let agentPort = null;
 const agentWaiting = new Map();
 
@@ -234,6 +255,8 @@ window.harness = {
   policy,
   forward,
   stream,
+  open,
+  post,
   agent,
   ask,
   vault,

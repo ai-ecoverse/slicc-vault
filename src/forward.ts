@@ -4,7 +4,7 @@ import { all, request, transact } from './db.ts';
 import { Refused } from './errors.ts';
 import { type Head, type Prepared, prepare, type Traits } from './inject.ts';
 import { MAX_BODY } from './prepare.ts';
-import { audit, records, scrubIn, scrubVersion, type VaultRecord } from './records.ts';
+import { atVersion, audit, records, scrubIn, scrubVersion, type VaultRecord } from './records.ts';
 import { type McpServer, tofu } from './refusal.ts';
 import { loadRegistered, migrate, pin, policyIn } from './rules.ts';
 import { checkStamp } from './sealed.ts';
@@ -120,6 +120,12 @@ async function record(
   const clean = (text: string) => scrubber.text(text).text;
   const method = clean(prepared.head.method.toUpperCase());
   const { uid, tag } = owner;
+  const tidy = (value: unknown): unknown => {
+    if (typeof value === 'string') return clean(value);
+    if (Array.isArray(value)) return value.map(tidy);
+    if (!value || typeof value !== 'object') return value;
+    return Object.fromEntries(Object.entries(value).map(([key, item]) => [key, tidy(item)]));
+  };
   return transact(vault.db, ['meta', 'records', 'audit'], 'readwrite', async (tx) => {
     const expired = prepared.injected.some(
       ({ record }) => record.expiresAt !== undefined && record.expiresAt <= now
@@ -138,10 +144,10 @@ async function record(
         domain: clean(prepared.host),
         method,
         path: clean(prepared.path),
-        rule: injection.rule,
-        exit,
+        rule: tidy(injection.rule),
+        exit: clean(exit),
         uid,
-        tag,
+        tag: tidy(tag),
         ...(prepared.server ? { server: clean(prepared.server.server) } : {}),
         at: now,
       });
@@ -155,7 +161,7 @@ export function relay(
   scrubber: Scrubber,
   succeeded: () => void = () => {},
   credit = false,
-  live: () => boolean | Promise<boolean> = () => true
+  guard: (work: () => void, stale: () => void) => void | Promise<void> = (work) => work()
 ): void {
   const stream: Stream = scrubber.stream();
   let timer: ReturnType<typeof setTimeout> | undefined;
@@ -179,8 +185,9 @@ export function relay(
   const inOrder = (work: () => void) => {
     const step = async () => {
       if (done) return;
-      if (!(await live())) return cancel();
-      if (!done) work();
+      await guard(() => {
+        if (!done) work();
+      }, cancel);
     };
     turn = turn.then(step).catch(cancel);
   };
@@ -270,8 +277,8 @@ export async function forward(
   if (unready) return unready;
   const scrubber = (await vault.scrubbers.get(ns)) as Scrubber;
   const same = () => vault.scrubbers.epoch(ns) === epoch;
-  const live = async () =>
-    same() && (await scrubVersion(vault.db, ns)) === scrubber.version && same();
+  const guard = (work: () => void, stale: () => void) =>
+    atVersion(vault.db, ns, scrubber.version, () => (same() ? work() : stale()), stale);
   const stale = {
     refused: { status: 403, reason: 'the endpoints changed meanwhile; send it again' },
   };
@@ -304,7 +311,7 @@ export async function forward(
       done.pinned ? vault.changed(ns, ['secrets', 'audit']) : undefined
     );
   };
-  if (port) relay(port, scrubber, succeeded, fields.streamCredit === true, live);
+  if (port) relay(port, scrubber, succeeded, fields.streamCredit === true, guard);
   await vault.changed(ns, ['audit']);
   return server
     ? { mode: 'mcp', head: prepared.head, bodyComplete: true, ...scrubbed }
