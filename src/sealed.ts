@@ -32,6 +32,7 @@ export interface Context {
   keyring: Keyring;
   exec: Exec;
   policy(): Policy;
+  loadPolicy(): Promise<Policy>;
   now(): number;
   changed(): Promise<void>;
   emit(event: VaultEvent): void;
@@ -179,7 +180,7 @@ const testOp: Handler = async (ctx, req, stamp) => {
     exit: exit as ExitName,
     traits: { manualRedirects: true, encodedBodies: false },
     records: held,
-    policy: ctx.policy(),
+    policy: await ctx.loadPolicy(),
     registered,
     key: ctx.keyring.key,
     now: ctx.now(),

@@ -530,7 +530,18 @@ export async function rotate(
   });
 }
 
+const watchers = new Set<(ns: string) => void>();
+
+export function onBump(watcher: (ns: string) => void): void {
+  watchers.add(watcher);
+}
+
 export async function bump(tx: IDBTransaction, ns: string): Promise<number> {
+  const tell = () => {
+    for (const watcher of watchers) watcher(ns);
+  };
+  tell();
+  tx.addEventListener('complete', tell);
   const meta = tx.objectStore('meta');
   const next = (((await request(meta.get(`scrub:${ns}`))) as number | undefined) ?? 0) + 1;
   await request(meta.put(next, `scrub:${ns}`));

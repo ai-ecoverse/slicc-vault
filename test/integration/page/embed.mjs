@@ -138,6 +138,31 @@ async function forward(fields, response = null) {
   return { reply, parts };
 }
 
+async function stream(fields, steps) {
+  const channel = new MessageChannel();
+  const parts = [];
+  const pause = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+  channel.port1.onmessage = (event) => {
+    const data = event.data;
+    parts.push(
+      data.op === 'body' ? { op: 'body', text: new TextDecoder().decode(data.chunk) } : data
+    );
+  };
+  const reply = await call('forward', fields, [channel.port2]);
+  if (!reply.head) return { reply, parts };
+  for (const step of steps) {
+    if (step.call) await call(step.call, step.fields, [], step.twin ? twins[0] : null);
+    else if (step.pause) await pause(step.pause);
+    else if (step.text !== undefined) {
+      const bytes = new TextEncoder().encode(step.text);
+      channel.port1.postMessage({ op: 'body', chunk: bytes }, [bytes.buffer]);
+    } else channel.port1.postMessage(step);
+    await pause(20);
+  }
+  await pause(100);
+  return { reply, parts };
+}
+
 let agentPort = null;
 const agentWaiting = new Map();
 
@@ -208,6 +233,7 @@ window.harness = {
   twinEvents,
   policy,
   forward,
+  stream,
   agent,
   ask,
   vault,

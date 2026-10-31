@@ -79,7 +79,8 @@ export async function policyIn(tx: IDBTransaction, ns: string) {
     request(meta.get(`endpoints:${ns}`)),
   ])) as [Stored | undefined, Registered | undefined];
   const registered = endpoints ?? NO_ENDPOINTS;
-  return { policy: build((stored ?? EMPTY_STORE).accepted, refuser(registered)), registered };
+  const { accepted } = stored ?? EMPTY_STORE;
+  return { policy: build(accepted, refuser(registered)), registered, accepted };
 }
 
 export async function loadPolicy(db: IDBDatabase, ns: string): Promise<Policy> {

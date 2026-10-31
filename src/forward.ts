@@ -1,11 +1,11 @@
 import type { Scrubber, Stream } from '@ai-ecoverse/slicc-scrub';
-import type { ExitName } from './contract.ts';
+import type { ExitName, Stamp } from './contract.ts';
 import { all, request, transact } from './db.ts';
 import { Refused } from './errors.ts';
-import { type Head, type Injection, type Prepared, prepare, type Traits } from './inject.ts';
+import { type Head, type Prepared, prepare, type Traits } from './inject.ts';
 import { MAX_BODY } from './prepare.ts';
-import { audit, records, removed, scrubIn, type VaultRecord } from './records.ts';
-import { holds, type McpServer, mcpServer, modelRefused, refusedUrl, tofu } from './refusal.ts';
+import { audit, records, scrubIn, type VaultRecord } from './records.ts';
+import { type McpServer, tofu } from './refusal.ts';
 import { loadRegistered, migrate, pin, policyIn } from './rules.ts';
 import { checkStamp } from './sealed.ts';
 import type { Vault } from './vault.ts';
@@ -72,30 +72,56 @@ function unsendable(present: unknown, body: Uint8Array | null): Fields | null {
   return null;
 }
 
-function moved(injected: Injection[], live: VaultRecord[]): boolean {
-  return injected.some(({ record }) => {
-    const found = live.find((r) => r.kind === record.kind && r.name === record.name);
-    return (
-      !found ||
-      removed(found) ||
-      found.placeholder !== record.placeholder ||
-      found.updatedAt !== record.updatedAt ||
-      found.unpins !== record.unpins
-    );
-  });
+type Ready = Extract<Prepared, { ok: true }>;
+
+async function stateIn(tx: IDBTransaction, ns: string) {
+  const [{ policy, registered, accepted }, live, version] = await Promise.all([
+    policyIn(tx, ns),
+    all<VaultRecord>(tx, 'records', ns),
+    scrubIn(tx, ns),
+  ]);
+  const held = live.map((r) => [
+    r.kind,
+    r.name,
+    r.placeholder,
+    r.updatedAt,
+    r.unpins,
+    r.removedAt,
+    r.expiresAt,
+    r.url,
+  ]);
+  const print = JSON.stringify([accepted, registered, version, held]);
+  return { policy, registered, live, version, print };
+}
+
+function shape(prepared: Ready): string {
+  const { head, injected, server } = prepared;
+  const used = injected.map(({ name, record }) => [
+    record.kind,
+    name,
+    record.placeholder,
+    record.updatedAt,
+    record.unpins,
+  ]);
+  return JSON.stringify([head, used, server?.server, server?.url]);
 }
 
 async function record(
   vault: Vault,
   ns: string,
-  prepared: Extract<Prepared, { ok: true }>,
-  uid: number,
-  tag: string | null,
-  exit: ExitName
-) {
+  prepared: Ready,
+  owner: Stamp,
+  exit: ExitName,
+  still: (print: string) => boolean
+): Promise<boolean> {
   const now = vault.now();
   const method = prepared.head.method.toUpperCase();
-  await transact(vault.db, ['records', 'audit'], 'readwrite', async (tx) => {
+  const { uid, tag } = owner;
+  return transact(vault.db, ['meta', 'records', 'audit'], 'readwrite', async (tx) => {
+    const expired = prepared.injected.some(
+      ({ record }) => record.expiresAt !== undefined && record.expiresAt <= now
+    );
+    if (expired || !still((await stateIn(tx, ns)).print)) return false;
     const store = tx.objectStore('records');
     for (const injection of prepared.injected) {
       const kind = prepared.server ? 'mcp' : 'secret';
@@ -117,6 +143,7 @@ async function record(
         at: now,
       });
     }
+    return true;
   });
 }
 
@@ -124,7 +151,8 @@ export function relay(
   port: MessagePort,
   scrubber: Scrubber,
   succeeded: () => void = () => {},
-  credit = false
+  credit = false,
+  live: () => boolean = () => true
 ): void {
   const stream: Stream = scrubber.stream();
   let timer: ReturnType<typeof setTimeout> | undefined;
@@ -137,9 +165,16 @@ export function relay(
     port.postMessage(message);
     port.close();
   };
+  const cancelled = () => {
+    if (live()) return false;
+    port.onmessage = null;
+    finish({ op: 'error', message: "the vault's values changed; send the request again" });
+    return true;
+  };
   port.onmessage = (event: MessageEvent) => {
     const data = (event.data ?? {}) as Fields;
     clearTimeout(timer);
+    if (cancelled()) return;
     if (data.op === 'response') {
       if (typeof data.status === 'number' && data.status >= 200 && data.status < 300) succeeded();
       const headers = Array.isArray(data.headers) ? (data.headers as unknown[][]) : [];
@@ -155,7 +190,9 @@ export function relay(
       const bytes = data.chunk.byteLength;
       send(stream.push(data.chunk));
       if (credit) port.postMessage({ op: 'credit', bytes });
-      timer = setTimeout(() => send(stream.idle()), scrubber.idleMs);
+      timer = setTimeout(() => {
+        if (!cancelled()) send(stream.idle());
+      }, scrubber.idleMs);
     } else if (data.op === 'end') {
       send(stream.end());
       finish({ op: 'end' });
@@ -187,53 +224,46 @@ export async function forward(
     records(vault.db, ns),
     loadRegistered(vault.db, ns),
   ]);
-  const prepared = await prepare({
+  const asked = {
     ns,
     head,
     owner,
     exit,
     traits,
+    holdsAnother: (found: VaultRecord, value: string) =>
+      vault.scrubbers.holdsAnother(ns, found, value),
+  };
+  const prepared = await prepare({
+    ...asked,
     records: held,
     policy: await vault.loadPolicy(ns),
     registered,
     key: vault.keyring.key,
     now: vault.now(),
-    holdsAnother: (found, value) => vault.scrubbers.holdsAnother(ns, found, value),
   });
   if (!prepared.ok) return { refused: { status: prepared.status, reason: prepared.reason } };
-  const body = prepared.server ? bodyOf(fields.body) : null;
-  const unready = prepared.server ? unsendable(fields.bodyPresent, body) : null;
-  if (unready) return unready;
-  const scrubber = (await vault.scrubbers.get(ns)) as Scrubber;
-  const current = async () => {
-    const [{ policy, registered: fresh }, live, version] = await transact(
-      vault.db,
-      ['meta', 'records'],
-      'readonly',
-      (tx) => Promise.all([policyIn(tx, ns), all<VaultRecord>(tx, 'records', ns), scrubIn(tx, ns)])
-    );
-    if (version !== scrubber.version || moved(prepared.injected, live)) return false;
-    const url = new URL(head.url);
-    const server = prepared.server;
-    if (!server) return !refusedUrl(fresh, url) && !policy.paused();
-    const now = mcpServer(fresh, url);
-    return (
-      now?.server === server.server &&
-      now.url === server.url &&
-      !modelRefused(fresh, url) &&
-      prepared.injected.every((injection) => {
-        const found = live.find((r) => r.kind === 'mcp' && r.name === injection.name);
-        return !!found && holds(fresh, now, found);
-      })
-    );
-  };
-  const stale = {
-    refused: { status: 403, reason: 'the endpoints changed meanwhile; send it again' },
-  };
-  if (!(await current())) return stale;
-  await record(vault, ns, prepared, owner.uid, owner.tag, exit);
-  await vault.changed(ns, ['audit']);
   const server = prepared.server;
+  const body = server ? bodyOf(fields.body) : null;
+  const unready = server ? unsendable(fields.bodyPresent, body) : null;
+  if (unready) return unready;
+  const epoch = vault.scrubbers.epoch(ns);
+  const scrubber = (await vault.scrubbers.get(ns)) as Scrubber;
+  const live = () => vault.scrubbers.epoch(ns) === epoch;
+  const scrubbed = server && body ? { body: scrubber.bytes(body).bytes } : {};
+  const state = await transact(vault.db, ['meta', 'records'], 'readonly', (tx) => stateIn(tx, ns));
+  const again = await prepare({
+    ...asked,
+    records: state.live,
+    policy: state.policy,
+    registered: state.registered,
+    key: vault.keyring.key,
+    now: vault.now(),
+  });
+  const fresh = state.version === scrubber.version && again.ok && shape(again) === shape(prepared);
+  const unchanged = (print: string) => live() && print === state.print;
+  if (!fresh || !(await record(vault, ns, prepared, owner, exit, unchanged))) {
+    return { refused: { status: 403, reason: 'the endpoints changed meanwhile; send it again' } };
+  }
   const names = server
     ? prepared.injected
         .map((injection) => held.find((r) => r.kind === 'mcp' && r.name === injection.name))
@@ -247,9 +277,8 @@ export async function forward(
       done.pinned ? vault.changed(ns, ['secrets', 'audit']) : undefined
     );
   };
-  const scrubbed = server && body ? { body: scrubber.bytes(body).bytes } : {};
-  if (!(await current())) return stale;
-  if (port) relay(port, scrubber, succeeded, fields.streamCredit === true);
+  if (port) relay(port, scrubber, succeeded, fields.streamCredit === true, live);
+  await vault.changed(ns, ['audit']);
   return server
     ? { mode: 'mcp', head: prepared.head, bodyComplete: true, ...scrubbed }
     : { mode: 'secret', head: prepared.head };

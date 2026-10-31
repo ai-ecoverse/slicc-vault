@@ -6,6 +6,7 @@ export type Part = 'secrets' | 'audit' | 'exits' | 'requests';
 export type Message =
   | KeyMessage
   | { type: 'changed'; ns: string; parts: Part[] }
+  | { type: 'scrub'; ns: string }
   | { type: 'popup'; nonce: string; state: PopupState };
 
 export interface Channel {
