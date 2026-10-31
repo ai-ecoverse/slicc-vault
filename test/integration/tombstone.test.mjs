@@ -1,10 +1,13 @@
 import assert from 'node:assert/strict';
 import { readdir, readFile } from 'node:fs/promises';
-import { test } from 'node:test';
+import { after, test } from 'node:test';
 import { attest, CONFIG, config, missing, POLICY } from './attest.mjs';
+import { browser } from './browser.mjs';
 import { setup } from './setup.mjs';
 
-const { embedder } = await setup();
+const { chrome, embedder, served } = await setup();
+const cdp = await browser(chrome);
+after(() => cdp.close());
 
 const SECRET = 'fake-absent-secret-0701';
 const MAIL = 'fake-absent-mail-0702';
@@ -237,4 +240,36 @@ test('untrusted entries leave the last accepted policy and a pause as they are',
     );
   }
   await allPaused(page, a, mail);
+});
+
+test('a pause during redemption releases nothing and keeps the ticket', async (t) => {
+  const { page, files } = await ready(t);
+  const { ticket } = await materialize(page);
+  await page.evaluate(() => window.harness.twin(true));
+  const frame = await cdp.target(new RegExp(`^${served.vault}/$`));
+  await frame.evaluate(() => {
+    const decrypt = SubtleCrypto.prototype.decrypt;
+    window.landed = new Promise((resolve) => {
+      window.release = resolve;
+    });
+    SubtleCrypto.prototype.decrypt = async function gate(...args) {
+      window.held = true;
+      await window.landed;
+      return decrypt.apply(this, args);
+    };
+  });
+  const redeeming = consume(page, ticket);
+  await frame.until(() => window.held === true);
+  await page.evaluate((entry) => {
+    const h = window.harness;
+    return h.call('policy', { files: [entry] }, [], h.twins[0]);
+  }, missing(POLICY));
+  await frame.evaluate(() => window.release());
+  const reply = await redeeming;
+  assert.deepEqual(reply.error, { code: 'EACCES', message: PAUSED });
+  assert.equal(reply.values, undefined);
+  const entries = (await op(page, 'audit', {})).audit.filter((e) => e.type === 'materialize');
+  assert.ok(entries.every((entry) => entry.consumed === false));
+  await upload(page, [files[1]]);
+  assert.deepEqual((await consume(page, ticket)).values, { TOKEN_A: SECRET });
 });

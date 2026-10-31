@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { after, test } from 'node:test';
-import { attest, CONFIG, config } from './attest.mjs';
+import { attest, CONFIG, config, missing, POLICY } from './attest.mjs';
 import { browser } from './browser.mjs';
 import { setup } from './setup.mjs';
 
@@ -297,30 +297,6 @@ test('a forward that returns no head closes its port', async (t) => {
   }
 });
 
-test('a rotation while a forward prepares refuses it', async (t) => {
-  const { page, a } = await ready(t);
-  const fields = secretCall(a);
-  fields.head.headers = new Array(40).fill(['Authorization', `Bearer ${a}`]);
-  const refused = await page.evaluate(async (f) => {
-    const h = window.harness;
-    await h.twin(true);
-    const other = h.twins[0];
-    for (let round = 0; round < 1200; round++) {
-      const pending = h.call('forward', f);
-      if (round % 3) await new Promise((resolve) => setTimeout(resolve, round % 3));
-      const value = `fake-contract-rotated-${round}`;
-      const put = h.call('put', { name: 'TOKEN_A', value }, [], other);
-      const [reply] = await Promise.all([pending, put]);
-      if (reply.refused) return reply.refused;
-    }
-    return null;
-  }, fields);
-  assert.deepEqual(refused, {
-    status: 403,
-    reason: 'the endpoints changed meanwhile; send it again',
-  });
-});
-
 function relayed(page, a, response, fields = {}) {
   return send(page, secretCall(a, fields), {
     head: { status: 200, statusText: 'OK', url: API, headers: [] },
@@ -397,78 +373,61 @@ function cancelled({ parts }, kept) {
   assert.ok(!JSON.stringify(parts).includes(NEW));
 }
 
-test('a rotation cancels the response at its next chunk', async (t) => {
-  const { page, a } = await ready(t);
-  const sent = await stream(page, secretCall(a, { streamCredit: true }), [
-    HEAD,
-    { text: 'x'.repeat(64) },
-    ROTATE,
-    { text: `echo ${NEW}` },
-    { text: 'more' },
-    { op: 'end' },
-  ]);
-  cancelled(sent, ['response', 'body', 'credit']);
-});
+const CHANGES = {
+  rotated: ROTATE,
+  'a secret added': { call: 'put', fields: { name: 'ADDED', value: NEW } },
+  'a model added': {
+    call: 'put',
+    fields: { name: 'ADDED', value: NEW, kind: 'model', provider: 'anthropic' },
+  },
+  'a grant added': {
+    call: 'seal',
+    fields: { name: 'ADDED', value: NEW, kind: 'grant', source: 'settings' },
+  },
+};
 
-test('a rotation cancels a response before its head', async (t) => {
-  const { page, a } = await ready(t);
-  const sent = await stream(page, secretCall(a), [
-    ROTATE,
-    { ...HEAD, statusText: NEW, headers: [['x-echo', NEW]] },
-  ]);
-  cancelled(sent, []);
-});
+const held = SECRET.slice(0, 11);
+const CHANNELS = {
+  head: {
+    before: [],
+    after: [{ ...HEAD, statusText: NEW, url: `${API}?${NEW}`, headers: [['x-echo', NEW]] }],
+    kept: [],
+  },
+  chunk: {
+    before: [HEAD, { text: 'x'.repeat(64) }],
+    after: [{ text: `echo ${NEW}` }, { text: 'more' }, { op: 'end' }],
+    kept: ['response', 'credit'],
+  },
+  error: { before: [HEAD], after: [{ op: 'error', message: NEW }], kept: ['response'] },
+  end: {
+    before: [HEAD, { text: held }],
+    after: [{ op: 'end' }],
+    kept: ['response', 'credit'],
+  },
+  idle: {
+    before: [HEAD, { text: held }],
+    after: [{ pause: 500 }],
+    kept: ['response', 'credit'],
+  },
+};
 
-test('a rotation replaces the error text of a response', async (t) => {
-  const { page, a } = await ready(t);
-  const sent = await stream(page, secretCall(a), [HEAD, ROTATE, { op: 'error', message: NEW }]);
-  cancelled(sent, ['response']);
-});
-
-test('a rotation replaces the end of a response and drops its held tail', async (t) => {
-  const { page, a } = await ready(t);
-  const sent = await stream(page, secretCall(a), [
-    HEAD,
-    { text: SECRET.slice(0, 11) },
-    ROTATE,
-    { op: 'end' },
-  ]);
-  assert.equal(sent.parts.at(-1).message, CANCEL.message);
-  assert.ok(!sent.parts.some((part) => part.op === 'end'));
-  assert.ok(
-    !sent.parts
-      .map((part) => part.text)
-      .join('')
-      .includes(SECRET.slice(0, 11))
-  );
-});
-
-test('a rotation stops an idle flush', async (t) => {
-  const { page, a } = await ready(t);
-  const sent = await stream(page, secretCall(a), [
-    HEAD,
-    { text: SECRET.slice(0, 11) },
-    ROTATE,
-    { pause: 500 },
-  ]);
-  assert.deepEqual(sent.parts.at(-1), CANCEL);
-  assert.ok(
-    !sent.parts
-      .map((part) => part.text)
-      .join('')
-      .includes(SECRET.slice(0, 11))
-  );
-});
-
-test('a value added after the head cancels the response', async (t) => {
-  const { page, a } = await ready(t);
-  const sent = await stream(page, secretCall(a), [
-    HEAD,
-    { call: 'put', fields: { name: 'ADDED', value: NEW } },
-    { text: NEW },
-  ]);
-  cancelled(sent, ['response']);
-});
+for (const [change, step] of Object.entries(CHANGES)) {
+  for (const [channel, { before, after: rest, kept }] of Object.entries(CHANNELS)) {
+    test(`${change} cancels a response at its ${channel}`, async (t) => {
+      const { page, a } = await ready(t);
+      const fields = secretCall(a, { streamCredit: true });
+      const sent = await stream(page, fields, [...before, step, ...rest]);
+      const { parts } = sent;
+      assert.deepEqual(
+        parts.map((part) => part.op).filter((op) => op !== 'body'),
+        [...kept, 'error']
+      );
+      assert.deepEqual(parts.at(-1), CANCEL);
+      assert.ok(!JSON.stringify(parts).includes(NEW));
+      assert.ok(!JSON.stringify(parts).includes(held));
+    });
+  }
+}
 
 test('a restored record cancels the response', async (t) => {
   const { page, a } = await ready(t);
@@ -485,12 +444,7 @@ test('a restored record cancels the response', async (t) => {
 test('a rotation in another vault document cancels the response', async (t) => {
   const { page, a } = await ready(t);
   await page.evaluate(() => window.harness.twin());
-  const sent = await stream(page, secretCall(a), [
-    HEAD,
-    { ...ROTATE, twin: true },
-    { pause: 100 },
-    { text: NEW },
-  ]);
+  const sent = await stream(page, secretCall(a), [HEAD, { ...ROTATE, twin: true }, { text: NEW }]);
   cancelled(sent, ['response']);
 });
 
@@ -510,48 +464,115 @@ test('a response streams on while the values stay the same', async (t) => {
   assert.equal((await shown(page, 'NOTES_MCP')).pinned, true);
 });
 
-test('a rule removed while a forward prepares refuses it, unaudited', async (t) => {
+const STALE = { status: 403, reason: 'the endpoints changed meanwhile; send it again' };
+
+async function gated(page, nth) {
+  await page.evaluate(() => window.harness.twin(true));
+  const frame = await cdp.target(new RegExp(`^${served.vault}/$`));
+  await frame.evaluate((turn) => {
+    const decrypt = SubtleCrypto.prototype.decrypt;
+    const close = MessagePort.prototype.close;
+    let calls = 0;
+    window.closes = 0;
+    window.landed = new Promise((resolve) => {
+      window.release = resolve;
+    });
+    SubtleCrypto.prototype.decrypt = async function gate(...args) {
+      calls += 1;
+      if (calls === turn) {
+        window.held = true;
+        await window.landed;
+      }
+      return decrypt.apply(this, args);
+    };
+    MessagePort.prototype.close = function counted() {
+      window.closes += 1;
+      close.call(this);
+    };
+  }, nth);
+  return frame;
+}
+
+const upload = (page, file) =>
+  page.evaluate((entry) => {
+    const h = window.harness;
+    const bytes = entry.bytes && Uint8Array.from(atob(entry.bytes), (c) => c.charCodeAt(0));
+    const files = [bytes ? { ...entry, bytes } : entry];
+    return h.call('policy', { files }, [], h.twins[0]);
+  }, file);
+
+const LANDINGS = {
+  'a rule revoked': (page, a) => upload(page, attest(CONFIG, config({ TOKEN_A: a }, []))),
+  'a rule narrowed by method': (page, a) =>
+    upload(
+      page,
+      attest(
+        CONFIG,
+        config({ TOKEN_A: a }, [{ secret: 'TOKEN_A', domain: 'api.example.com', methods: ['GET'] }])
+      )
+    ),
+  'an exit narrowed': (page) => upload(page, attest(POLICY, '[exits]\nTOKEN_A = ["proxy"]\n')),
+  'a missing file': (page) => upload(page, missing(CONFIG)),
+  'a rotation': (page) =>
+    page.evaluate((value) => {
+      const h = window.harness;
+      return h.call('put', { name: 'TOKEN_A', value }, [], h.twins[0]);
+    }, NEW),
+};
+
+for (const [name, land] of Object.entries(LANDINGS)) {
+  for (const [nth, seam] of [
+    [1, 'preparation'],
+    [2, 'the recheck'],
+  ]) {
+    test(`${name} during ${seam} refuses the forward, unaudited`, async (t) => {
+      const { page, a } = await ready(t);
+      const frame = await gated(page, nth);
+      const sending = send(page, secretCall(a));
+      await frame.until(() => window.held === true);
+      await land(page, a);
+      await frame.evaluate(() => window.release());
+      const { reply, parts } = await sending;
+      assert.deepEqual(reply.refused, STALE);
+      assert.equal(reply.head, undefined);
+      assert.deepEqual(parts, []);
+      assert.equal(await frame.evaluate(() => window.closes), 1);
+      assert.deepEqual(await used(page, 'forward'), []);
+      assert.equal((await shown(page, 'TOKEN_A')).usedAt, undefined);
+    });
+  }
+}
+
+test('a forward goes through a held decrypt when nothing lands', async (t) => {
+  const { page, a } = await ready(t);
+  const frame = await gated(page, 2);
+  const sending = send(page, secretCall(a));
+  await frame.until(() => window.held === true);
+  await frame.evaluate(() => window.release());
+  const { reply } = await sending;
+  assert.equal(reply.mode, 'secret');
+  assert.equal((await used(page, 'forward')).length, 1);
+});
+
+test('a value rotated during preparation refuses an MCP body that holds it', async (t) => {
+  const { page, a, m } = await ready(t);
+  const frame = await gated(page, 1);
+  const sending = send(page, mcpCall(m, { bodyPresent: true, body: `x ${SECRET} y` }));
+  await frame.until(() => window.held === true);
+  await LANDINGS['a rotation'](page, a);
+  await frame.evaluate(() => window.release());
+  const { reply, hasBody } = await sending;
+  assert.deepEqual(reply.refused, STALE);
+  assert.equal(hasBody, false);
+  assert.equal(reply.bodyComplete, undefined);
+});
+
+test('forward audits request text scrubbed', async (t) => {
   const { page, a } = await ready(t);
   const fields = secretCall(a);
-  fields.head.headers = new Array(40).fill(['Authorization', `Bearer ${a}`]);
-  const narrow = attest(CONFIG, config({ TOKEN_A: a }, []));
-  const wide = attest(
-    CONFIG,
-    config({ TOKEN_A: a }, [{ secret: 'TOKEN_A', domain: 'api.example.com' }])
-  );
-  const refused = await page.evaluate(
-    async (f, less, more) => {
-      const h = window.harness;
-      await h.twin(true);
-      const other = h.twins[0];
-      const decoded = (file) => ({
-        ...file,
-        bytes: Uint8Array.from(atob(file.bytes), (char) => char.charCodeAt(0)),
-      });
-      for (let round = 0; round < 1200; round++) {
-        const before = (await h.call('audit', { limit: 1 })).audit[0].seq;
-        const pending = h.call('forward', f);
-        if (round % 3) await new Promise((resolve) => setTimeout(resolve, round % 3));
-        const narrowed = h.call('policy', { files: [decoded(less)] }, [], other);
-        const [reply] = await Promise.all([pending, narrowed]);
-        const after = (await h.call('audit', { limit: 5 })).audit;
-        await h.call('policy', { files: [decoded(more)] }, [], other);
-        if (reply.refused?.reason.includes('meanwhile')) {
-          return {
-            ...reply.refused,
-            forwards: after.filter((e) => e.seq > before && e.type === 'forward').length,
-          };
-        }
-      }
-      return null;
-    },
-    fields,
-    narrow,
-    wide
-  );
-  assert.deepEqual(refused, {
-    status: 403,
-    reason: 'the endpoints changed meanwhile; send it again',
-    forwards: 0,
-  });
+  fields.head.url = `${API}/${TOKEN}`;
+  assert.equal((await send(page, fields)).reply.mode, 'secret');
+  const [entry] = await used(page, 'forward');
+  assert.ok(!JSON.stringify(entry).includes(TOKEN));
+  assert.ok(entry.path.startsWith('/v1/items/'));
 });

@@ -189,7 +189,7 @@ test('NEGATIVE root gets ENOENT from a server with no usable record', async (t) 
     kind: 'mcp',
     server: 'fake-held-0704',
   });
-  assert.deepEqual(await ask('fake-held-0704'), none('fake-held-0704'));
+  assert.deepEqual(await ask('fake-held-0704'), none(held.placeholder));
 });
 
 test('NEGATIVE only root gets a server-only answer, and no other caller a kind', async (t) => {

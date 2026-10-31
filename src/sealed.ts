@@ -123,17 +123,26 @@ function root(stamp: Stamp): boolean {
 async function rootMcp(ctx: Context, req: Fields, server: string) {
   const name = req.name === undefined ? undefined : checkName(req.name);
   const held = await records(ctx.db, ctx.ns);
-  const bound = addressable(held, ctx.now(), await ctx.clean()).filter(
+  const clean = await ctx.clean();
+  const shown = (text: string) => (clean ? clean(text) : 'that name');
+  const bound = addressable(held, ctx.now(), clean).filter(
     (r) => r.server === server && (name === undefined || r.name === name)
   );
   const [found, ...others] = bound;
   if (!found) {
-    const none =
-      name === undefined ? `no mcp record is bound to ${server}` : `no record named ${name}`;
-    throw new Refused('ENOENT', none);
+    throw new Refused(
+      'ENOENT',
+      name === undefined
+        ? `no mcp record is bound to ${shown(server)}`
+        : `no record named ${shown(name)}`
+    );
   }
-  if (others.length > 0)
-    throw new Refused('EINVAL', `several mcp records are bound to ${server}; ask for one by name`);
+  if (others.length > 0) {
+    throw new Refused(
+      'EINVAL',
+      `several mcp records are bound to ${shown(server)}; ask for one by name`
+    );
+  }
   const placeholder = found.placeholder;
   return { placeholder, state: state(found, ctx.policy(), ctx.now()), kind: 'mcp' };
 }
