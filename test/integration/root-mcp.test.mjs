@@ -514,8 +514,6 @@ test('list.mcp leaves out a name that holds a value', async (t) => {
   await call(page, 'put', { name: 'NAMED_KEY', value: 'FAKE_NAME_VALUE_0708' });
   await settings(page, 'FAKE_NAME_VALUE_0708');
   assert.deepEqual((await call(page, 'list')).list.mcp, []);
-  const got = await sealed(page, { op: 'placeholder', server: 'docs' }, ROOT);
-  assert.equal(got.error.code, 'ENOENT');
 });
 
 test('list.mcp leaves out a server too long for a jerk provider', async (t) => {
@@ -543,6 +541,8 @@ test('list.mcp is empty while the vault is locked before its first unlock', asyn
   const welcome = await page.evaluate(() => window.harness.connect());
   assert.equal(welcome.status.locked, true);
   assert.deepEqual((await call(page, 'list')).list.mcp, []);
+  const got = await sealed(page, { op: 'placeholder', server: 'docs' }, ROOT);
+  assert.equal(got.error.code, 'ENOENT');
 });
 
 const forwarded = (page, url, placeholder, status) =>

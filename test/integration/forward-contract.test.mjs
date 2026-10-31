@@ -371,6 +371,8 @@ test('streamCredit gives no credit for an idle flush, a stray chunk or a late on
 
 test('forward gives no credit unless streamCredit is exactly true', async (t) => {
   const { page, a } = await ready(t);
+  const on = await relayed(page, a, { chunks: ['x'.repeat(64)] }, { streamCredit: true });
+  assert.deepEqual(credits(on.parts), [64]);
   for (const fields of [{}, { streamCredit: 'true' }, { streamCredit: 1 }]) {
     const { parts } = await relayed(page, a, { chunks: ['x'.repeat(64)] }, fields);
     assert.deepEqual(credits(parts), []);
