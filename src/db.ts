@@ -1,6 +1,17 @@
 export const STORES = ['meta', 'records', 'requests', 'audit', 'intents'] as const;
 export type Store = (typeof STORES)[number];
 
+const MIRRORED: Store[] = ['meta', 'records'];
+const flushes = new WeakMap<IDBDatabase, () => Promise<void>>();
+
+export function mirror(db: IDBDatabase, flush: () => Promise<void>): void {
+  flushes.set(db, flush);
+}
+
+export function mirrored(db: IDBDatabase): boolean {
+  return flushes.has(db);
+}
+
 export function request<T>(pending: IDBRequest<T>): Promise<T> {
   return new Promise((resolve, reject) => {
     pending.onsuccess = () => resolve(pending.result);
@@ -44,7 +55,14 @@ export function transact<T>(
     } catch {}
     throw error;
   });
-  return Promise.all([result, done]).then(([value]) => value);
+  const settled = Promise.all([result, done]).then(([value]) => value);
+  const flush = mode === 'readwrite' && stores.some((store) => MIRRORED.includes(store));
+  const saving = flush ? flushes.get(db) : undefined;
+  if (!saving) return settled;
+  return settled.then(async (value) => {
+    await saving();
+    return value;
+  });
 }
 
 export function all<T>(tx: IDBTransaction, store: Store, ns?: string): Promise<T[]> {
