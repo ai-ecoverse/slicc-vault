@@ -32,7 +32,7 @@ At start, a vault document that is the top-level document (`popup.html`, or `ind
 
 ## Storage and keys
 
-Everything lives in the vault origin's IndexedDB, database `slicc-vault`, version 1:
+Everything lives in the vault origin's IndexedDB, database `slicc-vault`, version 1. In Crest, `meta` and `records` are also kept in Crest's own store (below):
 
 | store | key | holds |
 |---|---|---|
@@ -45,7 +45,7 @@ Everything lives in the vault origin's IndexedDB, database `slicc-vault`, versio
 **The data key** is one AES-GCM 256 key. Each record's value is encrypted under it with a fresh 12-byte IV and the additional data `slicc-vault/1 NUL ns NUL kind NUL name`, so a ciphertext can't be moved to another record.
 
 **The key state** is one of:
-- `auto` (the default): the data key is stored as a **non-extractable** `CryptoKey`. Every vault document loads it at start, so there's never a prompt.
+- `auto` (the default): the data key is stored as a **non-extractable** `CryptoKey`. Every vault document loads it at start, so there's never a prompt. In Crest its raw bytes are also in Crest's store (below).
 - `passkey`: the data key is stored only wrapped (AES-GCM) under a key-encryption key from **WebAuthn PRF**. The passkey's RP id is the vault's host, the PRF input is a random 32-byte salt, and the KEK is HKDF-SHA-256 over the PRF output with that salt and the info `slicc-vault/kek/1`.
 - `passphrase`: the same, with the KEK from PBKDF2-SHA-256, 600,000 iterations, over a random 16-byte salt.
 
@@ -55,6 +55,20 @@ Everything lives in the vault origin's IndexedDB, database `slicc-vault`, versio
 - **Protecting** makes a new data key, re-encrypts every record under it, and stores it wrapped, in one transaction. If a record changed meanwhile, protecting fails with `EAGAIN` and changes nothing. **Removing protection** stores the current key as non-extractable again.
 - Every data key has an id, stored with it. A seal checks that id in the same transaction that writes the record, so a value encrypted under a key that was replaced meanwhile is refused with `EAGAIN` rather than stored unreadable.
 - While locked, `seal` answers `EACCES` with a message starting `vault is locked`. Ops that need no value (`placeholder`, `list`, `status`, ...) still work.
+
+### Crest
+
+WebKit holds a cross-origin frame's storage in memory, so on iOS the vault in seven would be empty after [Crest](https://github.com/ai-ecoverse/Crest) quits. A vault document at start looks for `window.webkit.messageHandlers.crestVaultStore`, and every browser without it keeps the path above: nothing below applies, and no line of it runs. Crest's contract is in its `Documentation/Architecture/DevToolsPort.md`, "Vault store".
+
+- **IndexedDB stays the working copy.** At start the vault reads Crest's entries (`dek:<id>`, `meta:<key>`, `records:<json key>`) into `meta` and `records`. After any `readwrite` transaction on either store commits, and before it resolves, it writes the entries that changed, under the Web Lock `slicc-vault-crest`, so a reply means the change is in Crest's store. Values stay encrypted under the data key, as bytes in base64url.
+- **What's kept:** `records`, and `meta` except `keys`, `announced:` and `sessions:`. `keys` is replaced by `dek:<id>`. `requests` and `intents` don't outlive their page. `audit`, `announced:` and `sessions:` stay in IndexedDB because they change on every forward or session, and each write rewrites Crest's whole sealed file: after a quit the audit log starts empty, and so do the counts behind `[exec]` limits.
+- **A change to `usedAt` alone writes nothing,** since every `forward` makes one. The latest `usedAt` reaches the store with the record's next real change, so a quit can lose it.
+- **The data key** is 32 random bytes imported as a non-extractable `CryptoKey`. It is never extractable, but its base64url bytes pass through the document once when they're made, to Crest, and once at each cold start, from Crest. A document that finds `dek:<id>` already matching the key in IndexedDB doesn't read them. They go nowhere but the handler.
+- **Which side wins at start:** with no `dek:` entry the vault makes one, and any records and `meta` already in IndexedDB are re-encrypted under it (a non-extractable key can't be moved), so nothing in the running session is lost. With a `dek:` entry whose id matches IndexedDB's key, IndexedDB is the same run, and wins: what the store missed is written. With another id, or an empty IndexedDB, the store wins.
+- **A failed read at start** (`EACCES`, `EIO`, an entry that can't be decoded, or a protected key already in IndexedDB) leaves the store untouched and the session on the path above, as a vault in a preview origin Crest doesn't allow does.
+- **A failed write** answers `EAGAIN` with a message saying the change lasts only until Crest quits, though it stands in IndexedDB. Crest's 16 MiB limit is such a failure. The entry is tried again after the next write that changes something new, and an unrelated `forward` isn't failed by it.
+- **Writes aren't atomic across entries:** a quit part-way through can keep a record without its `scrub:` bump, say.
+- **Protecting answers `ENOTSUP`** while the vault uses Crest's store: re-keying spans entries, and the popup, a top-level document, gets no handler and shares no storage with the frame.
 
 ## Records
 
