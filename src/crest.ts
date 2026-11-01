@@ -102,21 +102,17 @@ class Store {
     return (await request(tx.objectStore('meta').get('keys'))) as Keys | undefined;
   }
 
-  async mint(local: Keys | undefined): Promise<void> {
-    if (local && local.mode !== 'auto') throw new Refused('ENOTSUP', 'the vault is protected');
+  async mint(local: Keys | undefined, held: VaultRecord[]): Promise<void> {
     const raw = random(32);
     const dek = await imported(raw);
     const id = hex(random(8));
-    const held = await transact(this.db, ['records'], 'readonly', (tx) =>
-      all<VaultRecord>(tx, 'records')
-    );
-    const records = local ? await reseal(held, local.dek, dek) : [];
-    await this.native.postMessage({ op: 'put', key: `${DEK}${id}`, value: base64url(raw) });
-    raw.fill(0);
+    const records = local?.mode === 'auto' ? await reseal(held, local.dek, dek) : [];
     await transact(this.db, ['meta', 'records'], 'readwrite', async (tx) => {
       for (const record of records) await request(tx.objectStore('records').put(record));
       await request(tx.objectStore('meta').put({ mode: 'auto', dek, id }, 'keys'));
     });
+    await this.native.postMessage({ op: 'put', key: `${DEK}${id}`, value: base64url(raw) });
+    raw.fill(0);
   }
 
   async restore(name: string, id: string, saved: Map<string, unknown>): Promise<void> {
@@ -148,7 +144,14 @@ class Store {
     }
     const local = await this.keys();
     const id = dek?.slice(DEK.length);
-    if (id === undefined) await this.mint(local);
+    const held = await transact(this.db, ['records'], 'readonly', (tx) =>
+      all<VaultRecord>(tx, 'records')
+    );
+    const other = local !== undefined && local.id !== id;
+    if (other && (local.mode !== 'auto' || (id !== undefined && held.length > 0))) {
+      throw new Refused('ENOTSUP', 'IndexedDB holds another vault');
+    }
+    if (id === undefined) await this.mint(local, held);
     else if (local?.id !== id) await this.restore(dek as string, id, saved);
     for (const [name, value] of saved) this.known.set(name, print(name, value));
   }
