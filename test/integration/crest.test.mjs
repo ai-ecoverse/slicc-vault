@@ -191,3 +191,19 @@ test('NEGATIVE a protected vault stays protected when the store holds another ke
   assert.equal(kept.placeholder, made.placeholder);
   assert.deepEqual(await atVault(page, store, KEY), planted);
 });
+
+test('NEGATIVE settings made after a failed read survive a later read that succeeds', async (t) => {
+  const page = await launch(t, true);
+  await page.evaluate((value) => window.harness.call('put', { name: 'DURABLE', value }), VALUE);
+  await atVault(page, quit);
+  await page.evaluate(failOnce, 'list');
+  await reopen(t, page);
+  await page.evaluate(() => window.harness.call('dismissBackupReminder'));
+  await reopen(t, page);
+  const { status } = await page.evaluate(() => window.harness.call('status'));
+  assert.equal(status.backupReminder, 'dismissed');
+  const looked = await page.evaluate(placeholder, 'DURABLE');
+  assert.match(looked.placeholder, /^fnox_proxy_/);
+  const entries = await atVault(page, store, KEY);
+  assert.ok(Object.keys(entries).some((name) => name.startsWith('meta:backup:')));
+});

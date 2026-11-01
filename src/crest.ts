@@ -124,8 +124,6 @@ class Store {
     await transact(this.db, ['meta', 'records'], 'readwrite', async (tx) => {
       const meta = tx.objectStore('meta');
       const records = tx.objectStore('records');
-      await request(meta.clear());
-      await request(records.clear());
       await request(meta.put({ mode: 'auto', dek, id }, 'keys'));
       for (const [key, value] of saved) {
         if (key.startsWith(RECORD)) await request(records.put(value));
