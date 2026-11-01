@@ -1,8 +1,11 @@
 import assert from 'node:assert/strict';
-import { test } from 'node:test';
+import { after, test } from 'node:test';
+import { browser, openPopup, press, typeInto } from './browser.mjs';
 import { setup } from './setup.mjs';
 
 const { chrome, embedder, served } = await setup();
+const cdp = await browser(chrome);
+after(() => cdp.close());
 
 const VALUE = 'crest-value-kept-across-launches';
 const KEY = 'crest-store';
@@ -25,7 +28,17 @@ function fakeCrest() {
     },
   };
   window.webkit = {
-    messageHandlers: { crestVaultStore: { postMessage: async (call) => answers[call.op](call) } },
+    messageHandlers: {
+      crestVaultStore: {
+        postMessage: async (call) => {
+          if (localStorage.getItem('crest-fail-once') === call.op) {
+            localStorage.removeItem('crest-fail-once');
+            throw new Error('EIO');
+          }
+          return answers[call.op](call);
+        },
+      },
+    },
   };
 }
 
@@ -100,4 +113,81 @@ test('NEGATIVE a browser without the handler keeps everything in IndexedDB', asy
     window.harness.sealed({ v: 1, op: 'placeholder', name: 'PLAIN_TOKEN' })
   );
   assert.equal(looked.placeholder, undefined);
+});
+
+const placeholder = (name) => window.harness.sealed({ v: 1, op: 'placeholder', name });
+const failOnce = (op) => localStorage.setItem('crest-fail-once', op);
+
+async function reopen(t, page) {
+  await embedder(t, 'seven', page);
+  await page.evaluate(() => window.harness.connect());
+}
+
+test('NEGATIVE records made after a failed read survive a later read that succeeds', async (t) => {
+  const page = await launch(t, true);
+  await page.evaluate((value) => window.harness.call('put', { name: 'DURABLE', value }), VALUE);
+  const before = await atVault(page, store, KEY);
+  await page.evaluate(quit);
+  await page.evaluate(failOnce, 'list');
+  await reopen(t, page);
+  const made = await page.evaluate(
+    (value) => window.harness.call('put', { name: 'MEANWHILE', value }),
+    VALUE
+  );
+  assert.match(made.placeholder, /^fnox_proxy_/);
+  await reopen(t, page);
+  const kept = await page.evaluate(placeholder, 'MEANWHILE');
+  assert.equal(kept.placeholder, made.placeholder);
+  assert.deepEqual(await atVault(page, store, KEY), before);
+});
+
+test('records in IndexedDB outlive a data key Crest refused once', async (t) => {
+  const page = await launch(t, false);
+  const made = await page.evaluate(
+    (value) => window.harness.call('put', { name: 'WAITING', value }),
+    VALUE
+  );
+  await atVault(page, () => localStorage.setItem('crest-offered', '1'));
+  await page.evaluate(failOnce, 'put');
+  await reopen(t, page);
+  assert.deepEqual(await atVault(page, store, KEY), {});
+  await reopen(t, page);
+  const entries = await atVault(page, store, KEY);
+  assert.ok(Object.keys(entries).some((name) => name.startsWith('dek:')));
+  assert.ok(Object.keys(entries).some((name) => name.includes('WAITING')));
+  await page.evaluate(quit);
+  await reopen(t, page);
+  const kept = await page.evaluate(placeholder, 'WAITING');
+  assert.equal(kept.placeholder, made.placeholder);
+});
+
+test('NEGATIVE a protected vault stays protected when the store holds another key', async (t) => {
+  const page = await launch(t, false);
+  const made = await page.evaluate(
+    (value) => window.harness.call('put', { name: 'LOCKED', value }),
+    VALUE
+  );
+  const manage = await openPopup(cdp, page, { kind: 'protect' }, 'Vault lock');
+  await press(manage, 'Protect with a passphrase');
+  await typeInto(manage, '#passphrase', 'correct horse battery');
+  await typeInto(manage, '#confirm', 'correct horse battery');
+  await press(manage, 'Protect');
+  await manage.until(() => document.body.textContent.includes('Protected with a passphrase.'));
+  await page.until(async () => (await window.harness.call('status')).status.lock === 'passphrase');
+  const planted = { 'dek:other': 'A'.repeat(43) };
+  await atVault(
+    page,
+    (key, entries) => {
+      localStorage.setItem('crest-offered', '1');
+      localStorage.setItem(key, JSON.stringify(entries));
+    },
+    KEY,
+    planted
+  );
+  await reopen(t, page);
+  const { status } = await page.evaluate(() => window.harness.call('status'));
+  assert.equal(status.lock, 'passphrase');
+  const kept = await page.evaluate(placeholder, 'LOCKED');
+  assert.equal(kept.placeholder, made.placeholder);
+  assert.deepEqual(await atVault(page, store, KEY), planted);
 });
