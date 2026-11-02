@@ -7,6 +7,7 @@ const EXTRA = [
   ['https://aiplatform.googleapis.com', 'google-vertex'],
   ['https://{AZURE_OPENAI_RESOURCE_NAME}.cognitiveservices.azure.com/openai', 'azure'],
   ['https://opencode.ai/zen', null],
+  ['https://opencode.ai/inference', null],
   ['https://api.kimi.com/coding', null],
   ['https://bedrock-runtime.{region}.amazonaws.com', 'amazon-bedrock'],
   ['https://bedrock-runtime-fips.{region}.amazonaws.com', 'amazon-bedrock'],
