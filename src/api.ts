@@ -1,4 +1,4 @@
-import type { Scrubber } from '@ai-ecoverse/slicc-scrub';
+import { compile, type Scrubber } from '@ai-ecoverse/slicc-scrub';
 import { AgentPort } from './agent.ts';
 import type { Part } from './channel.ts';
 import { embedded } from './config.ts';
@@ -21,6 +21,8 @@ import {
   checkName,
   checkValue,
   dismissBackup,
+  forget,
+  type Lease,
   NAME,
   placeholders,
   rebind,
@@ -337,6 +339,56 @@ function checkJerk(value: unknown): Fields {
   return out;
 }
 
+const LEASE = /^[^\0-\x1f\x7f]{1,128}$/;
+const LEASE_SHAPE = 'lease is { id, node }, 1 to 128 characters each, for a jerk secret';
+
+function checkLease(value: unknown, kind: RecordKind, source: string): Lease | undefined {
+  if (value === undefined) return undefined;
+  const given = value as Fields;
+  const valid =
+    kind === 'secret' &&
+    source.startsWith('jerk:') &&
+    typeof given === 'object' &&
+    given !== null &&
+    !Array.isArray(given) &&
+    Object.keys(given).sort().join() === 'id,node' &&
+    typeof given.id === 'string' &&
+    typeof given.node === 'string' &&
+    LEASE.test(given.id) &&
+    LEASE.test(given.node);
+  if (!valid) throw new Refused('EINVAL', LEASE_SHAPE);
+  return { id: given.id as string, node: given.node as string };
+}
+
+async function leased(vault: Vault, ns: string, request: Fields, kind: RecordKind, value: string) {
+  const lease = checkLease(request.lease, kind, request.source as string);
+  if (!lease) return {};
+  vault.keyring.use();
+  const scrubber = (await vault.scrubbers.get(ns)) as Scrubber;
+  const own = compile([{ name: 'LEASE', placeholder: `fnox_proxy_${'0'.repeat(24)}`, value }], {
+    version: 0,
+  });
+  const holds = (text: string) => [scrubber, own].some((s) => s.text(text).hits.length > 0);
+  const check = (version: number) => {
+    if (version !== scrubber.version) throw new Refused('EAGAIN', 'the vault changed meanwhile');
+    if (holds(lease.id) || holds(lease.node)) {
+      throw new Refused('EINVAL', 'the lease holds a stored value');
+    }
+  };
+  check(scrubber.version);
+  return { lease, guard: (_settings: Record<string, string>, version: number) => check(version) };
+}
+
+async function forgetLease(vault: Vault, ns: string, request: Fields): Promise<Fields> {
+  const { provider, lease, node } = request;
+  if (typeof provider !== 'string' || typeof lease !== 'string' || typeof node !== 'string') {
+    throw new Refused('EINVAL', 'forgetLease takes provider, lease and node strings');
+  }
+  const forgotten = await forget(vault.db, ns, provider, { id: lease, node }, vault.now());
+  if (forgotten) await vault.changed(ns, ['secrets', 'audit']);
+  return { forgotten };
+}
+
 async function sealFromPage(vault: Vault, ns: string, request: Fields): Promise<Fields> {
   const name = checkName(request.name);
   const value = checkValue(request.value);
@@ -368,6 +420,7 @@ async function sealFromPage(vault: Vault, ns: string, request: Fields): Promise<
   }
   const expiresAt = optionalNumber(request.expiresAt, 'expiresAt');
   const bound = binding(kind, request);
+  const lease = await leased(vault, ns, request, kind, value);
   const { record } = await seal(vault.db, vault.keyring.use(), {
     ns,
     kind,
@@ -381,6 +434,7 @@ async function sealFromPage(vault: Vault, ns: string, request: Fields): Promise<
     ...(expiresAt === undefined ? {} : { expiresAt }),
     ...(refresh === undefined ? {} : { refresh: refresh as string }),
     ...(oauth === undefined ? {} : { oauth }),
+    ...lease,
     ...(pending
       ? { answers: { id: pending.id, clock: () => vault.now(), ...(jerk ? { jerk } : {}) } }
       : {}),
@@ -443,6 +497,8 @@ export async function answer(
       return mark(vault, ns, request, request.op === 'remove');
     case 'cancel':
       return cancel(vault, ns, request);
+    case 'forgetLease':
+      return forgetLease(vault, ns, request);
     case 'import':
       return importer(vault, ns, request);
     case 'export':

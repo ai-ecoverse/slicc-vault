@@ -95,13 +95,13 @@ const shown = async (page, name) =>
 
 test('status names the forward capability', async (t) => {
   const { page, welcome } = await ready(t);
-  assert.deepEqual(welcome.status.capabilities, { forward: 1 });
+  assert.deepEqual(welcome.status.capabilities, { forward: 1, leases: 1 });
   const { status } = await page.evaluate(() => window.harness.call('status'));
-  assert.deepEqual(status.capabilities, { forward: 1 });
+  assert.deepEqual(status.capabilities, { forward: 1, leases: 1 });
   const pushed = await page.evaluate(
     () => window.harness.events.findLast((event) => event.event === 'status').status
   );
-  assert.deepEqual(pushed.capabilities, { forward: 1 });
+  assert.deepEqual(pushed.capabilities, { forward: 1, leases: 1 });
 });
 
 test('a secret needs a manual exit in any header', async (t) => {
