@@ -21,6 +21,8 @@ export const PLACEHOLDER = /^fnox_proxy_[0-9a-f]{24}$/;
 export const RESTORABLE = 30 * 24 * 60 * 60 * 1000;
 export const MIN_VALUE = 8;
 export const MAX_PROVIDER = 128;
+export const REVOKED = 256;
+export const REVOKED_FOR = 7 * 24 * 60 * 60 * 1000;
 const CONTAINS_PLACEHOLDER = /fnox_proxy_[0-9a-f]{24}/;
 
 export interface VaultRecord {
@@ -400,13 +402,16 @@ export async function sealAll(db: IDBDatabase, dek: Dek, inputs: SealInput[]): P
   const sealed = await Promise.all(
     inputs.map((input) => encrypt(dek.key, input.value, aad(input.ns, input.kind, input.name)))
   );
+  const keys = await Promise.all(
+    inputs.map((input) => (input.lease ? leaseKey(leaseProvider(input.source), input.lease) : null))
+  );
   const stores: Store[] = inputs.some((input) => input.answers)
     ? ['records', 'audit', 'meta', 'requests']
     : ['records', 'audit', 'meta'];
   return transact(db, stores, 'readwrite', async (tx) => {
     await keyed(tx, dek);
     const out: Sealing[] = [];
-    for (const [i, input] of inputs.entries()) out.push(await write(tx, input, sealed[i]));
+    for (const [i, input] of inputs.entries()) out.push(await write(tx, input, sealed[i], keys[i]));
     return out;
   });
 }
@@ -433,7 +438,42 @@ function stashed(input: SealInput, held: VaultRecord | undefined): Replaced | un
   };
 }
 
-async function write(tx: IDBTransaction, input: SealInput, sealed: Sealed): Promise<Sealing> {
+interface Revoked {
+  key: string;
+  at: number;
+}
+
+function leaseProvider(source: string): string {
+  return source.slice(5, source.indexOf('@'));
+}
+
+async function leaseKey(provider: string, lease: Lease): Promise<string> {
+  const text = new TextEncoder().encode(JSON.stringify([provider, lease.id, lease.node]));
+  return hex(new Uint8Array(await crypto.subtle.digest('SHA-256', text)));
+}
+
+async function revocations(tx: IDBTransaction, ns: string, now: number): Promise<Revoked[]> {
+  const stored = (await request(tx.objectStore('meta').get(`revoked:${ns}`))) as
+    | Revoked[]
+    | undefined;
+  return (stored ?? []).filter((entry) => now - entry.at < REVOKED_FOR);
+}
+
+async function revoked(tx: IDBTransaction, input: SealInput, key: string | null): Promise<void> {
+  if (key === null) return;
+  const held = await revocations(tx, input.ns, input.now);
+  if (held.some((entry) => entry.key === key)) {
+    throw new Refused('EACCES', 'this lease was revoked');
+  }
+}
+
+async function write(
+  tx: IDBTransaction,
+  input: SealInput,
+  sealed: Sealed,
+  key: string | null
+): Promise<Sealing> {
+  await revoked(tx, input, key);
   const store = tx.objectStore('records');
   const existing = (await request(store.get([input.ns, input.kind, input.name]))) as
     | VaultRecord
@@ -899,21 +939,24 @@ export function restore(
   return mark(db, ns, kind, name, now, false);
 }
 
-export function forget(
+export async function forget(
   db: IDBDatabase,
   ns: string,
   provider: string,
   lease: Lease,
   now: number
 ): Promise<boolean> {
+  const key = await leaseKey(provider, lease);
   return transact(db, ['records', 'audit', 'meta'], 'readwrite', async (tx) => {
     const store = tx.objectStore('records');
+    const kept = (await revocations(tx, ns, now)).filter((entry) => entry.key !== key);
+    const next = [...kept, { key, at: now }].slice(-REVOKED);
+    await request(tx.objectStore('meta').put(next, `revoked:${ns}`));
     const bound = (await all<VaultRecord>(tx, 'records', ns)).filter(
       (record) =>
         record.kind === 'secret' &&
-        !removed(record) &&
         record.source.startsWith('jerk:') &&
-        record.source.slice(5, record.source.indexOf('@')) === provider &&
+        leaseProvider(record.source) === provider &&
         record.lease?.id === lease.id &&
         record.lease.node === lease.node
     );

@@ -41,6 +41,32 @@ const shown = async (page) => {
 const forget = (page, fields = {}) =>
   call(page, 'forgetLease', { provider: 'github', lease: ID, node: NODE, ...fields });
 
+async function revocations(page, age) {
+  await page.goto(`${served.vault}/config.json`);
+  const ns = served.origin('seven');
+  return page.evaluate(
+    (key, by) =>
+      new Promise((resolve, reject) => {
+        const open = indexedDB.open('slicc-vault', 1);
+        open.onerror = () => reject(open.error);
+        open.onsuccess = () => {
+          const tx = open.result.transaction(['meta'], 'readwrite');
+          const meta = tx.objectStore('meta');
+          const got = meta.get(key);
+          let list = [];
+          got.onsuccess = () => {
+            list = (got.result ?? []).map((e) => ({ ...e, at: e.at - by }));
+            meta.put(list, key);
+          };
+          tx.oncomplete = () => resolve(list);
+          tx.onerror = () => reject(tx.error);
+        };
+      }),
+    `revoked:${ns}`,
+    age
+  );
+}
+
 async function raw(page) {
   await page.goto(`${served.vault}/config.json`);
   return page.evaluate(
@@ -137,7 +163,7 @@ test('forgetLease from the lease node purges the record, its ciphertext and its 
   assert.equal((await forget(page)).forgotten, false);
 });
 
-test('NEGATIVE forgetLease with another node, id or provider, or for an unbound or removed lease, forgets nothing', async (t) => {
+test('NEGATIVE forgetLease with another node, id or provider, or for an unbound lease, forgets nothing', async (t) => {
   const page = await connected(t);
   await call(page, 'seal', lease({ lease: { id: ID, node: NODE } }));
   await call(
@@ -145,12 +171,6 @@ test('NEGATIVE forgetLease with another node, id or provider, or for an unbound 
     'seal',
     lease({ name: 'NPM_TOKEN', value: 'fake-jerk-npm-0902', source: 'jerk:npm@air' })
   );
-  await call(
-    page,
-    'seal',
-    lease({ name: 'GONE', value: 'fake-jerk-gone-0903', lease: { id: 'gone', node: NODE } })
-  );
-  await call(page, 'remove', { name: 'GONE' });
   const before = await shown(page);
   const audited = (await call(page, 'audit')).audit.length;
   const tries = [
@@ -161,7 +181,6 @@ test('NEGATIVE forgetLease with another node, id or provider, or for an unbound 
     { provider: 'git' },
     { provider: 'github@air' },
     { lease: NODE, node: ID },
-    { lease: 'gone' },
   ];
   const replies = [];
   for (const fields of tries) replies.push(await forget(page, fields));
@@ -302,4 +321,76 @@ test('forgetLease purges while the vault is locked', async (t) => {
   assert.equal((await forget(page)).forgotten, true);
   assert.ok(!(await call(page, 'placeholders')).placeholders.includes(sealed.placeholder));
   assert.equal((await call(page, 'status')).status.locked, true);
+});
+
+test('forgetLease purges a removed lease too', async (t) => {
+  const page = await connected(t);
+  await call(page, 'seal', lease({ lease: { id: ID, node: NODE } }));
+  await call(page, 'remove', { name: 'GH_TOKEN' });
+  assert.equal((await forget(page)).forgotten, true);
+  assert.equal((await call(page, 'restore', { name: 'GH_TOKEN' })).error.code, 'ENOENT');
+  assert.equal((await call(page, 'list')).list.secrets.length, 0);
+});
+
+test('NEGATIVE a seal of a revoked lease is refused, also when it lands before or after the purge', async (t) => {
+  const page = await connected(t);
+  await call(page, 'seal', lease({ lease: { id: ID, node: NODE } }));
+  assert.equal((await forget(page)).forgotten, true);
+  const late = await call(page, 'seal', lease({ lease: { id: ID, node: NODE } }));
+  assert.deepEqual(late.error, { code: 'EACCES', message: 'this lease was revoked' });
+  assert.equal((await forget(page, { lease: 'early' })).forgotten, false);
+  const early = await call(page, 'seal', lease({ lease: { id: 'early', node: NODE } }));
+  assert.equal(early.error.code, 'EACCES');
+  assert.equal((await call(page, 'list')).list.secrets.length, 0);
+  const fresh = await call(page, 'seal', lease({ lease: { id: `${ID}-2`, node: NODE } }));
+  assert.equal(fresh.state, 'inert');
+  const other = await call(
+    page,
+    'seal',
+    lease({
+      name: 'NPM',
+      source: 'jerk:npm@air',
+      value: 'fake-jerk-npm-0920',
+      lease: { id: ID, node: NODE },
+    })
+  );
+  assert.equal(other.state, 'inert');
+  const plain = await call(page, 'seal', lease({ name: 'PLAIN', value: 'fake-jerk-plain-0921' }));
+  assert.equal(plain.state, 'inert');
+  const list = await revocations(page, 0);
+  assert.equal(list.length, 2);
+  assert.ok(!JSON.stringify(list).includes(ID) && !JSON.stringify(list).includes(NODE));
+});
+
+test('a revocation lapses after 7 days', async (t) => {
+  let page = await connected(t);
+  await forget(page);
+  await revocations(page, 7 * 24 * 60 * 60 * 1000 - 60000);
+  page = await connected(t, page);
+  assert.equal(
+    (await call(page, 'seal', lease({ lease: { id: ID, node: NODE } }))).error.code,
+    'EACCES'
+  );
+  await revocations(page, 60000);
+  page = await connected(t, page);
+  const sealed = await call(page, 'seal', lease({ lease: { id: ID, node: NODE } }));
+  assert.equal(sealed.state, 'inert');
+});
+
+test('at most 256 revocations are kept, the oldest dropped', async (t) => {
+  const page = await connected(t);
+  await page.evaluate(async (node) => {
+    for (let i = 0; i <= 256; i++) {
+      await window.harness.call('forgetLease', { provider: 'github', lease: `l-${i}`, node });
+    }
+  }, NODE);
+  const oldest = await call(page, 'seal', lease({ lease: { id: 'l-0', node: NODE } }));
+  assert.equal(oldest.state, 'inert');
+  const kept = await call(
+    page,
+    'seal',
+    lease({ name: 'NEXT', value: 'fake-jerk-next-0922', lease: { id: 'l-1', node: NODE } })
+  );
+  assert.equal(kept.error.code, 'EACCES');
+  assert.equal((await revocations(page, 0)).length, 256);
 });
