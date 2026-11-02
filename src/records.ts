@@ -47,6 +47,12 @@ export interface VaultRecord {
   sealedBy?: number;
   removedAt?: number;
   removedWith?: string;
+  lease?: Lease;
+}
+
+export interface Lease {
+  id: string;
+  node: string;
 }
 
 export interface OAuthConfig {
@@ -140,6 +146,7 @@ export interface SealInput {
   guard?: (settings: Record<string, string>, version: number) => void;
   placeholder?: string;
   answers?: Answers;
+  lease?: Lease;
   now: number;
 }
 
@@ -454,6 +461,7 @@ async function write(tx: IDBTransaction, input: SealInput, sealed: Sealed): Prom
     ...(input.expiresAt === undefined ? {} : { expiresAt: input.expiresAt }),
     ...(input.refresh === undefined ? {} : { refresh: input.refresh }),
     ...(input.oauth === undefined ? {} : { oauth: input.oauth }),
+    ...(input.lease === undefined ? {} : { lease: input.lease }),
     ...bound(existing, input),
   };
   if (record.kind === 'model' && record.provider === undefined) {
@@ -889,6 +897,33 @@ export function restore(
   kind: RecordKind = 'secret'
 ): Promise<VaultRecord> {
   return mark(db, ns, kind, name, now, false);
+}
+
+export function forget(
+  db: IDBDatabase,
+  ns: string,
+  provider: string,
+  lease: Lease,
+  now: number
+): Promise<boolean> {
+  return transact(db, ['records', 'audit', 'meta'], 'readwrite', async (tx) => {
+    const store = tx.objectStore('records');
+    const bound = (await all<VaultRecord>(tx, 'records', ns)).filter(
+      (record) =>
+        record.kind === 'secret' &&
+        !removed(record) &&
+        record.source.startsWith('jerk:') &&
+        record.source.slice(5, record.source.indexOf('@')) === provider &&
+        record.lease?.id === lease.id &&
+        record.lease.node === lease.node
+    );
+    for (const record of bound) {
+      await request(store.delete([ns, record.kind, record.name]));
+      await audit(tx, ns, { type: 'remove', name: record.name, uid: null, tag: null, at: now });
+    }
+    if (bound.length) await bump(tx, ns);
+    return bound.length > 0;
+  });
 }
 
 export function purge(db: IDBDatabase, now: number): Promise<number> {

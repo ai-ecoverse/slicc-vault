@@ -149,6 +149,12 @@ export interface ScrubState {
 
 export interface Capabilities {
   forward: 1;
+  leases: 1;
+}
+
+export interface LeaseBinding {
+  id: string;
+  node: string;
 }
 
 export interface VaultStatus {
@@ -519,7 +525,9 @@ export type Op =
       oauth?: OAuthConfig;
       request?: string;
       jerk?: JerkResult;
+      lease?: LeaseBinding;
     } & RecordBinding)
+  | { op: 'forgetLease'; provider: string; lease: string; node: string }
   | { op: 'refresh'; name: string }
   | ({ op: 'answer'; request: string; state: 'progress' | 'done' } & RequestAnswer)
   | {
@@ -643,6 +651,7 @@ export type OpReply =
   | ({ op: 'audit' } & AuditPage)
   | ({ op: 'put' | 'seal' | 'remove' | 'restore' } & SealResult)
   | { op: 'cancel'; state: RequestState }
+  | { op: 'forgetLease'; forgotten: boolean }
   | ({ op: 'import' } & ImportResult)
   | { op: 'export'; bundle: Uint8Array; count: number }
   | { op: 'lock' }
