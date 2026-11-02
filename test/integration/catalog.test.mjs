@@ -66,10 +66,14 @@ test('keys reach the current catalog: opencode inference, Vertex global and Azur
       keys[provider].placeholder
     );
   for (const [provider, url, value] of [
-    ['opencode', 'https://opencode.ai/inference/v1/chat/completions', 'fake-opencode-key-0301'],
+    [
+      'opencode',
+      'https://opencode.ai/inference/openai/v1/chat/completions',
+      'fake-opencode-key-0301',
+    ],
     [
       'opencode-go',
-      'https://opencode.ai/inference/go/v1/chat/completions',
+      'https://opencode.ai/inference/go/openai/v1/chat/completions',
       'fake-opencode-go-0302',
     ],
     [
@@ -90,8 +94,14 @@ test('keys reach the current catalog: opencode inference, Vertex global and Azur
       `${provider}: ${JSON.stringify(got.error)}`
     );
   }
-  const stale = await ask('opencode', 'https://opencode.ai/zen/v1/chat/completions');
-  assert.match(stale.error.message, /sent only to opencode's own endpoints/);
+  for (const [provider, url] of [
+    ['opencode', 'https://opencode.ai/zen/v1/chat/completions'],
+    ['opencode', 'https://opencode.ai/inference/v1/chat/completions'],
+    ['opencode-go', 'https://opencode.ai/inference/go/v1/chat/completions'],
+  ]) {
+    const stale = await ask(provider, url);
+    assert.match(stale.error.message, /sent only to .*'s own endpoints/, url);
+  }
   for (const url of [
     'https://a.b.cognitiveservices.azure.com/openai/deployments/d/chat/completions',
     'https://cognitiveservices.azure.com.example.com/openai/deployments/d/chat/completions',
@@ -135,6 +145,8 @@ test('retired and new model hosts stay refused for secrets, and Azure Speech rul
   for (const url of [
     'https://opencode.ai/zen/v1/chat/completions',
     'https://opencode.ai/zen/go/v1/chat/completions',
+    'https://opencode.ai/inference/v1/chat/completions',
+    'https://opencode.ai/inference/go/v1/chat/completions',
     'https://api.kimi.com/coding/chat',
     'https://my-resource.cognitiveservices.azure.com/openai/deployments/d/chat/completions',
   ]) {
