@@ -69,7 +69,7 @@
     "js-yaml": "5.5.0",
     "kdbxweb": "2.1.1",
     "lefthook": "2.2.2",
-    "monocart-coverage-reports": "2.13.2",
+    "monocart-coverage-reports": "3.0.0",
     "semantic-release": "25.0.9",
     "typescript": "7.0.2"
   }
