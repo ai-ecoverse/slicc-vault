@@ -294,7 +294,7 @@ async function resumedAfterPause(page, a, mail, files) {
   await upload(page, [files[1]]);
 }
 
-test('a rule refusal has no cause, though a pause had one', async (t) => {
+test('a rule refusal after a pause names its rule, not the pause', async (t) => {
   const { page, a, mail, files } = await ready(t);
   await resumedAfterPause(page, a, mail, files);
   const fields = call(a);
@@ -303,6 +303,7 @@ test('a rule refusal has no cause, though a pause had one', async (t) => {
   assert.deepEqual(sent.reply.refused, {
     status: 403,
     reason: 'TOKEN_A is only for api.example.com',
+    cause: 'rule-domain',
   });
   const refused = await page.evaluate(
     (url) => window.harness.sealed({ v: 1, op: 'test', name: 'TOKEN_A', url }),
@@ -312,6 +313,7 @@ test('a rule refusal has no cause, though a pause had one', async (t) => {
     v: 1,
     verdict: 'refuse',
     reason: 'TOKEN_A is only for api.example.com',
+    cause: 'rule-domain',
   });
   const shell = await page.evaluate(
     (f, s) => window.harness.sealed({ v: 1, op: 'materialize', ...f }, s),
@@ -341,7 +343,7 @@ test('a rule refusal has no cause, though a pause had one', async (t) => {
   assert.deepEqual(anchors.error, { code: 'EACCES', message: 'kernel users must be enforce' });
 });
 
-test('a locked vault refuses without a cause, though a pause had one', async (t) => {
+test('a locked vault after a pause names the lock in forward and test, and other ops refuse without a cause', async (t) => {
   const { page, a, mail, files } = await ready(t);
   await resumedAfterPause(page, a, mail, files);
   const { ticket } = await materialize(page);
@@ -354,8 +356,17 @@ test('a locked vault refuses without a cause, though a pause had one', async (t)
   await press(manage, 'Lock now');
   await page.until(async () => (await window.harness.call('status')).status.locked === true);
   const error = { code: 'EACCES', message: LOCKED };
-  assert.deepEqual((await forward(page, call(a))).reply.refused, { status: 403, reason: LOCKED });
-  assert.deepEqual(await verdict(page), { v: 1, verdict: 'refuse', reason: LOCKED });
+  assert.deepEqual((await forward(page, call(a))).reply.refused, {
+    status: 403,
+    reason: LOCKED,
+    cause: 'vault-locked',
+  });
+  assert.deepEqual(await verdict(page), {
+    v: 1,
+    verdict: 'refuse',
+    reason: LOCKED,
+    cause: 'vault-locked',
+  });
   assert.deepEqual((await materialize(page)).error, error);
   assert.deepEqual((await consume(page, ticket)).error, error);
   assert.deepEqual((await op(page, 'sessionMaterialize', session(mail))).error, error);

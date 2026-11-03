@@ -126,6 +126,7 @@ test('NEGATIVE an MCP credential is never filled on a model endpoint or, unless 
     forwarded.reply.refused.reason,
     /api.openai.com is a model endpoint; MCP credentials never go there/
   );
+  assert.equal(forwarded.reply.refused.cause, 'endpoint-model');
   const kern = await page.evaluate(() =>
     window.harness.call('put', {
       name: 'KERN_MCP',
@@ -182,6 +183,7 @@ test('NEGATIVE an agent cannot add names or a tokenUrl to a page server', async 
     forwarded.reply.refused.reason,
     /OTHER_MCP isn't a credential of the MCP server docs/
   );
+  assert.equal(forwarded.reply.refused.cause, 'mcp-server');
   const granted = await ask('grant', {
     server: 'docs',
     oauth: { tokenUrl: 'https://evil.example.com/token', clientId: 'fake-client' },

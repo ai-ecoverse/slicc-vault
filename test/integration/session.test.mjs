@@ -464,6 +464,7 @@ test('a session rule is never used by forward, and a forward rule never by a ses
   assert.deepEqual(forwarded.reply.refused, {
     status: 403,
     reason: 'no rule in /etc/fnox/config.toml lets SMTP_PASS be used',
+    cause: 'no-rule',
   });
   const list = (await page.evaluate(() => window.harness.call('list'))).list;
   const smtpView = list.secrets.find((secret) => secret.name === 'SMTP_PASS');

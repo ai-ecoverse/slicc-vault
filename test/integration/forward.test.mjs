@@ -107,51 +107,98 @@ test('forward refuses what the rule does not allow, before anything is sent', as
   const { page, a, b } = await ready(t, '[exits]\nTOKEN_A = ["proxy"]\n');
   const bearer = (p) => [['Authorization', `Bearer ${p}`]];
   const cases = [
-    [head('https://api.example.com/v1/items', bearer(a)), 'page', "isn't allowed on page"],
-    [head('https://other.example.com/v1/items', bearer(a)), 'proxy', 'is only for api.example.com'],
+    [
+      head('https://api.example.com/v1/items', bearer(a)),
+      'page',
+      "isn't allowed on page",
+      'rule-exit',
+    ],
+    [
+      head('https://other.example.com/v1/items', bearer(a)),
+      'proxy',
+      'is only for api.example.com',
+      'rule-domain',
+    ],
     [
       head('https://api.example.com/v1/items', bearer(a), 'POST'),
       'proxy',
       "isn't allowed in authorization",
+      'rule-request',
     ],
     [
       head('https://api.example.com/v2/items', bearer(a)),
       'proxy',
       "isn't allowed in authorization",
+      'rule-request',
     ],
-    [head('https://api.example.com/v1/items', [['X-Key', a]]), 'proxy', "isn't allowed in x-key"],
-    [head(`https://api.example.com/v1/items?k=${a}`, []), 'proxy', 'works only in a header'],
-    [head('https://api.example.com/v1/items', [[a, 'x']]), 'proxy', "can't be a header name"],
-    [head('http://api.example.com/v1/items', bearer(a)), 'proxy', 'only over https'],
-    [head('https://api.example.com:8443/v1/items', bearer(a)), 'proxy', 'only over https'],
-    [head('https://api.example.com/v1/%2e%2e/admin', bearer(a)), 'proxy', 'ambiguous path'],
+    [
+      head('https://api.example.com/v1/items', [['X-Key', a]]),
+      'proxy',
+      "isn't allowed in x-key",
+      'rule-request',
+    ],
+    [
+      head(`https://api.example.com/v1/items?k=${a}`, []),
+      'proxy',
+      'works only in a header',
+      'placeholder-in-url',
+    ],
+    [
+      head('https://api.example.com/v1/items', [[a, 'x']]),
+      'proxy',
+      "can't be a header name",
+      'placeholder-in-header-name',
+    ],
+    [
+      head('http://api.example.com/v1/items', bearer(a)),
+      'proxy',
+      'only over https',
+      'insecure-destination',
+    ],
+    [
+      head('https://api.example.com:8443/v1/items', bearer(a)),
+      'proxy',
+      'only over https',
+      'insecure-destination',
+    ],
+    [
+      head('https://api.example.com/v1/%2e%2e/admin', bearer(a)),
+      'proxy',
+      'ambiguous path',
+      'path-ambiguous',
+    ],
     [
       head('https://api.example.com/v1/items', [['Authorization', `Bearer ${a} ${a}`]]),
       'proxy',
       'more than once',
+      'placeholder-repeated',
     ],
     [
       head('https://api.example.com/v1/items', bearer(b)),
       'proxy',
       'no rule in /etc/fnox/config.toml',
+      'no-rule',
     ],
     [
       head('https://api.example.com/v1/items', [['Authorization', 'Bearer none']]),
       'proxy',
       'carries no placeholder',
+      'no-placeholder',
     ],
     [
       head('https://api.anthropic.com/v1/messages', bearer(a)),
       'proxy',
       'is a model or MCP endpoint',
+      'endpoint-protected',
     ],
     [
       head('https://bedrock-runtime.us-west-2.amazonaws.com/model', bearer(a)),
       'proxy',
       'is a model or MCP endpoint',
+      'endpoint-protected',
     ],
   ];
-  for (const [request, exit, reason] of cases) {
+  for (const [request, exit, reason, cause] of cases) {
     const { reply, parts } = await send(page, {
       head: request,
       owner: OWNER,
@@ -161,6 +208,7 @@ test('forward refuses what the rule does not allow, before anything is sent', as
     assert.ok(reply.refused, `${reason}: ${JSON.stringify(reply)}`);
     assert.equal(reply.refused.status, 403);
     assert.ok(reply.refused.reason.includes(reason), `${reason}: ${reply.refused.reason}`);
+    assert.equal(reply.refused.cause, cause, reason);
     assert.deepEqual(parts, []);
   }
   const encoded = await send(page, {
@@ -170,6 +218,7 @@ test('forward refuses what the rule does not allow, before anything is sent', as
     rawTraits: { encodedBodies: true },
   });
   assert.equal(encoded.reply.refused.status, 502);
+  assert.equal(encoded.reply.refused.cause, 'exit-encoded-bodies');
   const bad = await page.evaluate(() =>
     window.harness.call('forward', { head: {}, owner: {}, exit: 'page' })
   );
@@ -199,9 +248,10 @@ test('Basic credentials are decoded, injected and re-encoded', async (t) => {
       ['X-Id', a],
     ])
   );
-  assert.ok(plain.reply.refused);
+  assert.equal(plain.reply.refused.cause, 'rule-request');
   const broken = await send(page, fields([['Authorization', `Basic ${btoa(`u:${a}:xyz`)}!`]]));
   assert.match(broken.reply.refused.reason, /valid base64/);
+  assert.equal(broken.reply.refused.cause, 'basic-invalid');
 });
 
 test('the /dev/sealed test op gives the injector verdict', async (t) => {
@@ -219,13 +269,17 @@ test('the /dev/sealed test op gives the injector verdict', async (t) => {
   );
   const no = await verdict('https://api.example.com/v1/items', 'DELETE');
   assert.equal(no.verdict, 'refuse');
+  assert.equal(no.cause, 'rule-request');
   const off = await page.evaluate(() =>
     window.harness.sealed(
       { v: 1, op: 'test', name: 'TOKEN_A', url: 'https://api.example.com/v1/items', method: 'GET' },
       { pid: 42, ppid: 1, uid: 1000, gid: 1000, tag: 'cone', users: 'off' }
     )
   );
-  assert.deepEqual([off.verdict, off.reason], ['refuse', 'kernel users must be enforce']);
+  assert.deepEqual(
+    [off.verdict, off.reason, off.cause],
+    ['refuse', 'kernel users must be enforce', 'users-off']
+  );
 });
 
 test('lock has no effect on an auto-unlocking vault, which keeps injecting and scrubbing', async (t) => {
@@ -257,7 +311,11 @@ test('forward injects nothing while kernel users is not enforce', async (t) => {
       bodyPresent: false,
       rawTraits: { manualRedirects: true },
     });
-    assert.deepEqual(reply.refused, { status: 403, reason: 'kernel users must be enforce' });
+    assert.deepEqual(reply.refused, {
+      status: 403,
+      reason: 'kernel users must be enforce',
+      cause: 'users-off',
+    });
     assert.ok(!JSON.stringify(reply).includes(VALUE_A));
   }
 });

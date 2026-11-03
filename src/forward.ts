@@ -1,7 +1,7 @@
 import type { Scrubber, Stream } from '@ai-ecoverse/slicc-scrub';
 import type { ExitName, Stamp } from './contract.ts';
 import { all, request, transact } from './db.ts';
-import { caused, Refused } from './errors.ts';
+import { Refused } from './errors.ts';
 import { type Head, type Prepared, prepare, type Traits } from './inject.ts';
 import { MAX_BODY } from './prepare.ts';
 import { atVersion, audit, records, scrubIn, scrubVersion, type VaultRecord } from './records.ts';
@@ -59,12 +59,22 @@ function bodyOf(value: unknown): Uint8Array | null {
 
 function unsendable(present: unknown, body: Uint8Array | null): Fields | null {
   if (typeof present !== 'boolean') {
-    return { refused: { status: 400, reason: 'an MCP request must say whether it has a body' } };
+    return {
+      refused: {
+        status: 400,
+        reason: 'an MCP request must say whether it has a body',
+        cause: 'mcp-body-framing',
+      },
+    };
   }
   if (present && !body) return { needsBody: true };
   if (!present && body) {
     return {
-      refused: { status: 400, reason: 'an MCP request that says it has no body carries one' },
+      refused: {
+        status: 400,
+        reason: 'an MCP request that says it has no body carries one',
+        cause: 'mcp-body-framing',
+      },
     };
   }
   if (body && body.byteLength > MAX_BODY) {
@@ -272,7 +282,7 @@ export async function forward(
   });
   if (!prepared.ok) {
     const { status, reason, cause } = prepared;
-    return { refused: { status, reason, ...caused(cause) } };
+    return { refused: { status, reason, cause } };
   }
   const server = prepared.server;
   const body = server ? bodyOf(fields.body) : null;
@@ -283,7 +293,11 @@ export async function forward(
   const guard = (work: () => void, stale: () => void) =>
     atVersion(vault.db, ns, scrubber.version, () => (same() ? work() : stale()), stale);
   const stale = {
-    refused: { status: 403, reason: 'the endpoints changed meanwhile; send it again' },
+    refused: {
+      status: 403,
+      reason: 'the endpoints changed meanwhile; send it again',
+      cause: 'changed',
+    },
   };
   if (scrubber.version !== started) return stale;
   const scrubbed = server && body ? { body: scrubber.bytes(body).bytes } : {};
