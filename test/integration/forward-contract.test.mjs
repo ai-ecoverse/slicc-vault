@@ -112,6 +112,7 @@ test('a secret needs a manual exit in any header', async (t) => {
       assert.deepEqual(reply.refused, {
         status: 403,
         reason: "TOKEN_A needs an exit that doesn't follow redirects",
+        cause: 'exit-follows-redirects',
       });
     }
   }
@@ -127,6 +128,7 @@ test('an MCP credential needs a manual exit in any header', async (t) => {
     assert.deepEqual(reply.refused, {
       status: 403,
       reason: "NOTES_MCP needs an exit that doesn't follow redirects",
+      cause: 'exit-follows-redirects',
     });
   }
   assert.deepEqual(await used(page, 'mcp'), []);
@@ -161,6 +163,7 @@ test('an MCP forward must say whether it has a body', async (t) => {
   assert.deepEqual(reply.refused, {
     status: 400,
     reason: 'an MCP request must say whether it has a body',
+    cause: 'mcp-body-framing',
   });
   assert.equal(reply.head, undefined);
   assert.deepEqual(await used(page, 'mcp'), []);
@@ -255,6 +258,7 @@ test('a value that holds another stored value is refused', async (t) => {
   assert.deepEqual(held.reply.refused, {
     status: 403,
     reason: "TOKEN_A's value contains another stored value",
+    cause: 'value-overlaps',
   });
   await page.evaluate(
     (value) => window.harness.call('put', { name: 'TOKEN_A', value }),
@@ -269,6 +273,7 @@ test('a value that holds another stored value is refused', async (t) => {
   assert.deepEqual(mcp.reply.refused, {
     status: 403,
     reason: "NOTES_MCP's value contains another stored value",
+    cause: 'value-overlaps',
   });
 });
 
@@ -464,7 +469,11 @@ test('a response streams on while the values stay the same', async (t) => {
   assert.equal((await shown(page, 'NOTES_MCP')).pinned, true);
 });
 
-const STALE = { status: 403, reason: 'the endpoints changed meanwhile; send it again' };
+const STALE = {
+  status: 403,
+  reason: 'the endpoints changed meanwhile; send it again',
+  cause: 'changed',
+};
 
 async function gated(page, nth) {
   await page.evaluate(() => window.harness.twin(true));

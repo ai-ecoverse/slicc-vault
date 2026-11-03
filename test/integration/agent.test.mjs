@@ -347,6 +347,10 @@ test('a kernel request to a registered MCP server gets no credential while kerne
     bodyPresent: true,
     rawTraits: { manualRedirects: true },
   });
-  assert.deepEqual(sent.reply.refused, { status: 403, reason: 'kernel users must be enforce' });
+  assert.deepEqual(sent.reply.refused, {
+    status: 403,
+    reason: 'kernel users must be enforce',
+    cause: 'users-off',
+  });
   assert.ok(!JSON.stringify(sent).includes(VALUE_M));
 });

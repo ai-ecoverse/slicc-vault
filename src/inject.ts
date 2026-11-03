@@ -1,5 +1,4 @@
 import type { ErrorCause, ExitName, Rule, Stamp } from './contract.ts';
-import { caused } from './errors.ts';
 import { decrypt } from './keys.ts';
 import { PAUSED, type Policy } from './policy.ts';
 import { aad, removed, rulesFor, type VaultRecord } from './records.ts';
@@ -39,7 +38,7 @@ export type Prepared =
       path: string;
       server: McpServer | null;
     }
-  | { ok: false; status: number; reason: string; cause?: ErrorCause };
+  | { ok: false; status: number; reason: string; cause: ErrorCause };
 
 export interface Inputs {
   ns: string;
@@ -57,9 +56,9 @@ export interface Inputs {
 
 class Refusal extends Error {
   readonly status: number;
-  override readonly cause?: ErrorCause;
+  override readonly cause: ErrorCause;
 
-  constructor(reason: string, status = 403, cause?: ErrorCause) {
+  constructor(cause: ErrorCause, reason: string, status = 403) {
     super(reason);
     this.status = status;
     this.cause = cause;
@@ -135,7 +134,7 @@ class Injector {
   constructor(input: Inputs) {
     this.input = input;
     const url = URL.parse(input.head.url);
-    if (!url) throw new Refusal('the request has no valid URL');
+    if (!url) throw new Refusal('url-invalid', 'the request has no valid URL');
     this.url = url;
     this.host = hostOf(url);
     this.path = url.pathname;
@@ -155,59 +154,78 @@ class Injector {
   checkTarget(): void {
     const { url, input } = this;
     const inUrl = this.known(`${url.href} ${decoded(url.href)}`);
-    if (inUrl.length) throw new Refusal(`${this.label(inUrl[0])} works only in a header`);
+    if (inUrl.length)
+      throw new Refusal('placeholder-in-url', `${this.label(inUrl[0])} works only in a header`);
     for (const [name] of input.head.headers) {
       const inName = this.known(name);
-      if (inName.length) throw new Refusal(`${this.label(inName[0])} can't be a header name`);
+      if (inName.length)
+        throw new Refusal(
+          'placeholder-in-header-name',
+          `${this.label(inName[0])} can't be a header name`
+        );
     }
-    if (url.username || url.password) throw new Refusal('credentials in the URL are refused');
+    if (url.username || url.password)
+      throw new Refusal('url-credentials', 'credentials in the URL are refused');
     const kernel = this.server !== null && url.protocol === 'http:';
     if (!kernel && (url.protocol !== 'https:' || (url.port !== '' && url.port !== '443'))) {
-      throw new Refusal('credentials are sent only over https on port 443');
+      throw new Refusal('insecure-destination', 'credentials are sent only over https on port 443');
     }
     const rawPath = input.head.url.replace(/^[a-z][a-z0-9+.-]*:\/\/[^/?#]*/i, '').split(/[?#]/)[0];
-    if (AMBIGUOUS.test(rawPath)) throw new Refusal(`ambiguous path ${rawPath}`);
+    if (AMBIGUOUS.test(rawPath)) throw new Refusal('path-ambiguous', `ambiguous path ${rawPath}`);
     if (input.traits.encodedBodies) {
-      throw new Refusal('this exit returns encoded bodies, which the vault cannot scrub', 502);
+      throw new Refusal(
+        'exit-encoded-bodies',
+        'this exit returns encoded bodies, which the vault cannot scrub',
+        502
+      );
     }
   }
 
   record(placeholder: string, kind: 'secret' | 'mcp'): VaultRecord {
     const record = this.byPlaceholder.get(placeholder) as VaultRecord;
     const name = record.name;
-    if (removed(record)) throw new Refusal(`${name} was removed`);
+    if (removed(record)) throw new Refusal('record-removed', `${name} was removed`);
     if (record.kind !== kind) {
       throw new Refusal(
+        'record-kind',
         kind === 'mcp'
           ? `${name} is a secret; secrets are never sent to model or MCP endpoints`
           : `${name} isn't a secret the vault injects`
       );
     }
     if (record.expiresAt !== undefined && record.expiresAt <= this.input.now) {
-      throw new Refusal(`${name} expired; refreshing`);
+      throw new Refusal('record-expired', `${name} expired; refreshing`);
     }
-    if (!this.input.key) throw new Refusal('vault is locked: unlock it in the vault window');
+    if (!this.input.key)
+      throw new Refusal('vault-locked', 'vault is locked: unlock it in the vault window');
     return record;
   }
 
   rule(record: VaultRecord, header: string): Rule {
     const { policy, exit } = this.input;
-    if (policy.paused()) throw new Refusal(PAUSED, 403, 'policy-paused');
+    if (policy.paused()) throw new Refusal('policy-paused', PAUSED);
     const rules = rulesFor(record, policy).filter((rule) => rule.protocol === undefined);
     const found = rules.find((rule) => matches(rule, this.method, this.host, this.path, header));
     if (!found) {
       const domains = [...new Set(rules.map((rule) => rule.domain))];
       if (!rules.length)
-        throw new Refusal(`no rule in /etc/fnox/config.toml lets ${record.name} be used`);
+        throw new Refusal(
+          'no-rule',
+          `no rule in /etc/fnox/config.toml lets ${record.name} be used`
+        );
       if (!domains.includes(this.host))
-        throw new Refusal(`${record.name} is only for ${domains.join(', ')}`);
+        throw new Refusal('rule-domain', `${record.name} is only for ${domains.join(', ')}`);
       throw new Refusal(
+        'rule-request',
         `${record.name} isn't allowed in ${header} for ${this.method} ${this.path}`
       );
     }
     const exits = policy.exits(record.name);
     if (exits && !exits.includes(exit)) {
-      throw new Refusal(`${record.name} isn't allowed on ${exit} (/etc/slicc/secrets-policy.toml)`);
+      throw new Refusal(
+        'rule-exit',
+        `${record.name} isn't allowed on ${exit} (/etc/slicc/secrets-policy.toml)`
+      );
     }
     return found;
   }
@@ -217,7 +235,10 @@ class Injector {
     for (const placeholder of new Set(this.known(text))) {
       const record = this.record(placeholder, kind);
       if (text.split(placeholder).length > 2) {
-        throw new Refusal(`${record.name} appears more than once in ${header}`);
+        throw new Refusal(
+          'placeholder-repeated',
+          `${record.name} appears more than once in ${header}`
+        );
       }
       const server = this.server as McpServer;
       if (
@@ -228,12 +249,16 @@ class Injector {
         )
       ) {
         throw new Refusal(
+          'mcp-server',
           `${record.name} isn't a credential of the MCP server ${this.server?.server}`
         );
       }
       const rule = kind === 'secret' ? this.rule(record, header) : null;
       if (!this.input.traits.manualRedirects) {
-        throw new Refusal(`${record.name} needs an exit that doesn't follow redirects`);
+        throw new Refusal(
+          'exit-follows-redirects',
+          `${record.name} needs an exit that doesn't follow redirects`
+        );
       }
       const value = await decrypt(
         this.input.key as CryptoKey,
@@ -241,7 +266,7 @@ class Injector {
         aad(record.ns, record.kind, record.name)
       );
       if (await this.input.holdsAnother(record, value)) {
-        throw new Refusal(`${record.name}'s value contains another stored value`);
+        throw new Refusal('value-overlaps', `${record.name}'s value contains another stored value`);
       }
       out = out.replace(placeholder, value);
       this.injected.push({ name: record.name, rule, record });
@@ -256,6 +281,7 @@ class Injector {
     if (decoded === null) {
       if (this.known(`${match[2]} ${loose(match[2])}`).length) {
         throw new Refusal(
+          'basic-invalid',
           'a Basic credential that holds a placeholder must be valid base64 of UTF-8'
         );
       }
@@ -266,7 +292,8 @@ class Injector {
     const user = colon < 0 ? decoded : decoded.slice(0, colon);
     const pass = colon < 0 ? '' : decoded.slice(colon + 1);
     const newUser = await this.substitute(user, header, kind);
-    if (newUser.includes(':')) throw new Refusal("a substituted Basic user can't contain :");
+    if (newUser.includes(':'))
+      throw new Refusal('basic-user', "a substituted Basic user can't contain :");
     const newPass = colon < 0 ? '' : await this.substitute(pass, header, kind);
     return `${match[1]}${base64(colon < 0 ? newUser : `${newUser}:${newPass}`)}`;
   }
@@ -277,14 +304,16 @@ class Injector {
       const name = rawName.toLowerCase();
       let next = await this.basic(value, name, kind);
       if (next === value) next = await this.substitute(value, name, kind);
-      if (/[\r\n\0]/.test(next)) throw new Refusal('a header would contain CR, LF or NUL');
+      if (/[\r\n\0]/.test(next))
+        throw new Refusal('header-unsafe', 'a header would contain CR, LF or NUL');
       out.push([rawName, next]);
     }
     return out;
   }
 
   async run(): Promise<Prepared> {
-    if (this.input.owner.users !== 'enforce') throw new Refusal('kernel users must be enforce');
+    if (this.input.owner.users !== 'enforce')
+      throw new Refusal('users-off', 'kernel users must be enforce');
     const all = this.input.head.headers.flatMap(([, value]) => {
       const basic = /^Basic\s+(\S+)$/i.exec(value);
       const inside = basic ? (unbase64(basic[1]) ?? loose(basic[1])) : '';
@@ -293,13 +322,20 @@ class Injector {
     const secret = all.some((p) => (this.byPlaceholder.get(p) as VaultRecord).kind === 'secret');
     if (secret) this.server = null;
     this.checkTarget();
-    if (!all.length) throw new Refusal('the request carries no placeholder of this vault');
+    if (!all.length)
+      throw new Refusal('no-placeholder', 'the request carries no placeholder of this vault');
     const refused = refusedUrl(this.input.registered, this.url);
     if (refused && !this.server) {
-      throw new Refusal(`${this.host} is a model or MCP endpoint; the vault never injects there`);
+      throw new Refusal(
+        'endpoint-protected',
+        `${this.host} is a model or MCP endpoint; the vault never injects there`
+      );
     }
     if (this.server && modelRefused(this.input.registered, this.url)) {
-      throw new Refusal(`${this.host} is a model endpoint; MCP credentials never go there`);
+      throw new Refusal(
+        'endpoint-model',
+        `${this.host} is a model endpoint; MCP credentials never go there`
+      );
     }
     const headers = await this.headers(this.server ? 'mcp' : 'secret');
     const head = { ...this.input.head, headers };
@@ -320,7 +356,7 @@ export async function prepare(input: Inputs): Promise<Prepared> {
   } catch (error) {
     if (error instanceof Refusal) {
       const { status, message: reason, cause } = error;
-      return { ok: false, status, reason, ...caused(cause) };
+      return { ok: false, status, reason, cause };
     }
     throw error;
   }

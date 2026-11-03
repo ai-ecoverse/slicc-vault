@@ -37,7 +37,36 @@ export interface Stamp {
   groups?: number[];
 }
 
-export type ErrorCause = 'policy-paused';
+export type ErrorCause =
+  | 'policy-paused'
+  | 'no-placeholder'
+  | 'url-invalid'
+  | 'placeholder-in-url'
+  | 'placeholder-in-header-name'
+  | 'url-credentials'
+  | 'insecure-destination'
+  | 'path-ambiguous'
+  | 'exit-encoded-bodies'
+  | 'record-removed'
+  | 'record-kind'
+  | 'record-expired'
+  | 'vault-locked'
+  | 'no-rule'
+  | 'rule-domain'
+  | 'rule-request'
+  | 'rule-exit'
+  | 'placeholder-repeated'
+  | 'mcp-server'
+  | 'exit-follows-redirects'
+  | 'value-overlaps'
+  | 'basic-invalid'
+  | 'basic-user'
+  | 'header-unsafe'
+  | 'users-off'
+  | 'endpoint-protected'
+  | 'endpoint-model'
+  | 'mcp-body-framing'
+  | 'changed';
 
 export interface VaultError {
   code: ErrorCode;
@@ -307,7 +336,7 @@ export type ForwardResult =
   | { mode: 'secret'; head: RequestHead }
   | { mode: 'mcp'; head: RequestHead; bodyComplete: true; body?: Uint8Array }
   | { needsBody: true }
-  | { refused: { status: number; reason: string; cause?: ErrorCause } };
+  | { refused: { status: number; reason: string; cause: ErrorCause } };
 
 export interface TestVerdict {
   verdict: 'inject' | 'refuse';
