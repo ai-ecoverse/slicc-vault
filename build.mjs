@@ -12,6 +12,7 @@ await build({
     frame: 'src/entry/frame.ts',
     button: 'src/entry/button.ts',
     popup: 'src/entry/popup.ts',
+    value: 'src/entry/value.ts',
     vault: 'src/vault.css',
   },
   outdir: out.pathname,

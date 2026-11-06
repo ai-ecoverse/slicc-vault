@@ -1,5 +1,12 @@
 import { hex, random } from './bytes.ts';
-import type { PendingRequest, RequestKind, RequestState, Stamp } from './contract.ts';
+import type {
+  AskMode,
+  PendingRequest,
+  Requester,
+  RequestKind,
+  RequestState,
+  Stamp,
+} from './contract.ts';
 import { all, request, transact } from './db.ts';
 import { Refused } from './errors.ts';
 
@@ -23,6 +30,12 @@ export interface HumanRequest {
   scope?: string;
   params?: Record<string, unknown>;
   answer?: Record<string, unknown>;
+  mode?: AskMode;
+  reveal?: boolean;
+  replace?: boolean;
+  requester?: Requester;
+  allowed?: boolean;
+  sealedAt?: number;
 }
 
 export function human(entry: Pick<HumanRequest, 'kind' | 'jop'>): boolean {
@@ -34,7 +47,19 @@ export type NewRequest = Pick<HumanRequest, 'ns' | 'kind' | 'stamp'> &
   Partial<
     Pick<
       HumanRequest,
-      'name' | 'provider' | 'prompt' | 'oauth' | 'jop' | 'scope' | 'params' | 'state' | 'answer'
+      | 'name'
+      | 'provider'
+      | 'prompt'
+      | 'oauth'
+      | 'jop'
+      | 'scope'
+      | 'params'
+      | 'state'
+      | 'answer'
+      | 'mode'
+      | 'reveal'
+      | 'replace'
+      | 'requester'
     >
   >;
 
@@ -49,6 +74,14 @@ export function pending(entry: HumanRequest): PendingRequest {
     ...(entry.name === undefined ? {} : { name: entry.name }),
     ...(entry.provider === undefined ? {} : { provider: entry.provider }),
     ...(entry.prompt === undefined ? {} : { prompt: entry.prompt }),
+    ...(entry.kind === 'ask'
+      ? {
+          mode: entry.mode,
+          reveal: entry.reveal === true,
+          replace: entry.replace === true,
+          requester: entry.requester,
+        }
+      : {}),
     uid: entry.stamp.uid,
     tag: entry.stamp.tag,
     createdAt: entry.createdAt,
@@ -98,7 +131,7 @@ export function settle(
   ns: string,
   id: string,
   now: number,
-  to: 'done' | 'cancelled',
+  to: 'done' | 'cancelled' | 'withdrawn',
   placeholder?: string
 ): Promise<HumanRequest> {
   return transact(db, ['requests'], 'readwrite', async (tx) => {
@@ -133,6 +166,8 @@ export function respond(
         : undefined;
     if (!entry || entry.ns !== ns) throw new Refused('ENOENT', 'no such request');
     if (entry.kind === 'value') throw new Refused('EINVAL', 'a value request is answered with put');
+    if (entry.kind === 'ask')
+      throw new Refused('EINVAL', "an ask is answered in the vault's frame");
     const state = current(entry, clock());
     if (state !== 'pending') throw new Refused('EINVAL', `request ${entry.id} is ${state}`);
     const next: HumanRequest = {
@@ -140,6 +175,27 @@ export function respond(
       answer: { ...entry.answer, ...answer },
       ...(done ? { state: 'done' } : {}),
     };
+    await request(store.put(next));
+    return next;
+  });
+}
+
+export function allow(
+  db: IDBDatabase,
+  ns: string,
+  id: string,
+  now: number,
+  placeholder: string
+): Promise<HumanRequest> {
+  return transact(db, ['requests'], 'readwrite', async (tx) => {
+    const store = tx.objectStore('requests');
+    const entry = (await request(store.get(id))) as HumanRequest | undefined;
+    if (!entry || entry.ns !== ns || entry.kind !== 'ask' || entry.mode !== 'reveal') {
+      throw new Refused('ENOENT', 'no such request');
+    }
+    const state = current(entry, now);
+    if (state !== 'pending') throw new Refused('EINVAL', `request ${entry.id} is ${state}`);
+    const next: HumanRequest = { ...entry, state: 'done', allowed: true, placeholder };
     await request(store.put(next));
     return next;
   });

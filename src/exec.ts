@@ -180,7 +180,7 @@ function limit(
   }
 }
 
-function shown(argv: string[], redact: (text: string) => string): string {
+export function shown(argv: string[], redact: (text: string) => string): string {
   const text = redact(argv.join(' '));
   return text.length > ARGV_SHOWN ? `${text.slice(0, ARGV_SHOWN - 1)}…` : text;
 }

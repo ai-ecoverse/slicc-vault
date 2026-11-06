@@ -15,6 +15,8 @@ const egress = {
 const twins = [];
 const twinEvents = [];
 const buttonEvents = [];
+const valueEvents = [];
+const replies = {};
 let port = null;
 let core = null;
 let next = 1;
@@ -27,6 +29,11 @@ function record(source, data) {
 addEventListener('message', (event) => {
   record(`window:${event.origin}`, event.data);
   if (event.data?.type === 'slicc-vault' && event.data.event) buttonEvents.push(event.data);
+  const shown = document.getElementById('value');
+  if (shown && event.source === shown.contentWindow && event.data?.type === 'slicc-vault') {
+    valueEvents.push(event.data);
+    if (event.data.event === 'size') shown.height = String(event.data.height);
+  }
   const button = document.getElementById('button');
   if (event.data?.event === 'size' && button && event.source === button.contentWindow) {
     button.width = String(event.data.width);
@@ -232,6 +239,29 @@ async function button(config) {
   return true;
 }
 
+function hold(req, as = stamp) {
+  const id = next;
+  void call('sealed', { req, stamp: as }).then((answer) => {
+    replies[id] = answer.reply;
+  });
+  return id;
+}
+
+async function value(request, config = {}) {
+  let iframe = document.getElementById('value');
+  if (!iframe) {
+    iframe = await frame('/value.html', false);
+    iframe.id = 'value';
+    iframe.style.border = '0';
+    iframe.style.width = '360px';
+  }
+  iframe.contentWindow.postMessage(
+    { type: 'slicc-vault', v: 1, op: 'value', request, config },
+    vault
+  );
+  return true;
+}
+
 function configure(config) {
   document
     .getElementById('button')
@@ -263,6 +293,10 @@ window.harness = {
   seen,
   events,
   buttonEvents,
+  valueEvents,
+  replies,
+  hold,
+  value,
   connect,
   call,
   sealed,

@@ -1,5 +1,6 @@
 import { compile, type Scrubber } from '@ai-ecoverse/slicc-scrub';
 import { AgentPort } from './agent.ts';
+import { Hold } from './ask.ts';
 import type { Part } from './channel.ts';
 import { embedded } from './config.ts';
 import type {
@@ -456,7 +457,18 @@ async function mark(vault: Vault, ns: string, request: Fields, removing: boolean
 
 async function cancel(vault: Vault, ns: string, request: Fields): Promise<Fields> {
   const pending = await get(vault.db, ns, request.request);
-  const settled = await settle(vault.db, ns, pending.id, vault.now(), 'cancelled');
+  const to = request.reason === 'withdrawn' ? 'withdrawn' : 'cancelled';
+  const now = vault.now();
+  const settled = await settle(vault.db, ns, pending.id, now, to);
+  if (current(pending, now) === 'pending' && settled.state === to) {
+    vault.broadcast(ns, {
+      v: 1,
+      event: 'cancelled',
+      request: pending.id,
+      kind: pending.kind,
+      state: to,
+    });
+  }
   await vault.changed(ns, ['requests']);
   return { state: settled.state };
 }
@@ -476,8 +488,10 @@ export async function answer(
       return vault.sessions.materialize(ns, request);
     case 'sessionAnchors':
       return vault.sessions.anchors(ns, request);
-    case 'sealed':
-      return { reply: await sealed(vault.context(ns), request.req, request.stamp) };
+    case 'sealed': {
+      const reply = await sealed(vault.context(ns), request.req, request.stamp);
+      return reply instanceof Hold ? { held: reply } : { reply };
+    }
     case 'status':
       return { status: await vault.status(ns) };
     case 'placeholders':
@@ -661,12 +675,18 @@ export class Server {
       const fields = session.agent
         ? await session.agent.answer(request)
         : await answer(this.vault, session.ns, request, ports[0]);
+      if (fields.held instanceof Hold) return this.hold(session, id, fields.held);
       reply = { v: 1, id, op: request.op, ...fields } as Reply;
     } catch (error) {
       reply = { v: 1, id, error: refusal(error) };
     }
     if (request.op !== 'forward' || !('head' in reply)) for (const port of ports) port.close();
     session.port.postMessage(reply);
+  }
+
+  hold(session: Session, id: number, held: Hold): void {
+    session.port.postMessage({ v: 1, event: 'asked', call: id, request: held.request });
+    void held.start().then((reply) => session.port.postMessage({ v: 1, id, op: 'sealed', reply }));
   }
 
   push(ns: string, event: VaultEvent): void {

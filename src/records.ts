@@ -353,7 +353,8 @@ async function answered(
   ns: string,
   answers: Answers,
   placeholder: string,
-  sealedAt: number
+  sealedAt: number,
+  updatedAt: number
 ): Promise<void> {
   const store = tx.objectStore('requests');
   const entry = (await request(store.get(answers.id))) as Record<string, unknown> | undefined;
@@ -361,7 +362,7 @@ async function answered(
   const live = entry?.ns === ns && entry.state === 'pending' && now < (entry.expiresAt as number);
   if (!entry || !live) throw new Refused('EINVAL', `request ${answers.id} is no longer pending`);
   const jerk = answers.jerk ? { jerk: answers.jerk } : {};
-  await request(store.put({ ...entry, state: 'done', placeholder, ...jerk }));
+  await request(store.put({ ...entry, state: 'done', placeholder, sealedAt: updatedAt, ...jerk }));
 }
 
 function bound(existing: VaultRecord | undefined, input: SealInput): Partial<VaultRecord> {
@@ -513,7 +514,9 @@ async function write(
   input.guard?.(record.settings ?? {}, await scrubIn(tx, input.ns));
   if (input.claim) await claim(store, input, input.claim, live);
   await request(store.put(record));
-  if (input.answers) await answered(tx, input.ns, input.answers, record.placeholder, input.now);
+  if (input.answers) {
+    await answered(tx, input.ns, input.answers, record.placeholder, input.now, record.updatedAt);
+  }
   await bump(tx, input.ns);
   const rotated = existing !== undefined && !removed(existing);
   await audit(tx, input.ns, {
@@ -523,6 +526,7 @@ async function write(
     tag: input.tag,
     source: input.source,
     rotated,
+    ...(input.answers ? { request: input.answers.id } : {}),
     at: input.now,
   });
   return { record, rotated };

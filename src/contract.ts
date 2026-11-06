@@ -12,8 +12,10 @@ export type RecordSource =
   | `oauth:${string}`
   | `import:${string}`;
 export type LockMode = 'auto' | 'passkey' | 'passphrase';
-export type RequestKind = 'value' | 'oauth' | 'jerk-seal' | 'jerk' | 'unseal';
-export type RequestState = 'pending' | 'done' | 'cancelled' | 'expired';
+export type RequestKind = 'value' | 'oauth' | 'jerk-seal' | 'jerk' | 'unseal' | 'ask';
+export type RequestState = 'pending' | 'done' | 'cancelled' | 'expired' | 'withdrawn';
+export type AskMode = 'enter' | 'reveal';
+export type SudoStdin = 'tty' | 'none' | 'pipe' | 'file';
 export type ErrorCode =
   | 'EINVAL'
   | 'ENOENT'
@@ -158,12 +160,27 @@ export interface SecretView {
   removedAt?: EpochMs;
 }
 
+export interface Requester {
+  kind: 'agent' | 'user';
+  name: string;
+  where?: string;
+  exe: string;
+  argv: string[];
+  cwd: string;
+  tty: string | null;
+  stdin: SudoStdin;
+}
+
 export interface PendingRequest {
   id: string;
   kind: RequestKind;
   name?: string;
   provider?: string;
   prompt?: string;
+  mode?: AskMode;
+  reveal?: boolean;
+  replace?: boolean;
+  requester?: Requester;
   uid: number;
   tag: string | null;
   createdAt: EpochMs;
@@ -210,7 +227,8 @@ export type PolicyChange =
   | { kind: 'rule'; secret: string; rule: Rule; change: 'added' | 'removed' }
   | { kind: 'exec'; secret: string; from: ExecMode; to: ExecMode }
   | { kind: 'exits'; secret: string; from: ExitName[] | null; to: ExitName[] | null }
-  | { kind: 'limits'; field: string; from: number; to: number };
+  | { kind: 'limits'; field: string; from: number; to: number }
+  | { kind: 'reveal'; field: 'agent'; from: boolean; to: boolean };
 
 interface AuditBase {
   seq: number;
@@ -270,6 +288,17 @@ export interface SealEntry extends AuditBase {
   source: RecordSource;
   rotated: boolean;
   rebound?: true;
+  request?: string;
+}
+
+export interface AskRevealEntry extends AuditBase {
+  type: 'reveal';
+  uid: number;
+  exe: string;
+  argv: string;
+  cwd: string;
+  requester: 'agent' | 'user';
+  request: string;
 }
 
 export interface RemoveEntry extends AuditBase {
@@ -311,6 +340,7 @@ export type AuditEntry =
   | SessionEntry
   | McpEntry
   | RevealEntry
+  | AskRevealEntry
   | SealEntry
   | RemoveEntry
   | RefreshEntry
@@ -520,6 +550,22 @@ export interface ButtonConfig {
 export type SealedRequest = { v: Protocol; op: string } & Record<string, unknown>;
 export type SealedReply = { v: Protocol } & Record<string, unknown>;
 
+export interface AskRequest {
+  v: Protocol;
+  op: 'ask';
+  name: string;
+  prompt?: string;
+  reveal?: boolean;
+  replace?: boolean;
+  caller?: Stamp;
+  requester: Requester;
+}
+
+export type AskReply =
+  | { v: Protocol; state: 'done'; placeholder: string; record: RecordState; value?: string }
+  | { v: Protocol; state: 'cancelled' | 'expired' | 'withdrawn' }
+  | { v: Protocol; error: VaultError };
+
 export type Op =
   | { op: 'sealed'; req: SealedRequest; stamp: Stamp }
   | { op: 'status' }
@@ -540,7 +586,7 @@ export type Op =
       kind: 'model' | 'mcp';
       request?: never;
     } & RecordBinding)
-  | { op: 'cancel'; request: string }
+  | { op: 'cancel'; request: string; reason?: 'withdrawn' }
   | { op: 'remove'; name: string; kind?: RecordKind }
   | { op: 'restore'; name: string; kind?: RecordKind }
   | ({
@@ -712,7 +758,14 @@ export type VaultEvent =
   | { v: Protocol; event: 'changed'; parts: ChangedPart[] }
   | { v: Protocol; event: 'refresh'; name: string; source: RecordSource; expiresAt: EpochMs }
   | { v: Protocol; event: 'egress'; request: EgressRequest }
-  | { v: Protocol; event: 'cancelled'; request: string; kind: RequestKind };
+  | {
+      v: Protocol;
+      event: 'cancelled';
+      request: string;
+      kind: RequestKind;
+      state: 'cancelled' | 'withdrawn' | 'expired';
+    }
+  | { v: Protocol; event: 'asked'; call: number; request: string };
 
 export interface JerkRow {
   provider: string;
@@ -781,4 +834,25 @@ export type ButtonEvent = { type: MessageType; v: Protocol } & (
   | { event: 'label'; label: string }
   | { event: 'focus'; direction: 'next' | 'previous' }
   | { event: 'popup'; intent: PopupIntent; state: PopupState }
+);
+
+export interface ValueConfig {
+  theme?: 'light' | 'dark';
+  dir?: 'ltr' | 'rtl';
+  lang?: string;
+  scale?: 'medium' | 'large';
+}
+
+export type ValueMessage =
+  | { type: MessageType; v: Protocol; op: 'value'; request: string; config?: ValueConfig }
+  | { type: MessageType; v: Protocol; op: 'focus' };
+
+export type ValueEvent = { type: MessageType; v: Protocol } & (
+  | { event: 'ready' }
+  | { event: 'size'; width: number; height: number; inset: number }
+  | { event: 'focus'; direction: 'next' | 'previous' }
+  | { event: 'escape' }
+  | { event: 'done'; request: string; state: 'sealed' | 'allowed' }
+  | { event: 'gone'; request: string; state: RequestState }
+  | { event: 'error'; code: ErrorCode; message: string }
 );

@@ -1,3 +1,4 @@
+import { askOp, Hold } from './ask.ts';
 import type { ExitName, SealedReply, Stamp, VaultEvent } from './contract.ts';
 import { caused, Refused, refusal } from './errors.ts';
 import type { Exec } from './exec.ts';
@@ -39,10 +40,11 @@ export interface Context {
   sudoGid(): number | null;
   clean(): Promise<Clean>;
   holdsAnother(record: VaultRecord, value: string): Promise<boolean>;
+  watch(listener: () => void): () => void;
 }
 
 type Fields = Record<string, unknown>;
-type Handler = (ctx: Context, req: Fields, stamp: Stamp) => Promise<Fields>;
+type Handler = (ctx: Context, req: Fields, stamp: Stamp) => Promise<Fields | Hold>;
 
 function integer(value: unknown): value is number {
   return typeof value === 'number' && Number.isInteger(value) && value >= 0;
@@ -325,9 +327,15 @@ const cancelOp: Handler = async (ctx, req, stamp) => {
   const entry = await get(ctx.db, ctx.ns, req.id, stamp.uid);
   const now = ctx.now();
   const settled = await settle(ctx.db, ctx.ns, entry.id, now, 'cancelled');
-  await ctx.changed();
   if (current(entry, now) === 'pending' && settled.state === 'cancelled')
-    ctx.emit({ v: 1, event: 'cancelled', request: entry.id, kind: entry.kind });
+    ctx.emit({
+      v: 1,
+      event: 'cancelled',
+      request: entry.id,
+      kind: entry.kind,
+      state: 'cancelled',
+    });
+  await ctx.changed();
   return { state: settled.state };
 };
 
@@ -342,6 +350,7 @@ export const OPS: Record<string, Handler> = {
   status: statusOp,
   cancel: cancelOp,
   materialize: materializeOp,
+  ask: askOp,
 };
 
 export function parse(req: unknown): Fields {
@@ -356,7 +365,11 @@ export function size(req: unknown): number {
   return new TextEncoder().encode(typeof req === 'string' ? req : JSON.stringify(req)).length;
 }
 
-export async function sealed(ctx: Context, req: unknown, stamp: unknown): Promise<SealedReply> {
+export async function sealed(
+  ctx: Context,
+  req: unknown,
+  stamp: unknown
+): Promise<SealedReply | Hold> {
   try {
     if (size(req) > MAX_REQUEST) throw new Refused('EINVAL', 'a request is at most 64 KiB');
     const fields = parse(req);
@@ -365,7 +378,8 @@ export async function sealed(ctx: Context, req: unknown, stamp: unknown): Promis
     if (!handler || !Object.hasOwn(OPS, fields.op as string)) {
       throw new Refused('EINVAL', 'unknown op');
     }
-    return { v: 1, ...(await handler(ctx, fields, checkStamp(stamp))) };
+    const answer = await handler(ctx, fields, checkStamp(stamp));
+    return answer instanceof Hold ? answer : { v: 1, ...answer };
   } catch (error) {
     if (error instanceof SyntaxError) {
       return { v: 1, error: { code: 'EINVAL', message: 'a request is one JSON object' } };

@@ -26,6 +26,7 @@ export interface Vault {
   changed(ns: string, parts: Part[]): Promise<void>;
   onChange(listener: Listener): () => void;
   emit(ns: string, event: VaultEvent): void;
+  broadcast(ns: string, event: VaultEvent): void;
   sudoGids: Map<string, number>;
   onEvent(listener: (ns: string, event: VaultEvent) => void): void;
   context(ns: string): Context;
@@ -84,6 +85,10 @@ export async function start(options: Options = {}): Promise<Vault> {
     emit(ns, event) {
       for (const listener of eventListeners) listener(ns, event);
     },
+    broadcast(ns, event) {
+      vault.emit(ns, event);
+      bus.post({ type: 'event', ns, event });
+    },
     onEvent(listener) {
       eventListeners.add(listener);
     },
@@ -97,7 +102,11 @@ export async function start(options: Options = {}): Promise<Vault> {
         loadPolicy: () => vault.loadPolicy(ns),
         now,
         changed: () => vault.changed(ns, ['secrets', 'requests', 'audit']),
-        emit: (event) => vault.emit(ns, event),
+        emit: (event) => vault.broadcast(ns, event),
+        watch: (listener) =>
+          vault.onChange((space) => {
+            if (space === ns) listener();
+          }),
         sudoGid: () => vault.sudoGids.get(ns) ?? null,
         clean: async () => {
           const scrubber = await vault.scrubbers.get(ns);
@@ -136,6 +145,7 @@ export async function start(options: Options = {}): Promise<Vault> {
   bus.listen((message: Message) => {
     if (message.type === 'changed') void reload(message.ns, message.parts);
     else if (message.type === 'scrub') vault.scrubbers.touch(message.ns);
+    else if (message.type === 'event') vault.emit(message.ns, message.event);
     else if (message.type !== 'popup') void keyring.receive(message);
   });
   vault.scrubbers = new Scrubbers(vault);
