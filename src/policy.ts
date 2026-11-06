@@ -30,6 +30,7 @@ export interface Policy {
   limits(): Limits;
   shells(): string[];
   view(): ExitPolicyView;
+  revealToAgent(): boolean | 'paused';
 }
 
 export interface Limits {
@@ -53,6 +54,7 @@ export interface ExtraPolicy {
   exec: Record<string, { mode: Exclude<ExecMode, false>; argv?: string[][] }>;
   exits: Record<string, ExitName[]>;
   limits: Limits;
+  reveal?: { agent: boolean };
 }
 
 export interface Accepted {
@@ -270,6 +272,22 @@ function limits(table: TomlValue | undefined, warnings: string[]): Limits {
   return out;
 }
 
+function reveal(table: TomlValue | undefined, warnings: string[]): { agent: boolean } {
+  if (table === undefined) return { agent: true };
+  if (!isTable(table)) {
+    warnings.push('[reveal] must be a table');
+    return { agent: true };
+  }
+  for (const key of Object.keys(table)) {
+    if (key !== 'agent') warnings.push(`[reveal] ${key} is not a setting`);
+  }
+  if (table.agent === undefined || typeof table.agent === 'boolean') {
+    return { agent: table.agent !== false };
+  }
+  warnings.push('[reveal] agent must be true or false');
+  return { agent: true };
+}
+
 export function parseExtra(text: string, warnings: string[]): ExtraPolicy {
   const root = parseToml(text);
   const exec: ExtraPolicy['exec'] = Object.create(null);
@@ -286,7 +304,12 @@ export function parseExtra(text: string, warnings: string[]): ExtraPolicy {
     }
     exits[name] = valid;
   }
-  return { exec, exits, limits: limits(root.limits, warnings) };
+  return {
+    exec,
+    exits,
+    limits: limits(root.limits, warnings),
+    reveal: reveal(root.reveal, warnings),
+  };
 }
 
 function ruleKey(secret: string, rule: Rule): string {
@@ -345,6 +368,9 @@ export function diffExtra(before: ExtraPolicy | null, after: ExtraPolicy): Polic
       changes.push({ kind: 'limits', field, from: old[field], to: after.limits[field] });
     }
   }
+  const from = before?.reveal?.agent !== false;
+  const to = after.reveal?.agent !== false;
+  if (from !== to) changes.push({ kind: 'reveal', field: 'agent', from, to });
   return changes;
 }
 
@@ -383,6 +409,8 @@ export function build(accepted: Accepted, refuse: Refuse = () => false): Policy 
         .filter(([, entry]) => entry.mode === 'shell')
         .map(([name]) => name)
         .sort(),
+    revealToAgent: () =>
+      (accepted.paused ?? []).includes(POLICY_FILE) ? 'paused' : extra.reveal?.agent !== false,
     view: () => ({
       file: POLICY_FILE,
       sha256: accepted.extra?.sha256 ?? null,

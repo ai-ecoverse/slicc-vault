@@ -1,4 +1,4 @@
-import type { PopupState } from './contract.ts';
+import type { PopupState, VaultEvent } from './contract.ts';
 import type { KeyMessage } from './lock.ts';
 
 export type Part = 'secrets' | 'audit' | 'exits' | 'requests';
@@ -7,6 +7,7 @@ export type Message =
   | KeyMessage
   | { type: 'changed'; ns: string; parts: Part[] }
   | { type: 'scrub'; ns: string }
+  | { type: 'event'; ns: string; event: VaultEvent }
   | { type: 'popup'; nonce: string; state: PopupState };
 
 export interface Channel {

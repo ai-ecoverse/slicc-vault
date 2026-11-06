@@ -201,3 +201,47 @@ body.popup {
   text-decoration: line-through;
   color: var(--spectrum-neutral-subdued-content-color-default);
 }
+
+body.value {
+  background: transparent;
+  color: var(--spectrum-neutral-content-color-default);
+  font-size: var(--spectrum-font-size-100);
+  line-height: var(--spectrum-line-height-100);
+  overflow: hidden;
+}
+
+.value .holder {
+  padding: 2px;
+}
+
+.value p {
+  margin: 0 0 var(--spectrum-spacing-300);
+  overflow-wrap: anywhere;
+}
+
+.value label {
+  display: block;
+  color: var(--spectrum-neutral-subdued-content-color-default);
+  font-size: var(--spectrum-font-size-75);
+  margin-bottom: var(--spectrum-spacing-75);
+}
+
+.value .spectrum-Textfield {
+  width: 100%;
+}
+
+.value .actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: var(--spectrum-spacing-200);
+  margin-top: var(--spectrum-spacing-300);
+}
+
+.value .error {
+  color: var(--spectrum-negative-content-color-default, var(--spectrum-red-900));
+  margin: var(--spectrum-spacing-200) 0 0;
+}
+
+.value .error:empty {
+  display: none;
+}
