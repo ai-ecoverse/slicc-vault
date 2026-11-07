@@ -9,6 +9,7 @@ import type {
 } from './contract.ts';
 import { all, request, transact } from './db.ts';
 import { Refused } from './errors.ts';
+import type { Binding } from './records.ts';
 
 export const LIFETIME = 300 * 1000;
 
@@ -22,6 +23,8 @@ export interface HumanRequest {
   oauth?: Record<string, unknown>;
   stamp: Stamp;
   state: RequestState;
+  record?: 'secret' | 'model' | 'mcp';
+  binding?: Binding;
   createdAt: number;
   expiresAt: number;
   placeholder?: string;
@@ -40,7 +43,7 @@ export interface HumanRequest {
 }
 
 export function human(entry: Pick<HumanRequest, 'kind' | 'jop'>): boolean {
-  if (entry.kind === 'unseal') return false;
+  if (entry.kind === 'unseal' || entry.kind === 'enter') return false;
   return entry.kind !== 'jerk' || entry.jop === 'create';
 }
 
@@ -95,7 +98,7 @@ export function create(db: IDBDatabase, fields: NewRequest, now: number): Promis
   return transact(db, ['requests'], 'readwrite', async (tx) => {
     const open = (await all<HumanRequest>(tx, 'requests', fields.ns)).filter(
       (entry) =>
-        entry.stamp.uid === fields.stamp.uid && human(entry) && current(entry, now) === 'pending'
+        human(entry) && entry.stamp.uid === fields.stamp.uid && current(entry, now) === 'pending'
     );
     if (human(fields) && fields.state !== 'done' && open.length > 0) {
       throw new Refused(
@@ -115,13 +118,45 @@ export function create(db: IDBDatabase, fields: NewRequest, now: number): Promis
   });
 }
 
+export interface Entering {
+  ns: string;
+  name: string;
+  record: 'secret' | 'model' | 'mcp';
+  binding: Binding;
+  replace: boolean;
+}
+
+export const PAGE: Stamp = { pid: 0, ppid: 0, uid: -1, gid: -1, tag: null };
+
+export function opening(db: IDBDatabase, fields: Entering, now: number): Promise<HumanRequest> {
+  return transact(db, ['requests'], 'readwrite', async (tx) => {
+    const entry: HumanRequest = {
+      ns: fields.ns,
+      kind: 'enter',
+      stamp: PAGE,
+      name: fields.name,
+      record: fields.record,
+      binding: fields.binding,
+      replace: fields.replace,
+      id: `req_${hex(random(12))}`,
+      state: 'pending',
+      createdAt: now,
+      expiresAt: now + LIFETIME,
+    };
+    await request(tx.objectStore('requests').put(entry));
+    return entry;
+  });
+}
+
 export function get(db: IDBDatabase, ns: string, id: unknown, uid?: number): Promise<HumanRequest> {
   return transact(db, ['requests'], 'readonly', async (tx) => {
     const entry =
       typeof id === 'string'
         ? ((await request(tx.objectStore('requests').get(id))) as HumanRequest | undefined)
         : undefined;
-    if (!entry || entry.ns !== ns || (uid !== undefined && uid !== 0 && entry.stamp.uid !== uid)) {
+    const foreign =
+      uid !== undefined && (entry?.kind === 'enter' || (uid !== 0 && entry?.stamp.uid !== uid));
+    if (!entry || entry.ns !== ns || foreign) {
       throw new Refused('ENOENT', 'no such request');
     }
     return entry;
@@ -168,8 +203,9 @@ export function respond(
         : undefined;
     if (!entry || entry.ns !== ns) throw new Refused('ENOENT', 'no such request');
     if (entry.kind === 'value') throw new Refused('EINVAL', 'a value request is answered with put');
-    if (entry.kind === 'ask')
-      throw new Refused('EINVAL', "an ask is answered in the vault's frame");
+    if (entry.kind === 'ask' || entry.kind === 'enter') {
+      throw new Refused('EINVAL', "this request is answered in the vault's frame");
+    }
     const state = current(entry, clock());
     if (state !== 'pending') throw new Refused('EINVAL', `request ${entry.id} is ${state}`);
     const next: HumanRequest = {

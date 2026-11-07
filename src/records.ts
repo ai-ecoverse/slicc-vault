@@ -353,17 +353,22 @@ async function answered(
   input: SealInput,
   answers: Answers,
   placeholder: string,
-  updatedAt: number
+  updatedAt: number,
+  live: boolean
 ): Promise<void> {
   const store = tx.objectStore('requests');
   const entry = (await request(store.get(answers.id))) as Record<string, unknown> | undefined;
   const now = answers.clock ? answers.clock() : input.now;
-  const live =
+  const open =
     entry?.ns === input.ns && entry.state === 'pending' && now < (entry.expiresAt as number);
-  if (!entry || !live) throw new Refused('EINVAL', `request ${answers.id} is no longer pending`);
-  const typed = entry.kind === 'ask' || entry.kind === 'value';
-  const same = input.kind === 'secret' && input.name === entry.name && input.source === 'settings';
+  if (!entry || !open) throw new Refused('EINVAL', `request ${answers.id} is no longer pending`);
+  const typed = entry.kind === 'ask' || entry.kind === 'value' || entry.kind === 'enter';
+  const kind = entry.kind === 'enter' ? entry.record : 'secret';
+  const same = input.kind === kind && input.name === entry.name && input.source === 'settings';
   if (typed && !same) throw new Refused('EINVAL', `request ${answers.id} asks for another value`);
+  if (entry.kind === 'enter' && live && entry.replace !== true) {
+    throw new Refused('EEXIST', `${input.name} already holds a value; replace it instead`);
+  }
   const jerk = answers.jerk ? { jerk: answers.jerk } : {};
   await request(store.put({ ...entry, state: 'done', placeholder, sealedAt: updatedAt, ...jerk }));
 }
@@ -518,7 +523,7 @@ async function write(
   if (input.claim) await claim(store, input, input.claim, live);
   await request(store.put(record));
   if (input.answers) {
-    await answered(tx, input, input.answers, record.placeholder, record.updatedAt);
+    await answered(tx, input, input.answers, record.placeholder, record.updatedAt, !!live);
   }
   await bump(tx, input.ns);
   const rotated = existing !== undefined && !removed(existing);
