@@ -140,7 +140,16 @@ test('an enter ask waits for the value typed in the frame while the port goes on
   assert.equal(answer.state, 'done');
   assert.match(answer.placeholder, /^fnox_proxy_[0-9a-f]{24}$/);
   const done = await page.until(() => window.harness.valueEvents.find((e) => e.event === 'done'));
-  assert.deepEqual(done, { type: 'slicc-vault', v: 1, event: 'done', request, state: 'sealed' });
+  assert.deepEqual(done, {
+    type: 'slicc-vault',
+    v: 1,
+    event: 'done',
+    request,
+    state: 'sealed',
+    name: 'TYPED_TOKEN',
+    placeholder: answer.placeholder,
+    record: answer.record,
+  });
   assert.equal(await frame.evaluate(() => document.querySelector('input')), null);
   const { audit } = await page.evaluate(() => window.harness.call('audit', { limit: 5 }));
   const entry = audit.find((e) => e.type === 'seal' && e.name === 'TYPED_TOKEN');

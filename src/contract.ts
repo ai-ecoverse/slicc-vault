@@ -12,7 +12,7 @@ export type RecordSource =
   | `oauth:${string}`
   | `import:${string}`;
 export type LockMode = 'auto' | 'passkey' | 'passphrase';
-export type RequestKind = 'value' | 'oauth' | 'jerk-seal' | 'jerk' | 'unseal' | 'ask';
+export type RequestKind = 'value' | 'oauth' | 'jerk-seal' | 'jerk' | 'unseal' | 'ask' | 'enter';
 export type RequestState = 'pending' | 'done' | 'cancelled' | 'expired' | 'withdrawn';
 export type AskMode = 'enter' | 'reveal';
 export type SudoStdin = 'tty' | 'none' | 'pipe' | 'file';
@@ -587,6 +587,7 @@ export type Op =
       request?: never;
     } & RecordBinding)
   | { op: 'cancel'; request: string; reason?: 'withdrawn' }
+  | ({ op: 'enter' } & EnterOptions)
   | { op: 'remove'; name: string; kind?: RecordKind }
   | { op: 'restore'; name: string; kind?: RecordKind }
   | ({
@@ -726,6 +727,7 @@ export type OpReply =
   | ({ op: 'audit' } & AuditPage)
   | ({ op: 'put' | 'seal' | 'remove' | 'restore' } & SealResult)
   | { op: 'cancel'; state: RequestState }
+  | ({ op: 'enter' } & EnterResult)
   | { op: 'forgetLease'; forgotten: boolean }
   | ({ op: 'import' } & ImportResult)
   | { op: 'export'; bundle: Uint8Array; count: number }
@@ -836,6 +838,16 @@ export type ButtonEvent = { type: MessageType; v: Protocol } & (
   | { event: 'popup'; intent: PopupIntent; state: PopupState }
 );
 
+export interface EnterOptions extends RecordBinding {
+  name: string;
+  kind?: 'secret' | 'model' | 'mcp';
+  replace?: boolean;
+}
+
+export interface EnterResult {
+  request: string;
+}
+
 export interface ValueConfig {
   theme?: 'light' | 'dark';
   dir?: 'ltr' | 'rtl';
@@ -852,7 +864,15 @@ export type ValueEvent = { type: MessageType; v: Protocol } & (
   | { event: 'size'; width: number; height: number; inset: number }
   | { event: 'focus'; direction: 'next' | 'previous' }
   | { event: 'escape' }
-  | { event: 'done'; request: string; state: 'sealed' | 'allowed' }
+  | {
+      event: 'done';
+      request: string;
+      state: 'sealed';
+      name: string;
+      placeholder: string;
+      record: RecordState;
+    }
+  | { event: 'done'; request: string; state: 'allowed' }
   | { event: 'gone'; request: string; state: RequestState }
   | { event: 'error'; code: ErrorCode; message: string }
 );

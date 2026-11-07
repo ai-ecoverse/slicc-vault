@@ -5,7 +5,7 @@ import { button, field, h, prefersDark, themed } from './dom.ts';
 import { Refused, refusal } from './errors.ts';
 import { alive } from './holders.ts';
 import { hand, nonce } from './intents.ts';
-import { checkValue, find, removed, seal } from './records.ts';
+import { checkValue, find, removed, seal, state } from './records.ts';
 import { allow, current, get, type HumanRequest } from './requests.ts';
 import { start, type Vault } from './vault.ts';
 
@@ -17,6 +17,8 @@ type Payload = ValueEvent extends infer E
     ? Omit<E, 'type' | 'v'>
     : never
   : never;
+
+type SealedEvent = Extract<Payload, { state: 'sealed' }>;
 
 type View = 'enter' | 'reveal' | 'locked' | 'gone' | 'done' | 'missing';
 
@@ -123,7 +125,7 @@ export class ValueFrame {
   async read(): Promise<HumanRequest | null> {
     try {
       const entry = await get(this.vault.db, this.ns, this.id);
-      return entry.kind === 'ask' ? entry : null;
+      return entry.kind === 'ask' || entry.kind === 'enter' ? entry : null;
     } catch {
       return null;
     }
@@ -240,26 +242,37 @@ export class ValueFrame {
     if (!input || !this.action || this.action.disabled) return;
     this.action.disabled = true;
     if (await this.orphaned(entry)) return;
+    let sealed: SealedEvent;
     try {
       const value = checkValue(input.value);
-      await seal(this.vault.db, this.vault.keyring.use(), {
+      const { record } = await seal(this.vault.db, this.vault.keyring.use(), {
         ns: this.ns,
-        kind: 'secret',
+        kind: entry.record ?? 'secret',
         name: entry.name as string,
         value,
         source: 'settings',
         uid: null,
         tag: null,
         now: this.vault.now(),
+        ...entry.binding,
         answers: { id: entry.id, clock: () => this.vault.now() },
       });
+      const policy = await this.vault.loadPolicy(this.ns);
+      sealed = {
+        event: 'done',
+        request: entry.id,
+        state: 'sealed',
+        name: record.name,
+        placeholder: record.placeholder,
+        record: state(record, policy, this.vault.now()),
+      };
     } catch (error) {
       this.fail(error);
       this.update();
       return;
     }
     this.zero();
-    await this.finish('sealed', ['secrets', 'audit', 'requests']);
+    await this.finish(sealed, ['secrets', 'audit', 'requests']);
   }
 
   async allow(): Promise<void> {
@@ -276,20 +289,20 @@ export class ValueFrame {
       this.fail(error);
       return;
     }
-    await this.finish('allowed', ['requests']);
+    await this.finish({ event: 'done', request: entry.id, state: 'allowed' }, ['requests']);
   }
 
   async orphaned(entry: HumanRequest): Promise<boolean> {
-    if (await alive(entry.holder)) return false;
+    if (entry.kind === 'enter' || (await alive(entry.holder))) return false;
     await withdrawOrphans(this.vault.context(this.ns));
     await this.render();
     return true;
   }
 
-  async finish(state: 'sealed' | 'allowed', parts: ('secrets' | 'audit' | 'requests')[]) {
+  async finish(done: Payload, parts: ('secrets' | 'audit' | 'requests')[]) {
     this.finished = true;
-    this.emit({ event: 'done', request: this.id, state });
     await this.vault.changed(this.ns, parts);
+    this.emit(done);
     await this.render();
   }
 

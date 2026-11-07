@@ -22,6 +22,7 @@ import {
   checkName,
   checkValue,
   dismissBackup,
+  find,
   forget,
   type Lease,
   NAME,
@@ -29,6 +30,7 @@ import {
   rebind,
   records,
   remove,
+  removed,
   restore,
   SOURCE,
   seal,
@@ -45,7 +47,15 @@ import {
   egressOver,
   JERK,
 } from './refresh.ts';
-import { current, get, type HumanRequest, respond, settle } from './requests.ts';
+import {
+  current,
+  type Entering,
+  get,
+  type HumanRequest,
+  opening,
+  respond,
+  settle,
+} from './requests.ts';
 import { apply, dropCustom, migrate, registerPage } from './rules.ts';
 import { sealed } from './sealed.ts';
 import { exporter, importer } from './transfer.ts';
@@ -455,6 +465,30 @@ async function mark(vault: Vault, ns: string, request: Fields, removing: boolean
   return { ...result(vault, ns, record) };
 }
 
+async function enter(vault: Vault, ns: string, request: Fields): Promise<Fields> {
+  const name = checkName(request.name);
+  const kind = (request.kind ?? 'secret') as RecordKind;
+  if (!PUTTABLE.has(kind)) throw new Refused('EINVAL', 'enter takes a secret, model or mcp record');
+  const bound = binding(kind, request);
+  if (request.replace !== undefined && typeof request.replace !== 'boolean') {
+    throw new Refused('EINVAL', 'replace must be true or false');
+  }
+  const replace = request.replace === true;
+  const existing = await find(vault.db, ns, kind, name);
+  if (existing && !removed(existing) && !replace) {
+    throw new Refused('EEXIST', `${name} already holds a value; replace it instead`);
+  }
+  if (kind === 'model' && bound.provider === undefined && existing?.provider === undefined) {
+    throw new Refused('EINVAL', 'a model record needs its provider');
+  }
+  const entry = await opening(
+    vault.db,
+    { ns, name, record: kind as Entering['record'], binding: bound, replace },
+    vault.now()
+  );
+  return { request: entry.id };
+}
+
 async function cancel(vault: Vault, ns: string, request: Fields): Promise<Fields> {
   const pending = await get(vault.db, ns, request.request);
   const to = request.reason === 'withdrawn' ? 'withdrawn' : 'cancelled';
@@ -511,6 +545,8 @@ export async function answer(
       return mark(vault, ns, request, request.op === 'remove');
     case 'cancel':
       return cancel(vault, ns, request);
+    case 'enter':
+      return enter(vault, ns, request);
     case 'forgetLease':
       return forgetLease(vault, ns, request);
     case 'import':
