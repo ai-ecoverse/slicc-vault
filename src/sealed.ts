@@ -1,7 +1,8 @@
-import { askOp, Hold } from './ask.ts';
+import { askOp, Hold, withdrawOrphans } from './ask.ts';
 import type { ExitName, SealedReply, Stamp, VaultEvent } from './contract.ts';
 import { caused, Refused, refusal } from './errors.ts';
 import type { Exec } from './exec.ts';
+import type { Holder } from './holders.ts';
 import { prepare } from './inject.ts';
 import type { Keyring } from './lock.ts';
 import type { Policy } from './policy.ts';
@@ -41,6 +42,7 @@ export interface Context {
   clean(): Promise<Clean>;
   holdsAnother(record: VaultRecord, value: string): Promise<boolean>;
   watch(listener: () => void): () => void;
+  holder: Holder;
 }
 
 type Fields = Record<string, unknown>;
@@ -267,6 +269,7 @@ const requestOp: Handler = async (ctx, req, stamp) => {
   const fields = requestFields(req);
   const managing = fields.kind === 'unseal' || (fields.kind === 'jerk' && fields.jop === 'create');
   const refused = managing && !mayManage(stamp, ctx.sudoGid());
+  await withdrawOrphans(ctx);
   const answer = {
     exit: 2,
     message: `${fields.provider} can be signed in or dropped only by root or a cone (J2)`,

@@ -1,6 +1,6 @@
 import { compile, type Scrubber } from '@ai-ecoverse/slicc-scrub';
 import { AgentPort } from './agent.ts';
-import { Hold } from './ask.ts';
+import { Hold, withdrawOrphans } from './ask.ts';
 import type { Part } from './channel.ts';
 import { embedded } from './config.ts';
 import type {
@@ -639,7 +639,10 @@ export class Server {
     this.sessions.add(session);
     port.onmessage = (message) => void this.handle(session, message.data, message.ports);
     port.start();
-    session.queue = this.welcome(session);
+    session.queue =
+      role === 'page'
+        ? withdrawOrphans(this.vault.context(session.ns)).then(() => this.welcome(session))
+        : this.welcome(session);
     if (role === 'page') {
       session.queue = session.queue.then(() => {
         void this.vault.refresher.sweep(session.ns);

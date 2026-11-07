@@ -1,7 +1,9 @@
+import { withdrawOrphans } from './ask.ts';
 import { embedder, POPUP_FEATURES } from './button.ts';
 import type { RequestState, ValueConfig, ValueEvent } from './contract.ts';
 import { button, field, h, prefersDark, themed } from './dom.ts';
 import { Refused, refusal } from './errors.ts';
+import { alive } from './holders.ts';
 import { hand, nonce } from './intents.ts';
 import { checkValue, find, removed, seal } from './records.ts';
 import { allow, current, get, type HumanRequest } from './requests.ts';
@@ -237,6 +239,7 @@ export class ValueFrame {
     const entry = this.entry as HumanRequest;
     if (!input || !this.action || this.action.disabled) return;
     this.action.disabled = true;
+    if (await this.orphaned(entry)) return;
     try {
       const value = checkValue(input.value);
       await seal(this.vault.db, this.vault.keyring.use(), {
@@ -263,7 +266,9 @@ export class ValueFrame {
     const entry = this.entry as HumanRequest;
     if (!this.action || this.action.disabled) return;
     this.action.disabled = true;
+    if (await this.orphaned(entry)) return;
     try {
+      this.vault.keyring.use();
       const record = await find(this.vault.db, this.ns, 'secret', entry.name as string);
       if (!record || removed(record)) throw new Refused('ENOENT', `${entry.name} was removed`);
       await allow(this.vault.db, this.ns, entry.id, this.vault.now(), record.placeholder);
@@ -272,6 +277,13 @@ export class ValueFrame {
       return;
     }
     await this.finish('allowed', ['requests']);
+  }
+
+  async orphaned(entry: HumanRequest): Promise<boolean> {
+    if (await alive(entry.holder)) return false;
+    await withdrawOrphans(this.vault.context(this.ns));
+    await this.render();
+    return true;
   }
 
   async finish(state: 'sealed' | 'allowed', parts: ('secrets' | 'audit' | 'requests')[]) {
