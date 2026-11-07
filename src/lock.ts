@@ -1,6 +1,6 @@
 import { hex, random } from './bytes.ts';
 import type { LockMode } from './contract.ts';
-import { all, request, transact } from './db.ts';
+import { all, mirrored, request, transact } from './db.ts';
 import { Refused } from './errors.ts';
 import { type Dek, decrypt, encrypt, generate, type Kek, type Keys, unwrap, wrap } from './keys.ts';
 import { aad, type VaultRecord } from './records.ts';
@@ -26,7 +26,7 @@ export async function loadKeys(db: IDBDatabase): Promise<Keys> {
   });
 }
 
-async function reseal(
+export async function reseal(
   records: VaultRecord[],
   from: CryptoKey,
   to: CryptoKey
@@ -117,6 +117,7 @@ export class Keyring {
   }
 
   async protect(kek: CryptoKey, info: Kek): Promise<void> {
+    if (mirrored(this.db)) throw new Refused('ENOTSUP', 'this browser cannot protect the vault');
     const from = this.require();
     const fresh = await generate(true);
     const records = await transact(this.db, ['records'], 'readonly', (tx) =>
