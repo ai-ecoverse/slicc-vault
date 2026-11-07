@@ -350,17 +350,20 @@ export interface Answers {
 
 async function answered(
   tx: IDBTransaction,
-  ns: string,
+  input: SealInput,
   answers: Answers,
   placeholder: string,
-  sealedAt: number,
   updatedAt: number
 ): Promise<void> {
   const store = tx.objectStore('requests');
   const entry = (await request(store.get(answers.id))) as Record<string, unknown> | undefined;
-  const now = answers.clock ? answers.clock() : sealedAt;
-  const live = entry?.ns === ns && entry.state === 'pending' && now < (entry.expiresAt as number);
+  const now = answers.clock ? answers.clock() : input.now;
+  const live =
+    entry?.ns === input.ns && entry.state === 'pending' && now < (entry.expiresAt as number);
   if (!entry || !live) throw new Refused('EINVAL', `request ${answers.id} is no longer pending`);
+  const typed = entry.kind === 'ask' || entry.kind === 'value';
+  const same = input.kind === 'secret' && input.name === entry.name && input.source === 'settings';
+  if (typed && !same) throw new Refused('EINVAL', `request ${answers.id} asks for another value`);
   const jerk = answers.jerk ? { jerk: answers.jerk } : {};
   await request(store.put({ ...entry, state: 'done', placeholder, sealedAt: updatedAt, ...jerk }));
 }
@@ -515,7 +518,7 @@ async function write(
   if (input.claim) await claim(store, input, input.claim, live);
   await request(store.put(record));
   if (input.answers) {
-    await answered(tx, input.ns, input.answers, record.placeholder, input.now, record.updatedAt);
+    await answered(tx, input, input.answers, record.placeholder, record.updatedAt);
   }
   await bump(tx, input.ns);
   const rotated = existing !== undefined && !removed(existing);

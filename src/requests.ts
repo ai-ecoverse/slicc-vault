@@ -36,6 +36,7 @@ export interface HumanRequest {
   requester?: Requester;
   allowed?: boolean;
   sealedAt?: number;
+  holder?: string;
 }
 
 export function human(entry: Pick<HumanRequest, 'kind' | 'jop'>): boolean {
@@ -60,6 +61,7 @@ export type NewRequest = Pick<HumanRequest, 'ns' | 'kind' | 'stamp'> &
       | 'reveal'
       | 'replace'
       | 'requester'
+      | 'holder'
     >
   >;
 

@@ -2,11 +2,12 @@ import type { Requester, SealedReply, Stamp } from './contract.ts';
 import { transact } from './db.ts';
 import { LOCKED, Refused, refusal } from './errors.ts';
 import { shown } from './exec.ts';
+import { alive } from './holders.ts';
 import { decrypt } from './keys.ts';
 import type { Keyring } from './lock.ts';
 import { PAUSED } from './policy.ts';
 import { aad, audit, checkName, find, records, removed, state } from './records.ts';
-import { create, current, get, type HumanRequest } from './requests.ts';
+import { create, current, get, type HumanRequest, settle, waiting } from './requests.ts';
 import type { Context } from './sealed.ts';
 
 export const UNLOCK_WAIT = 10 * 1000;
@@ -102,6 +103,9 @@ export async function askOp(ctx: Context, req: Fields, stamp: Stamp): Promise<Fi
   const reveal = flag(req, 'reveal');
   const replace = flag(req, 'replace');
   const requester = checkRequester(req.requester);
+  if (stamp.tag === 'agent' && requester.kind !== 'agent') {
+    throw new Refused('EINVAL', "requester.kind must be agent for an agent's process");
+  }
   const found = await find(ctx.db, ctx.ns, 'secret', name);
   const live = found && !removed(found) ? found : undefined;
   if (live && !reveal && !replace) {
@@ -113,9 +117,12 @@ export async function askOp(ctx: Context, req: Fields, stamp: Stamp): Promise<Fi
   }
   if (reveal) await mayReveal(ctx, requester);
   const mode = live && reveal && !replace ? 'reveal' : 'enter';
+  await withdrawOrphans(ctx);
+  await ctx.holder.take();
+  const holder = ctx.holder.id;
   const entry = await create(
     ctx.db,
-    { ns: ctx.ns, kind: 'ask', stamp, name, ...asked, mode, reveal, replace, requester },
+    { ns: ctx.ns, kind: 'ask', stamp, name, ...asked, mode, reveal, replace, requester, holder },
     ctx.now()
   );
   return new Hold(entry.id, async () => {
@@ -126,6 +133,19 @@ export async function askOp(ctx: Context, req: Fields, stamp: Stamp): Promise<Fi
       return { v: 1, error: refusal(error) };
     }
   });
+}
+
+export async function withdrawOrphans(ctx: Context): Promise<void> {
+  const open = (await waiting(ctx.db, ctx.ns, ctx.now())).filter((e) => e.kind === 'ask');
+  let withdrawn = false;
+  for (const entry of open) {
+    if (await alive(entry.holder)) continue;
+    const settled = await settle(ctx.db, ctx.ns, entry.id, ctx.now(), 'withdrawn');
+    if (settled.state !== 'withdrawn') continue;
+    withdrawn = true;
+    ctx.emit({ v: 1, event: 'cancelled', request: entry.id, kind: 'ask', state: 'withdrawn' });
+  }
+  if (withdrawn) await ctx.changed();
 }
 
 export function ended(ctx: Context, entry: HumanRequest): Promise<HumanRequest> {

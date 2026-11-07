@@ -3,6 +3,7 @@ import { type Config, loaded } from './config.ts';
 import type { ScrubState, VaultEvent, VaultStatus } from './contract.ts';
 import { open } from './db.ts';
 import { Exec } from './exec.ts';
+import { Holder } from './holders.ts';
 import { Keyring } from './lock.ts';
 import { EMPTY, type Policy } from './policy.ts';
 import { backupState, onBump, records, reminder, scrubVersion } from './records.ts';
@@ -36,6 +37,7 @@ export interface Vault {
   sessions: Sessions;
   refresher: Refresher;
   status(ns: string): Promise<VaultStatus>;
+  holder: Holder;
 }
 
 export interface Options {
@@ -64,6 +66,7 @@ export async function start(options: Options = {}): Promise<Vault> {
     db,
     config,
     keyring,
+    holder: new Holder(),
     bus,
     now,
     policy: (ns) => policies.get(ns) ?? EMPTY,
@@ -113,6 +116,7 @@ export async function start(options: Options = {}): Promise<Vault> {
           return scrubber ? (text) => scrubber.text(text).text : null;
         },
         holdsAnother: (record, value) => vault.scrubbers.holdsAnother(ns, record, value),
+        holder: vault.holder,
       };
     },
     async scrub(ns) {
