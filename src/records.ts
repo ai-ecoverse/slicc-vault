@@ -2,6 +2,8 @@ import { hex, random } from './bytes.ts';
 import type {
   AgentRecord,
   BackupReminder,
+  KernelOAuthConfig,
+  KernelOAuthIdentity,
   McpView,
   RecordKind,
   RecordSource,
@@ -50,6 +52,41 @@ export interface VaultRecord {
   removedAt?: number;
   removedWith?: string;
   lease?: Lease;
+  kernelOAuth?: KernelOwnership;
+}
+
+export interface KernelOwnership extends KernelOAuthIdentity {
+  uid: number;
+  id: string;
+  oauth: KernelOAuthConfig;
+}
+
+export interface MutationGuard {
+  check(): void;
+  validate?(tx: IDBTransaction): Promise<void>;
+}
+
+export function ownsGrant(record: VaultRecord, grant: VaultRecord | undefined): boolean {
+  return Boolean(
+    record.kind === 'secret' &&
+      record.kernelOAuth &&
+      grant?.kind === 'grant' &&
+      record.refresh === grant.name &&
+      record.source === grant.source &&
+      JSON.stringify(record.kernelOAuth) === JSON.stringify(grant.kernelOAuth) &&
+      JSON.stringify(record.kernelOAuth.oauth) === JSON.stringify(grant.oauth)
+  );
+}
+
+export function sameRecord(
+  before: VaultRecord | undefined,
+  after: VaultRecord | undefined
+): boolean {
+  return before === undefined
+    ? after === undefined
+    : after?.updatedAt === before.updatedAt &&
+        after.placeholder === before.placeholder &&
+        after.removedAt === before.removedAt;
 }
 
 export interface Lease {
@@ -149,6 +186,7 @@ export interface SealInput {
   placeholder?: string;
   answers?: Answers;
   lease?: Lease;
+  kernelOAuth?: KernelOwnership;
   now: number;
 }
 
@@ -407,7 +445,12 @@ export async function seal(db: IDBDatabase, dek: Dek, input: SealInput): Promise
   return sealing;
 }
 
-export async function sealAll(db: IDBDatabase, dek: Dek, inputs: SealInput[]): Promise<Sealing[]> {
+export async function sealAll(
+  db: IDBDatabase,
+  dek: Dek,
+  inputs: SealInput[],
+  guard?: MutationGuard
+): Promise<Sealing[]> {
   const sealed = await Promise.all(
     inputs.map((input) => encrypt(dek.key, input.value, aad(input.ns, input.kind, input.name)))
   );
@@ -419,8 +462,11 @@ export async function sealAll(db: IDBDatabase, dek: Dek, inputs: SealInput[]): P
     : ['records', 'audit', 'meta'];
   return transact(db, stores, 'readwrite', async (tx) => {
     await keyed(tx, dek);
+    guard?.check();
+    await guard?.validate?.(tx);
     const out: Sealing[] = [];
     for (const [i, input] of inputs.entries()) out.push(await write(tx, input, sealed[i], keys[i]));
+    guard?.check();
     return out;
   });
 }
@@ -476,6 +522,17 @@ async function revoked(tx: IDBTransaction, input: SealInput, key: string | null)
   }
 }
 
+async function detach(
+  store: IDBObjectStore,
+  existing: VaultRecord | undefined,
+  input: SealInput
+): Promise<void> {
+  if (!existing?.kernelOAuth || input.kernelOAuth) return;
+  if (existing.kind === 'grant' || (input.source === 'process' && input.uid !== 0))
+    throw new Refused('EEXIST', 'the record belongs to an OAuth sign-in');
+  await linked(store, existing, input.now, true);
+}
+
 async function write(
   tx: IDBTransaction,
   input: SealInput,
@@ -488,6 +545,7 @@ async function write(
     | VaultRecord
     | undefined;
   guard(existing, input);
+  await detach(store, existing, input);
   if (input.exclusive && existing?.server !== undefined && existing.server !== input.server) {
     throw new Refused(
       'EEXIST',
@@ -511,6 +569,7 @@ async function write(
     ...(input.refresh === undefined ? {} : { refresh: input.refresh }),
     ...(input.oauth === undefined ? {} : { oauth: input.oauth }),
     ...(input.lease === undefined ? {} : { lease: input.lease }),
+    ...(input.kernelOAuth === undefined ? {} : { kernelOAuth: input.kernelOAuth }),
     ...bound(existing, input),
   };
   if (record.kind === 'model' && record.provider === undefined) {
@@ -552,7 +611,8 @@ export async function rotate(
   ns: string,
   rotations: Rotation[],
   entry: Record<string, unknown>,
-  now: number
+  now: number,
+  guard?: MutationGuard
 ): Promise<void> {
   const sealed = await Promise.all(
     rotations.map((r) =>
@@ -563,6 +623,8 @@ export async function rotate(
   );
   await transact(db, ['records', 'audit', 'meta'], 'readwrite', async (tx) => {
     await keyed(tx, dek);
+    guard?.check();
+    await guard?.validate?.(tx);
     const store = tx.objectStore('records');
     for (const [i, rotation] of rotations.entries()) {
       const { record } = rotation;
@@ -587,6 +649,7 @@ export async function rotate(
     }
     await bump(tx, ns);
     await audit(tx, ns, { ...entry, at: now });
+    guard?.check();
   });
 }
 
@@ -771,6 +834,7 @@ async function linked(
     | VaultRecord
     | undefined;
   if (!grant || grant.source !== record.source) return null;
+  if ((record.kernelOAuth || grant.kernelOAuth) && !ownsGrant(record, grant)) return null;
   if (removing) {
     const all = (await request(store.getAll())) as VaultRecord[];
     const shared = all.some(
@@ -780,6 +844,7 @@ async function linked(
         !(other.kind === record.kind && other.name === record.name) &&
         other.refresh === grant.name &&
         other.source === grant.source &&
+        (!grant.kernelOAuth || ownsGrant(other, grant)) &&
         !removed(other)
     );
     if (shared) return null;
@@ -806,9 +871,12 @@ async function mark(
   kind: RecordKind,
   name: string,
   now: number,
-  removing: boolean
+  removing: boolean,
+  guard?: MutationGuard
 ): Promise<VaultRecord> {
   return transact(db, ['records', 'audit', 'meta'], 'readwrite', async (tx) => {
+    guard?.check();
+    await guard?.validate?.(tx);
     const store = tx.objectStore('records');
     const record = (await request(store.get([ns, kind, name]))) as VaultRecord | undefined;
     const gone = record?.removedAt !== undefined && now - record.removedAt > RESTORABLE;
@@ -830,6 +898,7 @@ async function mark(
       at: now,
       ...(grant ? { grant } : {}),
     });
+    guard?.check();
     return record;
   });
 }
@@ -849,6 +918,7 @@ async function shared(
       !(other.kind === kind && other.name === name) &&
       other.refresh === grant.name &&
       other.source === grant.source &&
+      (!grant.kernelOAuth || ownsGrant(other, grant)) &&
       !(alive && removed(other))
   );
 }
@@ -936,9 +1006,10 @@ export function remove(
   ns: string,
   name: string,
   now: number,
-  kind: RecordKind = 'secret'
+  kind: RecordKind = 'secret',
+  guard?: MutationGuard
 ): Promise<VaultRecord> {
-  return mark(db, ns, kind, name, now, true);
+  return mark(db, ns, kind, name, now, true, guard);
 }
 
 export function restore(

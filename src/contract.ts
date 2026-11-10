@@ -24,7 +24,8 @@ export type ErrorCode =
   | 'EAGAIN'
   | 'ETIMEDOUT'
   | 'ENOTCONN'
-  | 'ENOTSUP';
+  | 'ENOTSUP'
+  | 'EIO';
 export type ExitName = 'page' | 'proxy' | 'tailscale' | `device:${DeviceId}`;
 export type ExecMode = false | 'any' | 'argv' | 'shell';
 export type Role = 'page' | 'agent';
@@ -53,6 +54,8 @@ export type ErrorCause =
   | 'record-kind'
   | 'record-expired'
   | 'vault-locked'
+  | 'oauth-reauth-required'
+  | 'oauth-refresh-failed'
   | 'no-rule'
   | 'rule-domain'
   | 'rule-request'
@@ -196,6 +199,7 @@ export interface ScrubState {
 export interface Capabilities {
   forward: 1;
   leases: 1;
+  kernelOAuth: 1;
 }
 
 export interface LeaseBinding {
@@ -547,6 +551,70 @@ export interface ButtonConfig {
   disabled?: boolean;
 }
 
+export type KernelOAuthState =
+  | 'ready'
+  | 'refreshing'
+  | 'expired'
+  | 'reauth-required'
+  | 'removed'
+  | 'locked';
+
+export interface KernelOAuthConfig {
+  tokenUrl: string;
+  clientId: string;
+  authMethod: 'none';
+  scope?: string;
+  resource?: string;
+}
+
+export interface KernelOAuthIdentity {
+  name: string;
+  provider: string;
+  account: string;
+}
+
+export type KernelOAuthRequest =
+  | { v: Protocol; op: 'capabilities' }
+  | ({
+      v: Protocol;
+      op: 'oauthGrant';
+      accessToken: string;
+      refreshToken?: string;
+      tokenType?: string;
+      expiresAt?: EpochMs;
+      oauth: KernelOAuthConfig;
+    } & KernelOAuthIdentity)
+  | ({ v: Protocol; op: 'oauthStatus' | 'oauthRefresh' | 'oauthRemove' } & KernelOAuthIdentity);
+
+export interface KernelOAuthStatus {
+  v: Protocol;
+  placeholder: string;
+  state: KernelOAuthState;
+  expiresAt: EpochMs | null;
+  refreshable: boolean;
+}
+
+export type KernelOAuthErrorCause =
+  | 'vault-locked'
+  | 'oauth-reauth-required'
+  | 'oauth-refresh-failed';
+
+export interface KernelOAuthError {
+  code: ErrorCode;
+  message: string;
+  cause?: KernelOAuthErrorCause;
+}
+
+export interface KernelOAuthDiscovery {
+  oauthManaged?: true;
+}
+
+export type KernelOAuthReply =
+  | KernelOAuthStatus
+  | { v: Protocol; capabilities: { kernelOAuth?: 1 } }
+  | { v: Protocol; removed: true }
+  | { v: Protocol; error: KernelOAuthError };
+
 export type SealedRequest = { v: Protocol; op: string } & Record<string, unknown>;
 export type SealedReply = { v: Protocol } & Record<string, unknown>;
 
@@ -567,7 +635,7 @@ export type AskReply =
   | { v: Protocol; error: VaultError };
 
 export type Op =
-  | { op: 'sealed'; req: SealedRequest; stamp: Stamp }
+  | { op: 'sealed'; req: SealedRequest; stamp: Stamp; kernelOAuth?: 1 }
   | { op: 'status' }
   | { op: 'placeholders' }
   | { op: 'list' }

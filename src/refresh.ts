@@ -2,8 +2,19 @@ import type { Scrubber } from '@ai-ecoverse/slicc-scrub';
 import { text } from './bytes.ts';
 import { all, request, transact } from './db.ts';
 import { Refused } from './errors.ts';
-import { decrypt } from './keys.ts';
-import { aad, type Rotation, records, removed, rotate, type VaultRecord } from './records.ts';
+import { decrypt, type Keys } from './keys.ts';
+import { keyGuard, OAuthBudget, oauthValues } from './oauth-control.ts';
+import {
+  aad,
+  bump,
+  type MutationGuard,
+  ownsGrant,
+  type Rotation,
+  records,
+  removed,
+  rotate,
+  type VaultRecord,
+} from './records.ts';
 import type { Vault } from './vault.ts';
 
 export const DUE = 5 * 60 * 1000;
@@ -247,34 +258,49 @@ export class Refresher {
     }
   }
 
-  refresh(ns: string, name: string, kind: TokenKind = 'secret'): Promise<Fields> {
+  refresh(
+    ns: string,
+    name: string,
+    kind: TokenKind = 'secret',
+    budget?: OAuthBudget
+  ): Promise<Fields> {
     const key = `${ns}\u0000${kind}\u0000${name}`;
     const known = this.running.get(key);
     if (known !== undefined) return known;
-    const running = this.run(ns, name, kind).finally(() => {
+    const running = this.run(ns, name, kind, budget).finally(() => {
       this.running.delete(key);
     });
     this.running.set(key, running);
     return running;
   }
 
-  async run(ns: string, name: string, kind: TokenKind): Promise<Fields> {
+  async run(ns: string, name: string, kind: TokenKind, budget?: OAuthBudget): Promise<Fields> {
     const seen = await this.token(ns, name, kind);
-    return navigator.locks.request(`refresh:${ns}\u0000${seen.refresh}`, () =>
-      this.locked(ns, name, seen)
-    );
+    const lock = `refresh:${ns}\u0000${seen.refresh}`;
+    if (seen.kernelOAuth) {
+      const limit = budget ?? new OAuthBudget();
+      const check = keyGuard(this.vault.keyring, limit);
+      return limit.run(limit.lock(lock, () => this.locked(ns, name, seen, { check })));
+    }
+    return navigator.locks.request(lock, () => this.locked(ns, name, seen));
   }
 
   async token(ns: string, name: string, kind: TokenKind): Promise<VaultRecord> {
     const held = await records(this.vault.db, ns);
     const record = held.find((r) => r.kind === kind && r.name === name && !removed(r));
-    if (!record?.refresh || record.expiresAt === undefined) {
+    if (!record?.refresh || (record.expiresAt === undefined && !record.kernelOAuth)) {
       throw new Refused('ENOENT', `${name} has no refresh source`);
     }
     return record;
   }
 
-  async locked(ns: string, name: string, seen: VaultRecord): Promise<Fields> {
+  async locked(
+    ns: string,
+    name: string,
+    seen: VaultRecord,
+    guard?: MutationGuard
+  ): Promise<Fields> {
+    guard?.check();
     const held = await records(this.vault.db, ns);
     const record = held.find((r) => r.kind === seen.kind && r.name === name && !removed(r));
     if (!record) throw new Refused('ENOENT', `${name} has no refresh source`);
@@ -286,10 +312,18 @@ export class Refresher {
     }
     if (record.refresh === JERK) return this.jerk(ns, record);
     const grant = held.find((r) => r.kind === 'grant' && r.name === record.refresh && !removed(r));
+    if ((record.kernelOAuth || grant?.kernelOAuth) && !ownsGrant(record, grant)) {
+      throw new Refused('EACCES', 'sign in again', 'oauth-reauth-required');
+    }
     if (!grant?.oauth || grant.source !== record.source)
       throw new Refused('ENOENT', `${name}'s grant ${record.refresh} is missing`);
-    if (grant.dead) throw new Refused('EACCES', 'refresh failed: invalid_grant');
-    return this.oauth(ns, record, grant);
+    if (grant.dead)
+      throw new Refused(
+        'EACCES',
+        'refresh failed: invalid_grant',
+        record.kernelOAuth ? 'oauth-reauth-required' : undefined
+      );
+    return this.oauth(ns, record, grant, guard);
   }
 
   async jerk(ns: string, record: VaultRecord): Promise<Fields> {
@@ -321,24 +355,104 @@ export class Refresher {
     await this.vault.changed(ns, ['secrets']);
   }
 
-  async oauth(ns: string, record: VaultRecord, grant: VaultRecord): Promise<Fields> {
+  async buryOwned(
+    ns: string,
+    record: VaultRecord,
+    grant: VaultRecord,
+    guard: MutationGuard,
+    keyId: string
+  ): Promise<void> {
+    const at = this.vault.now();
+    await transact(this.vault.db, ['records', 'meta'], 'readwrite', async (tx) => {
+      guard.check();
+      const keys = (await request(tx.objectStore('meta').get('keys'))) as Keys;
+      if (keys.id !== keyId) throw new Refused('EAGAIN', 'the vault was re-keyed');
+      const store = tx.objectStore('records');
+      const token = (await request(store.get([ns, record.kind, record.name]))) as
+        | VaultRecord
+        | undefined;
+      const current = (await request(store.get([ns, 'grant', grant.name]))) as
+        | VaultRecord
+        | undefined;
+      if (
+        !token ||
+        !current ||
+        token.updatedAt !== record.updatedAt ||
+        current.updatedAt !== grant.updatedAt ||
+        removed(token) ||
+        removed(current) ||
+        !ownsGrant(token, current)
+      ) {
+        throw new Refused('EAGAIN', 'the OAuth record changed');
+      }
+      await request(
+        store.put({ ...current, dead: true, updatedAt: Math.max(at, current.updatedAt + 1) })
+      );
+      await request(
+        store.put({
+          ...token,
+          expiresAt: Math.min(at, token.expiresAt ?? at),
+          updatedAt: Math.max(at, token.updatedAt + 1),
+        })
+      );
+      await bump(tx, ns);
+      guard.check();
+    });
+    await this.vault.changed(ns, ['secrets']);
+  }
+
+  async oauth(
+    ns: string,
+    record: VaultRecord,
+    grant: VaultRecord,
+    guard?: MutationGuard
+  ): Promise<Fields> {
+    guard?.check();
     if (!this.send) throw new Refused('ENOTCONN', 'no page is connected to send the refresh');
     const dek = this.vault.keyring.use();
     const token = await decrypt(dek.key, grant.sealed, aad(grant.ns, grant.kind, grant.name));
-    const response = await this.send(ns, await tokenRequest(grant.oauth as OAuth, token));
-    const bearer = grant.oauth?.bearer === 'default';
+    const prepared = await tokenRequest(grant.oauth as OAuth, token);
+    guard?.check();
+    const response = await this.send(ns, prepared);
+    guard?.check();
+    const bearer = grant.oauth?.bearer === 'default' || !!record.kernelOAuth;
     const got = await tokens(
       response,
       await this.vault.scrubbers.get(ns),
       this.vault.now(),
       bearer
     ).catch(async (error: Refused & { idp?: string }) => {
+      if (record.kernelOAuth) {
+        if (error.idp === 'invalid_grant') {
+          await this.buryOwned(ns, record, grant, guard!, dek.id);
+          throw new Refused('EACCES', '', 'oauth-reauth-required');
+        }
+        throw new Refused('EACCES', '', 'oauth-refresh-failed');
+      }
       if (bearer && error.idp === 'invalid_grant') await this.bury(ns, grant);
       throw error;
     });
     const now = this.vault.now();
     const expiresAt = got.expires === null ? null : now + got.expires * 1000;
     const replaced = got.refresh !== null && got.refresh !== token ? got.refresh : undefined;
+    if (record.kernelOAuth) {
+      const { oauth, ...owner } = record.kernelOAuth;
+      try {
+        oauthValues(
+          [got.access, got.refresh ?? token],
+          [
+            record.source,
+            record.name,
+            grant.name,
+            ...Object.values(owner).map(String),
+            ...Object.values(oauth),
+            ...(expiresAt === null ? [] : [String(expiresAt)]),
+          ]
+        );
+      } catch {
+        throw new Refused('EACCES', '', 'oauth-refresh-failed');
+      }
+    }
     const rotations: Rotation[] = [
       { record, value: got.access, expiresAt },
       { record: grant, ...(replaced === undefined ? {} : { value: replaced }) },
@@ -349,7 +463,8 @@ export class Refresher {
       ns,
       rotations,
       { type: 'refresh', name: record.name, grant: grant.name, uid: null, tag: null },
-      now
+      now,
+      guard
     );
     await this.vault.changed(ns, ['secrets', 'audit']);
     return { state: 'refreshed', ...(expiresAt === null ? {} : { expiresAt }) };

@@ -58,6 +58,7 @@ export class Keyring {
   readonly bus: Bus;
   key: CryptoKey | null = null;
   id = '';
+  revision = 0;
   mode: LockMode = 'auto';
   kek: Kek | null = null;
   private wrapped: Keys | null = null;
@@ -183,6 +184,7 @@ export class Keyring {
   }
 
   private emit(): void {
+    this.revision++;
     for (const listener of this.listeners) listener();
   }
 }
