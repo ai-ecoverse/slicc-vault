@@ -17,6 +17,8 @@ import type {
 import { all, transact } from './db.ts';
 import { Refused, refusal } from './errors.ts';
 import { forward } from './forward.ts';
+import { kernelOAuth } from './kernel-oauth.ts';
+import { OAuthBudget, oauthError, oauthRequest } from './oauth-control.ts';
 import {
   binding,
   checkName,
@@ -511,7 +513,8 @@ export async function answer(
   vault: Vault,
   ns: string,
   request: Fields,
-  port?: MessagePort
+  port?: MessagePort,
+  budget?: OAuthBudget
 ): Promise<Fields> {
   switch (request.op) {
     case 'forward':
@@ -523,6 +526,13 @@ export async function answer(
     case 'sessionAnchors':
       return vault.sessions.anchors(ns, request);
     case 'sealed': {
+      if (oauthRequest(request.req)) {
+        const limit = budget ?? new OAuthBudget();
+        const reply = await limit
+          .run(kernelOAuth(vault, ns, request.req, request.stamp, request.kernelOAuth, limit))
+          .catch(oauthError);
+        return { reply };
+      }
       const reply = await sealed(vault.context(ns), request.req, request.stamp);
       return reply instanceof Hold ? { held: reply } : { reply };
     }
@@ -700,25 +710,54 @@ export class Server {
   }
 
   handle(session: Session, data: unknown, ports: readonly MessagePort[] = []): Promise<void> {
-    session.queue = session.queue.then(() => this.reply(session, data, ports));
+    const fields = (data ?? {}) as Fields;
+    const budget =
+      fields.op === 'sealed' && oauthRequest(fields.req) ? new OAuthBudget() : undefined;
+    if (
+      budget &&
+      (oauthRequest(fields.req, 'oauthGrant') || oauthRequest(fields.req, 'oauthRefresh'))
+    )
+      budget.admitted = records(this.vault.db, session.ns);
+    const queued = session.queue.then(() => this.reply(session, data, ports, budget));
+    session.queue = budget
+      ? budget.run(queued).catch((error) => {
+          for (const port of ports) port.close();
+          session.port.postMessage({
+            v: 1,
+            id: typeof fields.id === 'number' ? fields.id : -1,
+            op: 'sealed',
+            reply: oauthError(error),
+          });
+        })
+      : queued;
     return session.queue;
   }
 
-  async reply(session: Session, data: unknown, ports: readonly MessagePort[] = []): Promise<void> {
+  async reply(
+    session: Session,
+    data: unknown,
+    ports: readonly MessagePort[] = [],
+    budget?: OAuthBudget
+  ): Promise<void> {
     const request = (data ?? {}) as Fields;
     const id = typeof request.id === 'number' ? request.id : -1;
     let reply: Reply;
     try {
+      budget?.check();
       if (request.v !== 1) throw new Refused('EINVAL', 'this vault speaks protocol 1');
       forRole(session.role, request.op);
       const fields = session.agent
         ? await session.agent.answer(request)
-        : await answer(this.vault, session.ns, request, ports[0]);
+        : await answer(this.vault, session.ns, request, ports[0], budget);
+      budget?.check();
       if (fields.held instanceof Hold) return this.hold(session, id, fields.held);
       reply = { v: 1, id, op: request.op, ...fields } as Reply;
     } catch (error) {
-      reply = { v: 1, id, error: refusal(error) };
+      reply = budget
+        ? { v: 1, id, op: 'sealed', reply: oauthError(error) }
+        : { v: 1, id, error: refusal(error) };
     }
+    if (budget?.controller.signal.aborted) return;
     if (request.op !== 'forward' || !('head' in reply)) for (const port of ports) port.close();
     session.port.postMessage(reply);
   }

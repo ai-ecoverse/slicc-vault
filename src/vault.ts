@@ -134,7 +134,7 @@ export async function start(options: Options = {}): Promise<Vault> {
       return {
         version: config.version,
         protocol: 1,
-        capabilities: { forward: 1, leases: 1 },
+        capabilities: { forward: 1, leases: 1, kernelOAuth: 1 },
         origin: ns,
         locked: keyring.locked,
         lock: keyring.mode,

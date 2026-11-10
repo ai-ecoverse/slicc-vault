@@ -154,7 +154,11 @@ async function rootMcp(ctx: Context, req: Fields, server: string) {
 const placeholderOp: Handler = async (ctx, req, stamp) => {
   if (root(stamp) && typeof req.server === 'string') return rootMcp(ctx, req, req.server);
   const found = await record(ctx, checkName(req.name));
-  return { placeholder: found.placeholder, state: state(found, ctx.policy(), ctx.now()) };
+  return {
+    placeholder: found.placeholder,
+    state: state(found, ctx.policy(), ctx.now()),
+    ...(found.kernelOAuth ? { oauthManaged: true } : {}),
+  };
 };
 
 const listOp: Handler = async (ctx) => {
@@ -170,6 +174,7 @@ const listOp: Handler = async (ctx) => {
       exec: policy.exec(entry.name),
       rules: rulesFor(entry, policy),
       ...(entry.expiresAt === undefined ? {} : { expiresAt: entry.expiresAt }),
+      ...(entry.kernelOAuth ? { oauthManaged: true } : {}),
     }));
   return { secrets };
 };
