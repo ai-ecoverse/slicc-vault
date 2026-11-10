@@ -262,6 +262,8 @@ export function problem(
   } catch (error) {
     return (error as Error).message;
   }
+  const named = held.find((r) => r.name === item.name && r.kind === item.kind);
+  if (named?.kernelOAuth) return 'the record belongs to an OAuth sign-in';
   if (item.placeholder === undefined) return null;
   if (!PLACEHOLDER.test(item.placeholder))
     return "the file is damaged: this secret's placeholder isn't valid";
@@ -270,7 +272,6 @@ export function problem(
   const same = held.find((r) => r.placeholder === item.placeholder);
   if (same && (same.name !== item.name || same.kind !== item.kind))
     return 'this app already has this secret under another name';
-  const named = held.find((r) => r.name === item.name && r.kind === item.kind);
   if (named && named.placeholder !== item.placeholder)
     return 'this app already has a different secret with this name';
   return null;

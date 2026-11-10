@@ -326,3 +326,114 @@ test('a non-root process cannot clear a managed tombstone to bypass its binding'
   error(replaced, 'EEXIST');
   error(await registered(page, { account: 'another' }), 'EEXIST');
 });
+
+const MISSING = 'OAuth record not found';
+const OTHER = { ...CONE, uid: 1001 };
+
+test('a different uid gets the same status and refresh reply as an unknown kernel grant', async (t) => {
+  const { page } = await connected(t);
+  await registered(page, { expiresAt: Date.now() + 3600000 }, CONE);
+  await egress(page);
+  const unknownStatus = await call(page, 'oauthStatus', { name: 'NO_SUCH_GRANT' }, OTHER);
+  const foreignStatus = await call(page, 'oauthStatus', {}, OTHER);
+  const mismatch = await call(page, 'oauthStatus', { provider: 'other' }, OTHER);
+  assert.deepEqual(foreignStatus, unknownStatus);
+  assert.deepEqual(mismatch, unknownStatus);
+  assert.equal(unknownStatus.error.code, 'ENOENT');
+  assert.equal(unknownStatus.error.message, MISSING);
+  const unknownRefresh = await call(page, 'oauthRefresh', { name: 'NO_SUCH_GRANT' }, OTHER);
+  const foreignRefresh = await call(page, 'oauthRefresh', {}, OTHER);
+  assert.deepEqual(foreignRefresh, unknownRefresh);
+  assert.equal(foreignRefresh.error.code, 'ENOENT');
+  assert.equal(foreignRefresh.error.message, MISSING);
+  assert.equal((await page.evaluate(() => window.harness.egress.requests)).length, 0);
+  const owner = await call(page, 'oauthStatus', {}, CONE);
+  assert.equal(owner.state, 'ready');
+  assert.equal(owner.refreshable, true);
+  const root = await call(page, 'oauthStatus', {}, ROOT);
+  assert.deepEqual(root, owner);
+  error(await call(page, 'oauthStatus', { provider: 'other' }, CONE), 'EEXIST');
+  const off = { ...CONE, users: 'off' };
+  const offHeld = await call(page, 'oauthStatus', {}, off);
+  const offMissing = await call(page, 'oauthStatus', { name: 'NO_SUCH_GRANT' }, off);
+  assert.equal(offHeld.error.code, 'EACCES');
+  assert.deepEqual(offHeld.error, offMissing.error);
+  const fresh = await call(page, 'oauthRefresh', {}, CONE);
+  assert.equal(fresh.state, 'ready');
+  assert.equal(fresh.placeholder, owner.placeholder);
+  assert.equal((await page.evaluate(() => window.harness.egress.requests)).length, 1);
+});
+
+test('a page refresh of a managed secret is refused and a due managed token still sweeps', async (t) => {
+  const { page } = await connected(t);
+  const initial = await registered(page, { expiresAt: Date.now() + 60000 });
+  await egress(page);
+  const refused = await page.evaluate((name) => window.harness.call('refresh', { name }), ID.name);
+  assert.equal(refused.error.code, 'EACCES');
+  assert.equal(refused.error.message, 'managed OAuth records are not refreshed here');
+  assert.equal((await page.evaluate(() => window.harness.egress.requests)).length, 0);
+  assert.equal((await call(page, 'oauthStatus')).expiresAt, initial.expiresAt);
+  assert.equal((await page.evaluate(() => window.harness.twin(true))).op, 'welcome');
+  await page.until(() => window.harness.egress.requests.length === 1);
+  const swept = await call(page, 'oauthStatus');
+  assert.equal(swept.placeholder, initial.placeholder);
+  assert.ok(swept.expiresAt > Date.now() + 3500000);
+  assert.equal((await page.evaluate(() => window.harness.egress.requests)).length, 1);
+});
+
+test('the agent port cannot call a kernel OAuth operation', async (t) => {
+  const { page } = await connected(t);
+  await registered(page);
+  await egress(page);
+  await page.evaluate(() => window.harness.agent());
+  const direct = await page.evaluate((id) => {
+    const ops = ['capabilities', 'oauthGrant', 'oauthStatus', 'oauthRefresh', 'oauthRemove'];
+    return Promise.all(ops.map((op) => window.harness.ask(op, { v: 1, op, ...id })));
+  }, ID);
+  assert.ok(direct.every((reply) => reply.error?.code === 'EACCES'));
+  const sealed = await page.evaluate((id) => {
+    const ops = ['oauthGrant', 'oauthStatus', 'oauthRefresh', 'oauthRemove'];
+    return Promise.all(
+      ops.map((op) =>
+        window.harness.ask('sealed', {
+          req: { v: 1, op, ...id },
+          stamp: { pid: 1, ppid: 0, uid: 0, gid: 0, tag: null, users: 'enforce' },
+          kernelOAuth: 1,
+        })
+      )
+    );
+  }, ID);
+  assert.ok(
+    sealed.every((reply) => reply.reply?.error?.code === 'EACCES' || reply.error?.code === 'EACCES')
+  );
+  assert.equal((await page.evaluate(() => window.harness.egress.requests)).length, 0);
+  assert.equal((await call(page, 'oauthStatus')).refreshable, true);
+});
+
+test('import over a managed record is refused and leaves the grant', async (t) => {
+  const { page } = await connected(t);
+  await registered(page, {}, CONE);
+  const bytes = Buffer.from(`${ID.name}=fake-imported-value-0001`).toString('base64');
+  const importing = (pick) =>
+    page.evaluate(
+      (payload) => {
+        const raw = Uint8Array.from(atob(payload.bytes), (c) => c.charCodeAt(0));
+        return window.harness.call('import', {
+          kind: 'six',
+          bytes: raw,
+          ...(payload.pick ? { pick: payload.pick } : {}),
+        });
+      },
+      { bytes, ...(pick ? { pick } : {}) }
+    );
+  const staged = await importing();
+  assert.equal(staged.candidates[0].refused, 'the record belongs to an OAuth sign-in');
+  const done = await importing([ID.name]);
+  assert.deepEqual(done.imported, []);
+  assert.equal(done.reasons[ID.name], 'the record belongs to an OAuth sign-in');
+  assert.equal((await call(page, 'oauthStatus', {}, CONE)).state, 'ready');
+  const grant = (await page.evaluate(() => window.harness.call('list'))).list.secrets.find(
+    (record) => record.kind === 'grant'
+  );
+  assert.equal(grant.state, 'inert');
+});

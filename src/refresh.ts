@@ -18,6 +18,7 @@ import {
 import type { Vault } from './vault.ts';
 
 export const DUE = 5 * 60 * 1000;
+export const MANAGED_REFRESH = 'managed OAuth records are not refreshed here';
 export const REANNOUNCE = 10 * 60 * 1000;
 export const EGRESS_TIMEOUT = 30 * 1000;
 export const JERK = 'jerk-seal';
@@ -254,7 +255,9 @@ export class Refresher {
   async sweep(ns: string): Promise<void> {
     const now = this.vault.now();
     for (const record of (await records(this.vault.db, ns)).filter((r) => due(r, now))) {
-      await this.refresh(ns, record.name, record.kind as TokenKind).catch(() => null);
+      await this.refresh(ns, record.name, record.kind as TokenKind, undefined, true).catch(
+        () => null
+      );
     }
   }
 
@@ -262,16 +265,25 @@ export class Refresher {
     ns: string,
     name: string,
     kind: TokenKind = 'secret',
-    budget?: OAuthBudget
+    budget?: OAuthBudget,
+    scheduled = false
   ): Promise<Fields> {
-    const key = `${ns}\u0000${kind}\u0000${name}`;
-    const known = this.running.get(key);
-    if (known !== undefined) return known;
-    const running = this.run(ns, name, kind, budget).finally(() => {
-      this.running.delete(key);
+    const start = (): Promise<Fields> => {
+      const key = `${ns}\u0000${kind}\u0000${name}`;
+      const known = this.running.get(key);
+      if (known !== undefined) return known;
+      const running = this.run(ns, name, kind, budget).finally(() => {
+        this.running.delete(key);
+      });
+      this.running.set(key, running);
+      return running;
+    };
+    if (scheduled || budget !== undefined) return start();
+    return records(this.vault.db, ns).then((held) => {
+      const record = held.find((r) => r.kind === kind && r.name === name && !removed(r));
+      if (record?.kernelOAuth) throw new Refused('EACCES', MANAGED_REFRESH);
+      return start();
     });
-    this.running.set(key, running);
-    return running;
   }
 
   async run(ns: string, name: string, kind: TokenKind, budget?: OAuthBudget): Promise<Fields> {
