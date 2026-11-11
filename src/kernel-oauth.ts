@@ -102,6 +102,14 @@ function selected(held: VaultRecord[], id: KernelOAuthIdentity, now: number): Va
   return record;
 }
 
+function callerOwns(vault: Vault, ns: string, stamp: Stamp, record: VaultRecord | undefined): void {
+  if (stamp.users !== 'enforce') throw new Refused('EACCES', '');
+  if (!record?.kernelOAuth || (stamp.uid !== 0 && record.kernelOAuth.uid !== stamp.uid)) {
+    throw new Refused('ENOENT', '');
+  }
+  if (!mayManage(stamp, vault.sudoGids.get(ns) ?? null)) throw new Refused('EACCES', '');
+}
+
 function manage(vault: Vault, ns: string, stamp: Stamp, record?: VaultRecord): void {
   if (!mayManage(stamp, vault.sudoGids.get(ns) ?? null)) throw new Refused('EACCES', '');
   if (record?.kernelOAuth && stamp.uid !== 0 && record.kernelOAuth.uid !== stamp.uid) {
@@ -139,10 +147,21 @@ async function status(
   vault: Vault,
   ns: string,
   id: KernelOAuthIdentity,
+  stamp: Stamp,
   budget: OAuthBudget
 ): Promise<KernelOAuthStatus> {
   const held = await records(vault.db, ns);
-  const record = selected(held, id, vault.now());
+  const now = vault.now();
+  callerOwns(
+    vault,
+    ns,
+    stamp,
+    live(
+      held.find((r) => r.kind === 'secret' && r.name === id.name),
+      now
+    )
+  );
+  const record = selected(held, id, now);
   const grant = held.find((r) => r.kind === 'grant' && r.name === record.refresh);
   const valid = ownsGrant(record, grant) && grant?.removedAt === undefined && !grant?.dead;
   const refreshable = record.removedAt === undefined && valid;
@@ -289,9 +308,10 @@ async function refresh(
   vault: Vault,
   ns: string,
   id: KernelOAuthIdentity,
+  stamp: Stamp,
   budget: OAuthBudget
 ): Promise<void> {
-  refreshable(await status(vault, ns, id, budget));
+  refreshable(await status(vault, ns, id, stamp, budget));
   const admitted = (await budget.admitted)?.find((r) => r.kind === 'secret' && r.name === id.name);
   if (admitted) {
     const current = selected(await records(vault.db, ns), id, vault.now());
@@ -334,10 +354,9 @@ export async function kernelOAuth(
       budget.check();
       return { v: 1, removed: true };
     } else if (fields.op === 'oauthRefresh') {
-      if (caller.users !== 'enforce') throw new Refused('EACCES', '');
-      await refresh(vault, ns, id, budget);
+      await refresh(vault, ns, id, caller, budget);
     } else if (fields.op !== 'oauthStatus') throw new Refused('EINVAL', '');
-    const result = await status(vault, ns, id, budget);
+    const result = await status(vault, ns, id, caller, budget);
     if (fields.op === 'oauthRefresh') refreshable(result);
     return { ...result };
   } catch (error) {
