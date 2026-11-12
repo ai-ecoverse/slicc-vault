@@ -215,6 +215,73 @@ test('a JSON-document value leaves a JSON model body valid JSON that holds no fo
   }
 });
 
+test('a JSON model body keeps its bytes except the strings, numbers and spans that hold a value', async (t) => {
+  const { page, model } = await ready(t);
+  const put = (name, value) => page.evaluate((f) => window.harness.call('put', f), { name, value });
+  const digits = await put('DIGITS', '7310925486137');
+  const across = await put('ACROSS', 'xab12","cd34e');
+  const uni = await put('UNI', 'clé-secrète-0144');
+  const escaped = '"cl\\u00e9-secr\\u00E8te-0144"';
+  const kept = '"keep" :\t[1e2, "x\\/y", "caf\\u00e9"]';
+  const body = `{"n":7310925486137, "k":["xab12","cd34e"], "u":${escaped}, ${kept}}`;
+  const prepared = (sent, bom) =>
+    page.evaluate(
+      async (request, withBom) => {
+        const bytes = new TextEncoder().encode(request.body);
+        const body = withBom ? new Uint8Array([0xef, 0xbb, 0xbf, ...bytes]) : request.body;
+        const reply = await window.harness.ask('model', {
+          provider: 'anthropic',
+          request: { ...request, body },
+        });
+        const out = reply.request?.body;
+        return out instanceof Uint8Array ? [...out] : out;
+      },
+      req('https://api.anthropic.com/v1/messages', [['x-api-key', model.placeholder]], sent),
+      bom
+    );
+  const out = await prepared(body, false);
+  assert.equal(
+    out,
+    `{"n":"${digits.placeholder}", "k":"[\\"${across.placeholder}\\"]", "u":"${uni.placeholder}", ${kept}}`
+  );
+  const plain = `{"a":"${SECRET}"}`;
+  const bom = Buffer.from(await prepared(plain, true));
+  assert.deepEqual([...bom.subarray(0, 3)], [0xef, 0xbb, 0xbf]);
+  assert.equal(
+    bom.subarray(3).toString(),
+    `{"a":"${(await put('GH_TOKEN', SECRET)).placeholder}"}`
+  );
+});
+
+test('a JSON body too deep or too large to walk is scrubbed as text, at once', async (t) => {
+  const { page, model } = await ready(t);
+  const value = '7310925486137';
+  const sealed = await page.evaluate(
+    (v) => window.harness.call('put', { name: 'DIGITS', value: v }),
+    value
+  );
+  const pad = ' '.repeat(4096);
+  const deep = `${`[${pad}`.repeat(400)}${value}${`${pad}]`.repeat(400)}`;
+  const wide = `${`[${pad}`.repeat(200)}${value}${`${pad}]`.repeat(200)}`;
+  const items = Array.from({ length: 250000 }, (_, i) => i);
+  items[1234] = Number(value);
+  const flat = JSON.stringify(items);
+  const scrubber = compile([{ name: 'DIGITS', value, placeholder: sealed.placeholder }]);
+  for (const body of [deep, wide, flat]) {
+    const got = await page.evaluate(
+      async (request) => {
+        const started = performance.now();
+        const reply = await window.harness.ask('model', { provider: 'anthropic', request });
+        return { body: reply.request?.body, ms: performance.now() - started };
+      },
+      req('https://api.anthropic.com/v1/messages', [['x-api-key', model.placeholder]], body)
+    );
+    assert.ok(got.ms < 10000, `${got.ms} ms`);
+    assert.equal(got.body, scrubber.text(body).text);
+    assert.ok(!got.body.includes(value));
+  }
+});
+
 test('mcp fills a kernel bridge token on its loopback, and never sends one elsewhere', async (t) => {
   const { page, ask, model } = await ready(t);
   const bridge = await page.evaluate(
@@ -614,6 +681,56 @@ test('a kernel bridge seals its own loopback token, which only that server gets'
   assert.deepEqual(stale.request.headers, [['authorization', `Bearer ${sealed.placeholder}`]]);
   const rebound = await send(put.placeholder);
   assert.deepEqual(rebound.request.headers, [['authorization', 'Bearer fake-rebound-0135']]);
+});
+
+test('a JSON body is scrubbed with the scrubbers from before and after a refresh, and stays JSON', async (t) => {
+  const { page } = await ready(t);
+  const got = await page.evaluate(async () => {
+    const h = window.harness;
+    await h.call('seal', {
+      name: 'IMS_GRANT',
+      value: 'fake-ims-refresh-0150',
+      kind: 'grant',
+      source: 'oauth:ims',
+      oauth: { tokenUrl: 'https://ims.example.com/token', clientId: 'fake-client' },
+    });
+    const token = await h.call('seal', {
+      name: 'IMS_TOKEN',
+      value: 'fake-ims-access-0151',
+      kind: 'model',
+      provider: 'anthropic',
+      source: 'oauth:ims',
+      refresh: 'IMS_GRANT',
+      expiresAt: Date.now() - 1,
+    });
+    h.egress.answer = {
+      status: 200,
+      headers: [],
+      body: JSON.stringify({
+        token_type: 'Bearer',
+        access_token: 'renewed-ims-token-0152',
+        expires_in: 3600,
+      }),
+    };
+    await h.agent();
+    const reply = await h.ask('model', {
+      provider: 'anthropic',
+      request: {
+        method: 'POST',
+        url: 'https://api.anthropic.com/v1/messages',
+        headers: [['x-api-key', token.placeholder]],
+        body: '{"old":"fake-ims-access-0151 x", "new":"y renewed-ims-token-0152", "n":1}',
+      },
+    });
+    return { reply, placeholder: token.placeholder };
+  });
+  const { reply, placeholder } = got;
+  assert.deepEqual(
+    reply.request?.headers,
+    [['x-api-key', 'renewed-ims-token-0152']],
+    JSON.stringify(reply)
+  );
+  assert.equal(reply.request.body, `{"old":"${placeholder} x", "new":"y ${placeholder}", "n":1}`);
 });
 
 test('a value stored while a request refreshes its credential makes the vault prepare again, and the refresh reply holds back its expiry', async (t) => {
