@@ -1,5 +1,5 @@
 import { createReadStream, realpathSync } from 'node:fs';
-import { stat } from 'node:fs/promises';
+import { readFile, stat } from 'node:fs/promises';
 import { createServer } from 'node:http';
 import { extname, join, normalize, resolve, sep } from 'node:path';
 import { argv } from 'node:process';
@@ -59,7 +59,14 @@ function locate(root, pathname) {
 }
 
 export async function serveVault({ port = 0, embedders = EMBEDDERS, frameAncestors = true } = {}) {
-  const state = { embedders, frameAncestors, servesEmbedders: true, config: null, requests: [] };
+  const state = {
+    embedders,
+    frameAncestors,
+    servesEmbedders: true,
+    config: null,
+    requests: [],
+    prelude: '',
+  };
   const server = createServer(async (request, response) => {
     const url = new URL(request.url, 'http://localhost');
     const host = (request.headers.host ?? '').split(':')[0];
@@ -82,6 +89,10 @@ export async function serveVault({ port = 0, embedders = EMBEDDERS, frameAncesto
     const file = locate(vault ? site : page, decodeURIComponent(url.pathname));
     const info = file ? await stat(file).catch(() => null) : null;
     if (!info?.isFile()) return response.writeHead(404, headers).end();
+    if (vault && state.prelude && extname(file) === '.js') {
+      const body = `${state.prelude}\n${await readFile(file, 'utf8')}`;
+      return response.writeHead(200, { ...headers, 'content-type': types['.js'] }).end(body);
+    }
     response.writeHead(200, {
       ...headers,
       ...(vault && extname(file) === '.html' ? { 'cache-control': 'no-store' } : {}),

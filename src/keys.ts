@@ -27,6 +27,10 @@ export function generate(extractable: boolean): Promise<CryptoKey> {
   return crypto.subtle.generateKey(AES, extractable, ['encrypt', 'decrypt']);
 }
 
+export function imported(raw: Uint8Array<ArrayBuffer>): Promise<CryptoKey> {
+  return crypto.subtle.importKey('raw', raw, AES, false, ['encrypt', 'decrypt']);
+}
+
 export async function fromPassphrase(
   passphrase: string,
   salt: Uint8Array<ArrayBuffer>,
