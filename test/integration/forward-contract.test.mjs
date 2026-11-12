@@ -197,6 +197,19 @@ test('a complete MCP body comes back scrubbed', async (t) => {
   assert.equal((await used(page, 'mcp')).length, 1);
 });
 
+test('a complete JSON MCP body stays valid JSON when a value starts at an escaped quote', async (t) => {
+  const { page, m } = await ready(t);
+  const quoted = await page.evaluate(
+    (value) => window.harness.call('put', { name: 'QUOTED', value }),
+    `"${SECRET}-quoted`
+  );
+  assert.match(quoted.placeholder, /^fnox_proxy_/, JSON.stringify(quoted));
+  const body = JSON.stringify({ a: `echo "${SECRET}-quo x`, b: TOKEN });
+  const sent = await send(page, mcpCall(m, { bodyPresent: true, body }));
+  assert.equal(sent.reply.mode, 'mcp');
+  assert.deepEqual(JSON.parse(sent.body), { a: 'echo [redacted:QUOTED] x', b: m });
+});
+
 test('an MCP forward without a body has no body field', async (t) => {
   const { page, m } = await ready(t);
   const sent = await send(page, mcpCall(m));

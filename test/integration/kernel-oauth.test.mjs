@@ -375,6 +375,15 @@ test('a page refresh of a managed secret is refused and a due managed token stil
   assert.equal((await call(page, 'oauthStatus')).expiresAt, initial.expiresAt);
   assert.equal((await page.evaluate(() => window.harness.twin(true))).op, 'welcome');
   await page.until(() => window.harness.egress.requests.length === 1);
+  await page.until(
+    async (req, stamp, after) => {
+      const status = await window.harness.call('sealed', { req, stamp, kernelOAuth: 1 }, [], null);
+      return status.reply.expiresAt > after;
+    },
+    { v: 1, op: 'oauthStatus', ...ID },
+    ROOT,
+    initial.expiresAt
+  );
   const swept = await call(page, 'oauthStatus');
   assert.equal(swept.placeholder, initial.placeholder);
   assert.ok(swept.expiresAt > Date.now() + 3500000);
