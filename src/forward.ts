@@ -3,6 +3,7 @@ import type { ExitName, Stamp } from './contract.ts';
 import { all, request, transact } from './db.ts';
 import { Refused } from './errors.ts';
 import { type Head, type Prepared, prepare, type Traits } from './inject.ts';
+import { scrubBytes } from './json.ts';
 import { MAX_BODY } from './prepare.ts';
 import { atVersion, audit, records, scrubIn, scrubVersion, type VaultRecord } from './records.ts';
 import { type McpServer, tofu } from './refusal.ts';
@@ -300,7 +301,7 @@ export async function forward(
     },
   };
   if (scrubber.version !== started) return stale;
-  const scrubbed = server && body ? { body: scrubber.bytes(body).bytes } : {};
+  const scrubbed = server && body ? { body: scrubBytes(scrubber, body).bytes } : {};
   const state = await transact(vault.db, ['meta', 'records'], 'readonly', (tx) => stateIn(tx, ns));
   const again = await prepare({
     ...asked,

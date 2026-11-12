@@ -2,6 +2,7 @@ import { compile, type Hit, type Scrubber } from '@ai-ecoverse/slicc-scrub';
 import { bytesOf, text } from './bytes.ts';
 import { all as every, transact } from './db.ts';
 import { Refused } from './errors.ts';
+import { scrubBytes, scrubText } from './json.ts';
 import { decrypt } from './keys.ts';
 import { signIn } from './providers.ts';
 import {
@@ -112,10 +113,10 @@ function still(target: Target, filled: VaultRecord[]): void {
 export async function scrubbed(scrubber: Scrubber, request: Outgoing) {
   if (request.body === undefined) return { body: undefined, hits: [] as Hit[] };
   if (typeof request.body === 'string') {
-    const out = scrubber.text(request.body);
+    const out = scrubText(scrubber, request.body);
     return { body: out.text, hits: out.hits };
   }
-  const out = scrubber.bytes(request.body);
+  const out = scrubBytes(scrubber, request.body);
   return { body: out.bytes, hits: out.hits };
 }
 

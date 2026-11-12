@@ -1,5 +1,7 @@
 import assert from 'node:assert/strict';
+import { generateKeyPairSync } from 'node:crypto';
 import { test } from 'node:test';
+import { compile } from '@ai-ecoverse/slicc-scrub';
 import { setup } from './setup.mjs';
 
 const { embedder } = await setup();
@@ -137,6 +139,80 @@ test('model prepares a request with its provider key and the body scrubbed', asy
     request: req('https://elsewhere.example.com/v1', [[MODEL_KEY, 'x']]),
   });
   assert.match(named.error.message, /head carries a value/);
+});
+
+function serviceAccount() {
+  const { privateKey } = generateKeyPairSync('rsa', { modulusLength: 2048 });
+  const email = 'x@helix-225321.iam.gserviceaccount.com';
+  return {
+    type: 'service_account',
+    project_id: 'helix-225321',
+    private_key_id: 'c0ffee42'.repeat(5),
+    private_key: privateKey.export({ type: 'pkcs8', format: 'pem' }),
+    client_email: email,
+    client_id: '118000000000000000001',
+    auth_uri: 'https://accounts.google.com/o/oauth2/auth',
+    token_uri: 'https://oauth2.googleapis.com/token',
+    client_x509_cert_url: `https://www.googleapis.com/robot/v1/metadata/x509/${encodeURIComponent(email)}`,
+    universe_domain: 'googleapis.com',
+  };
+}
+
+test('a JSON-document value leaves a JSON model body valid JSON that holds no form of it', async (t) => {
+  const { page, model } = await ready(t);
+  const sa = serviceAccount();
+  const value = JSON.stringify(sa);
+  const sealed = await page.evaluate(
+    (v) => window.harness.call('put', { name: 'GCLOUD_CREDENTIALS', value: v }),
+    value
+  );
+  assert.match(sealed.placeholder, /^fnox_proxy_/, JSON.stringify(sealed));
+  const script = `const k = "-----BEGIN PRIVATE KEY-----\\n" + b; fetch("${sa.auth_uri}"); // ${sa.client_email}`;
+  const body = JSON.stringify({
+    messages: [
+      { role: 'user', content: [{ text: 'hi' }] },
+      {
+        role: 'assistant',
+        content: [{ toolUse: { toolUseId: 't1', name: 'bash', input: { command: script } } }],
+      },
+      { role: 'user', content: [{ text: `see ${sa.auth_uri} and ${sa.client_email}` }] },
+      { role: 'user', content: [{ text: `cat key.json\n${JSON.stringify(sa, null, 2)}` }] },
+      { role: 'user', content: [{ text: `jq -c: ${value} head: ${value.slice(0, 900)}` }] },
+      { role: 'assistant', content: [{ toolUse: { toolUseId: 't2', name: 'x', input: sa } }] },
+    ],
+  });
+  const scrubber = compile([
+    { name: 'GCLOUD_CREDENTIALS', value, placeholder: sealed.placeholder },
+  ]);
+  assert.throws(() => JSON.parse(scrubber.text(body).text));
+  for (const bytes of [false, true]) {
+    const got = await page.evaluate(
+      async (request, asBytes) => {
+        const sent = asBytes
+          ? { ...request, body: new TextEncoder().encode(request.body) }
+          : request;
+        const reply = await window.harness.ask('model', { provider: 'anthropic', request: sent });
+        const out = reply.request?.body;
+        return {
+          ...reply,
+          bytes: out instanceof Uint8Array,
+          body: out instanceof Uint8Array ? new TextDecoder().decode(out) : out,
+        };
+      },
+      req('https://api.anthropic.com/v1/messages', [['x-api-key', model.placeholder]], body),
+      bytes
+    );
+    assert.deepEqual(got.request?.headers, [['x-api-key', MODEL_KEY]], JSON.stringify(got));
+    assert.equal(got.bytes, bytes);
+    const parsed = JSON.parse(got.body);
+    assert.equal(parsed.messages[0].content[0].text, 'hi');
+    assert.deepEqual(scrubber.text(got.body).hits, []);
+    assert.ok(!got.body.includes(value));
+    for (const line of sa.private_key.split('\n').filter((l) => l && !l.startsWith('-----'))) {
+      assert.ok(!got.body.includes(line.slice(0, 16)) && !got.body.includes(line.slice(-16)));
+    }
+    assert.ok(got.hits.some((hit) => hit.name === 'GCLOUD_CREDENTIALS'));
+  }
 });
 
 test('mcp fills a kernel bridge token on its loopback, and never sends one elsewhere', async (t) => {
