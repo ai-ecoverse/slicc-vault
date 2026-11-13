@@ -29,7 +29,9 @@
   },
   "types": "./dist/types/contract.d.ts",
   "files": [
-    "dist/types"
+    "dist/types",
+    "dist/site",
+    "dist/headers.json"
   ],
   "scripts": {
     "prepare": "node scripts/endpoints.mjs && node scripts/jerk-wasm.mjs && slicc-install-hooks",
