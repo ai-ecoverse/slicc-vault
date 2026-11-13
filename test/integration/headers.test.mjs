@@ -2,11 +2,11 @@ import assert from 'node:assert/strict';
 import { execFile } from 'node:child_process';
 import { readdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { request } from 'node:http';
-import { join } from 'node:path';
+import { extname, join } from 'node:path';
 import { test } from 'node:test';
 import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
-import { headersDocument, PRODUCTION_EMBEDDERS } from '../../scripts/headers.mjs';
+import { CLASSES, headersDocument, PRODUCTION_EMBEDDERS } from '../../scripts/headers.mjs';
 import { EMBEDDERS, serveVault } from './serve.mjs';
 
 const exec = promisify(execFile);
@@ -100,6 +100,18 @@ function picked(response) {
   return Object.fromEntries(NAMES.map((name) => [name, response.headers.get(name)]));
 }
 
+function coveredExtensions() {
+  const covered = new Set();
+  for (const spec of CLASSES) {
+    for (const extension of spec.extensions ?? []) covered.add(extension);
+    for (const path of spec.paths ?? []) {
+      const extension = extname(path);
+      if (extension) covered.add(extension);
+    }
+  }
+  return covered;
+}
+
 test('the package lists every built site file, and headers.json matches the server', async () => {
   const pkg = JSON.parse(await readFile(join(root, 'package.json'), 'utf8'));
   assert.deepEqual(pkg.files, ['dist/types', 'dist/site', 'dist/headers.json']);
@@ -112,6 +124,8 @@ test('the package lists every built site file, and headers.json matches the serv
   const listed = new Set(row.files.map((file) => (typeof file === 'string' ? file : file.path)));
   const siteFiles = await filesUnder(site);
   for (const rel of siteFiles) assert.ok(listed.has(`dist/site/${rel}`), rel);
+  const covered = coveredExtensions();
+  for (const rel of siteFiles) assert.ok(covered.has(extname(rel)), rel);
   assert.ok(siteFiles.some((rel) => rel.endsWith('.map')));
   assert.ok(listed.has('dist/headers.json'));
   const doc = JSON.parse(await readFile(join(root, 'dist/headers.json'), 'utf8'));
@@ -122,17 +136,24 @@ test('the package lists every built site file, and headers.json matches the serv
     '.js': 'text/javascript; charset=utf-8',
     '.css': 'text/css; charset=utf-8',
     '.map': 'application/json',
+    '.txt': 'text/plain; charset=utf-8',
     '.json': 'application/json',
     '.html': 'text/html; charset=utf-8',
   });
   assert.deepEqual(doc.classes.maps.extensions, ['.map']);
+  assert.deepEqual(doc.classes.text.extensions, ['.txt']);
   assert.deepEqual(doc.embedders, { embedders: [...PRODUCTION_EMBEDDERS] });
   assert.deepEqual(doc.config.embedders, ['https://seven.sliccy.ai']);
   const served = await serveVault();
-  const probes = [join(site, 'probe-class.wasm'), join(site, 'probe-class.map')];
+  const probes = [
+    join(site, 'probe-class.wasm'),
+    join(site, 'probe-class.map'),
+    join(site, 'probe-class.txt'),
+  ];
   try {
     await writeFile(probes[0], Buffer.from([0]));
     await writeFile(probes[1], Buffer.from('{}'));
+    await writeFile(probes[2], Buffer.from('legal\n'));
     const cases = [
       ['/', 'documents', 'no-store', 'text/html; charset=utf-8'],
       ['/index.html', 'documents', 'no-store', 'text/html; charset=utf-8'],
@@ -143,6 +164,7 @@ test('the package lists every built site file, and headers.json matches the serv
       ['/vault.css', 'css', 'no-cache', 'text/css; charset=utf-8'],
       ['/fonts/AdobeClean-Regular.woff2', 'fonts', 'no-cache', 'font/woff2'],
       ['/probe-class.map', 'maps', 'no-cache', 'application/json'],
+      ['/probe-class.txt', 'text', 'no-cache', 'text/plain; charset=utf-8'],
       ['/probe-class.wasm', 'wasm', 'no-cache', 'application/wasm'],
       ['/config.json', 'config.json', 'no-cache', 'application/json'],
       ['/embedders.json', 'embedders.json', 'no-cache', 'application/json'],
