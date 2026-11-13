@@ -4,53 +4,14 @@ import { createServer } from 'node:http';
 import { extname, join, normalize, resolve, sep } from 'node:path';
 import { argv } from 'node:process';
 import { fileURLToPath } from 'node:url';
+import { contentType, pageHeaders, servedHeaders, vaultHeaders } from '../../scripts/headers.mjs';
 
 const site = resolve(fileURLToPath(new URL('../../dist/site/', import.meta.url)));
 const page = resolve(fileURLToPath(new URL('./page/', import.meta.url)));
 
-const types = {
-  '.css': 'text/css; charset=utf-8',
-  '.html': 'text/html; charset=utf-8',
-  '.js': 'text/javascript; charset=utf-8',
-  '.mjs': 'text/javascript; charset=utf-8',
-  '.json': 'application/json; charset=utf-8',
-  '.woff2': 'font/woff2',
-  '.txt': 'text/plain; charset=utf-8',
-};
+export { pageHeaders, vaultHeaders };
 
 export const EMBEDDERS = ['http://seven.sliccy.localhost:*', 'http://preview.sliccy.localhost:*'];
-
-export function vaultHeaders(embedders = EMBEDDERS) {
-  return {
-    'content-security-policy': [
-      "default-src 'none'",
-      "script-src 'self' 'wasm-unsafe-eval'",
-      "style-src 'self'",
-      "img-src 'self' data:",
-      "font-src 'self'",
-      "connect-src 'self' https: http://localhost:* http://127.0.0.1:*",
-      "worker-src 'self'",
-      "manifest-src 'self'",
-      "base-uri 'none'",
-      "form-action 'none'",
-      `frame-ancestors ${embedders.join(' ') || "'none'"}`,
-    ].join('; '),
-    'cross-origin-embedder-policy': 'require-corp',
-    'cross-origin-resource-policy': 'same-site',
-    'cross-origin-opener-policy': 'same-origin',
-    'origin-agent-cluster': '?1',
-    'x-content-type-options': 'nosniff',
-    'referrer-policy': 'no-referrer',
-    'cache-control': 'no-cache',
-  };
-}
-
-export const pageHeaders = {
-  'cross-origin-opener-policy': 'same-origin',
-  'cross-origin-embedder-policy': 'require-corp',
-  'cross-origin-resource-policy': 'same-origin',
-  'cache-control': 'no-cache',
-};
 
 function locate(root, pathname) {
   const rel = pathname.endsWith('/') ? `${pathname}index.html` : pathname;
@@ -65,27 +26,27 @@ export async function serveVault({ port = 0, embedders = EMBEDDERS, frameAncesto
     const host = (request.headers.host ?? '').split(':')[0];
     const vault = host.startsWith('vault.');
     state.requests.push(`${host}${url.pathname}`);
-    const headers = vault
-      ? vaultHeaders(state.frameAncestors ? state.embedders : ['*'])
-      : pageHeaders;
+    const frames = state.frameAncestors ? state.embedders : ['*'];
+    const headers = vault ? vaultHeaders(frames) : pageHeaders;
     if (vault && url.pathname === '/config.json' && state.config) {
       const body = JSON.stringify(state.config);
-      return response.writeHead(200, { ...headers, 'content-type': types['.json'] }).end(body);
+      return response.writeHead(200, servedHeaders(frames, '.json')).end(body);
     }
     if (vault && url.pathname === '/embedders.json' && !state.servesEmbedders) {
       return response.writeHead(404, headers).end();
     }
     if (vault && url.pathname === '/embedders.json') {
       const body = JSON.stringify({ embedders: state.embedders });
-      return response.writeHead(200, { ...headers, 'content-type': types['.json'] }).end(body);
+      return response.writeHead(200, servedHeaders(frames, '.json')).end(body);
     }
     const file = locate(vault ? site : page, decodeURIComponent(url.pathname));
     const info = file ? await stat(file).catch(() => null) : null;
     if (!info?.isFile()) return response.writeHead(404, headers).end();
+    const sent = vault
+      ? servedHeaders(frames, extname(file))
+      : { ...pageHeaders, 'content-type': contentType(extname(file)) };
     response.writeHead(200, {
-      ...headers,
-      ...(vault && extname(file) === '.html' ? { 'cache-control': 'no-store' } : {}),
-      'content-type': types[extname(file)] ?? 'application/octet-stream',
+      ...sent,
       'content-length': info.size,
     });
     createReadStream(file).pipe(response);
