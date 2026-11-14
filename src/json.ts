@@ -19,7 +19,7 @@ const SPACE = new Set([' ', '\t', '\n', '\r']);
 const PUNCTUATION = new Set([...'{}[]:,"', ...SPACE]);
 const NODES = 200_000;
 const SLACK = 1024 * 1024;
-const WINDOW = 32;
+const WINDOW = 16;
 
 function closing(text: string, from: number): number {
   let at = from + 1;
@@ -141,27 +141,26 @@ function scrubJson(scrubber: Scrubber, text: string): { text: string; hits: Hit[
       let from = at;
       let to = body.length;
       for (let width = WINDOW; ; width *= 2) {
-        from = Math.max(at, point - width);
+        from = Math.max(at, point - width + WINDOW);
         to = Math.min(body.length, point + width);
         if (holds(from, to)) break;
         if (from === at && to === body.length) return null;
       }
-      let low = from;
-      let high = to - 1;
-      while (low < high) {
-        const mid = (low + high + 1) >> 1;
-        if (holds(mid, to)) low = mid;
-        else high = mid - 1;
-      }
-      from = low;
-      high = to;
-      low = from + 1;
+      let low = from + 1;
+      let high = to;
       while (low < high) {
         const mid = (low + high) >> 1;
         if (holds(from, mid)) high = mid;
         else low = mid + 1;
       }
-      return [from, high];
+      low = from;
+      let top = Math.min(point, high - 1);
+      while (low < top) {
+        const mid = (low + top + 1) >> 1;
+        if (holds(mid, high)) low = mid;
+        else top = mid - 1;
+      }
+      return [low, high];
     };
     const smallest = (from: number, to: number) => {
       let low = 0;

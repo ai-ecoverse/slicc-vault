@@ -310,6 +310,40 @@ test('a deeply nested JSON body with a value across tokens is scanned about twic
   }
 });
 
+test('values in adjacent and sibling JSON numbers are each quoted, and the body stays JSON', async (t) => {
+  const { page, model } = await ready(t);
+  const values = ['10000000', '10007919', '10015838', '10023757'];
+  const sealed = await page.evaluate(
+    (list) =>
+      Promise.all(list.map((value, i) => window.harness.call('put', { name: `N${i}`, value }))),
+    values
+  );
+  const ph = sealed.map((record) => record.placeholder);
+  const across = await page.evaluate(() =>
+    window.harness.call('put', { name: 'ACROSS', value: 'xab12","cd34e' })
+  );
+  for (const [body, want] of [
+    [`[${values[0]},${values[1]}]`, `["${ph[0]}","${ph[1]}"]`],
+    [`{"a":${values[0]},"b":${values[1]}}`, `{"a":"${ph[0]}","b":"${ph[1]}"}`],
+    [`[${values[2]},${values[2]}]`, `["${ph[2]}","${ph[2]}"]`],
+    [
+      `[${values[3]},["xab12","cd34e"]]`,
+      `["${ph[3]}",${JSON.stringify(`["${across.placeholder}"]`)}]`,
+    ],
+    [
+      `[${Array.from({ length: 3000 }, (_, i) => values[i % 4]).join(',')}]`,
+      JSON.stringify(Array.from({ length: 3000 }, (_, i) => ph[i % 4])),
+    ],
+  ]) {
+    const got = await page.evaluate(
+      async (request) =>
+        (await window.harness.ask('model', { provider: 'anthropic', request })).request?.body,
+      req('https://api.anthropic.com/v1/messages', [['x-api-key', model.placeholder]], body)
+    );
+    assert.equal(got, want);
+  }
+});
+
 test('a JSON body nested 30,000 deep stays valid JSON when a value crosses one of its escapes', async (t) => {
   const { page, model } = await ready(t);
   const value = `"${SECRET}-quoted`;
