@@ -268,26 +268,25 @@ export class Refresher {
     budget?: OAuthBudget,
     scheduled = false
   ): Promise<Fields> {
-    const start = (): Promise<Fields> => {
-      const key = `${ns}\u0000${kind}\u0000${name}`;
-      const known = this.running.get(key);
-      if (known !== undefined) return known;
-      const running = this.run(ns, name, kind, budget).finally(() => {
-        this.running.delete(key);
-      });
-      this.running.set(key, running);
-      return running;
-    };
-    if (scheduled || budget !== undefined) return start();
-    return records(this.vault.db, ns).then((held) => {
-      const record = held.find((r) => r.kind === kind && r.name === name && !removed(r));
-      if (record?.kernelOAuth) throw new Refused('EACCES', MANAGED_REFRESH);
-      return start();
+    const page = !scheduled && budget === undefined;
+    const key = `${ns}\u0000${kind}\u0000${name}\u0000${page}`;
+    const known = this.running.get(key);
+    if (known !== undefined) return known;
+    const running = this.run(ns, name, kind, budget, page).finally(() => {
+      this.running.delete(key);
     });
+    this.running.set(key, running);
+    return running;
   }
 
-  async run(ns: string, name: string, kind: TokenKind, budget?: OAuthBudget): Promise<Fields> {
-    const seen = await this.token(ns, name, kind);
+  async run(
+    ns: string,
+    name: string,
+    kind: TokenKind,
+    budget?: OAuthBudget,
+    page = false
+  ): Promise<Fields> {
+    const seen = await this.token(ns, name, kind, page);
     const lock = `refresh:${ns}\u0000${seen.refresh}`;
     if (seen.kernelOAuth) {
       const limit = budget ?? new OAuthBudget();
@@ -297,9 +296,10 @@ export class Refresher {
     return navigator.locks.request(lock, () => this.locked(ns, name, seen));
   }
 
-  async token(ns: string, name: string, kind: TokenKind): Promise<VaultRecord> {
+  async token(ns: string, name: string, kind: TokenKind, page = false): Promise<VaultRecord> {
     const held = await records(this.vault.db, ns);
     const record = held.find((r) => r.kind === kind && r.name === name && !removed(r));
+    if (page && record?.kernelOAuth) throw new Refused('EACCES', MANAGED_REFRESH);
     if (!record?.refresh || (record.expiresAt === undefined && !record.kernelOAuth)) {
       throw new Refused('ENOENT', `${name} has no refresh source`);
     }
@@ -316,7 +316,7 @@ export class Refresher {
     const held = await records(this.vault.db, ns);
     const record = held.find((r) => r.kind === seen.kind && r.name === name && !removed(r));
     if (!record) throw new Refused('ENOENT', `${name} has no refresh source`);
-    if (record.updatedAt !== seen.updatedAt) {
+    if (record.updatedAt !== seen.updatedAt || !record.kernelOAuth !== !seen.kernelOAuth) {
       return {
         state: 'refreshed',
         ...(record.expiresAt === undefined ? {} : { expiresAt: record.expiresAt }),

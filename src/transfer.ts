@@ -18,7 +18,7 @@ import {
   PLACEHOLDER,
   records,
   SOURCE,
-  seal,
+  sealAll,
   state,
   type VaultRecord,
 } from './records.ts';
@@ -26,6 +26,7 @@ import type { Vault } from './vault.ts';
 
 export const FORMAT = 'slicc-vault-bundle';
 export const MIN_PASSPHRASE = 12;
+const MANAGED = 'the record belongs to an OAuth sign-in';
 const BUNDLED: RecordKind[] = ['secret', 'model', 'mcp'];
 
 type Fields = Record<string, unknown>;
@@ -263,7 +264,7 @@ export function problem(
     return (error as Error).message;
   }
   const named = held.find((r) => r.name === item.name && r.kind === item.kind);
-  if (named?.kernelOAuth) return 'the record belongs to an OAuth sign-in';
+  if (named?.kernelOAuth) return MANAGED;
   if (item.placeholder === undefined) return null;
   if (!PLACEHOLDER.test(item.placeholder))
     return "the file is damaged: this secret's placeholder isn't valid";
@@ -314,24 +315,43 @@ function picks(value: unknown): Map<string, string> {
   return out;
 }
 
-async function store(vault: Vault, ns: string, dek: Dek, item: Item): Promise<VaultRecord | null> {
+async function managed(tx: IDBTransaction, ns: string, item: Item): Promise<void> {
+  const existing = (await request(tx.objectStore('records').get([ns, item.kind, item.name]))) as
+    | VaultRecord
+    | undefined;
+  if (existing?.kernelOAuth) throw new Refused('EEXIST', MANAGED);
+}
+
+async function store(
+  vault: Vault,
+  ns: string,
+  dek: Dek,
+  item: Item
+): Promise<VaultRecord | string> {
   try {
-    const { record } = await seal(vault.db, dek, {
-      ns,
-      kind: item.kind,
-      name: item.name,
-      value: item.value,
-      source: item.source,
-      uid: null,
-      tag: null,
-      now: vault.now(),
-      ...(item.expiresAt === undefined ? {} : { expiresAt: item.expiresAt }),
-      ...(item.placeholder === undefined ? {} : { placeholder: item.placeholder }),
-      ...item.bound,
-    });
+    const [{ record }] = await sealAll(
+      vault.db,
+      dek,
+      [
+        {
+          ns,
+          kind: item.kind,
+          name: item.name,
+          value: item.value,
+          source: item.source,
+          uid: null,
+          tag: null,
+          now: vault.now(),
+          ...(item.expiresAt === undefined ? {} : { expiresAt: item.expiresAt }),
+          ...(item.placeholder === undefined ? {} : { placeholder: item.placeholder }),
+          ...item.bound,
+        },
+      ],
+      { check() {}, validate: (tx) => managed(tx, ns, item) }
+    );
     return record;
-  } catch {
-    return null;
+  } catch (error) {
+    return (error as Error).message === MANAGED ? MANAGED : "it couldn't be stored; try again";
   }
 }
 
@@ -365,8 +385,8 @@ export async function importer(vault: Vault, ns: string, req: Fields): Promise<F
       continue;
     }
     const record = await store(vault, ns, dek, item);
-    if (!record) {
-      skip(item.name, "it couldn't be stored; try again", item.kind);
+    if (typeof record === 'string') {
+      skip(item.name, record, item.kind);
       continue;
     }
     imported.push({

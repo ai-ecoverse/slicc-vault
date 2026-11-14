@@ -48,7 +48,6 @@ import {
   type EgressResponse,
   egressOver,
   JERK,
-  MANAGED_REFRESH,
 } from './refresh.ts';
 import {
   current,
@@ -566,14 +565,8 @@ export async function answer(
       return exporter(vault, ns, request);
     case 'answer':
       return answerRequest(vault, ns, request);
-    case 'refresh': {
-      const name = checkName(request.name);
-      const managed = (await records(vault.db, ns)).find(
-        (record) => record.kind === 'secret' && record.name === name && !removed(record)
-      );
-      if (managed?.kernelOAuth) throw new Refused('EACCES', MANAGED_REFRESH);
-      return vault.refresher.refresh(ns, name);
-    }
+    case 'refresh':
+      return vault.refresher.refresh(ns, checkName(request.name));
     case 'lock':
       vault.keyring.lock();
       return {};
