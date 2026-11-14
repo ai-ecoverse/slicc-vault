@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import { generateKeyPairSync } from 'node:crypto';
 import { test } from 'node:test';
 import { compile } from '@ai-ecoverse/slicc-scrub';
+import { scrubText } from '../../src/json.ts';
 import { setup } from './setup.mjs';
 
 const { embedder } = await setup();
@@ -253,7 +254,7 @@ test('a JSON model body keeps its bytes except the strings, numbers and spans th
   );
 });
 
-test('a JSON body too deep or too large to walk is scrubbed as text, at once', async (t) => {
+test('a deeply nested JSON body is walked at once, and one too large to walk is scrubbed as text', async (t) => {
   const { page, model } = await ready(t);
   const value = '7310925486137';
   const sealed = await page.evaluate(
@@ -267,7 +268,12 @@ test('a JSON body too deep or too large to walk is scrubbed as text, at once', a
   items[1234] = Number(value);
   const flat = JSON.stringify(items);
   const scrubber = compile([{ name: 'DIGITS', value, placeholder: sealed.placeholder }]);
-  for (const body of [deep, wide, flat]) {
+  const walked = (body) => body.replace(value, `"${sealed.placeholder}"`);
+  for (const [body, want] of [
+    [deep, walked(deep)],
+    [wide, walked(wide)],
+    [flat, scrubber.text(flat).text],
+  ]) {
     const got = await page.evaluate(
       async (request) => {
         const started = performance.now();
@@ -277,9 +283,87 @@ test('a JSON body too deep or too large to walk is scrubbed as text, at once', a
       req('https://api.anthropic.com/v1/messages', [['x-api-key', model.placeholder]], body)
     );
     assert.ok(got.ms < 10000, `${got.ms} ms`);
-    assert.equal(got.body, scrubber.text(body).text);
+    assert.equal(got.body, want);
     assert.ok(!got.body.includes(value));
   }
+});
+
+test('a deeply nested JSON body with a value across tokens is scanned about twice, not once per level', () => {
+  const value = '73109254861375550123';
+  const scrubber = compile([{ name: 'DIGITS', value, placeholder: 'fnox_proxy_digits' }]);
+  let scanned = 0;
+  const counted = {
+    ...scrubber,
+    bytes: scrubber.bytes,
+    text(input) {
+      scanned += input.length;
+      return scrubber.text(input);
+    },
+  };
+  for (const depth of [50, 2000, 20000]) {
+    const pad = ' '.repeat(Math.floor(2_000_000 / depth));
+    const body = `${`[${pad}`.repeat(depth)}${value}${`${pad}]`.repeat(depth)}`;
+    scanned = 0;
+    const out = scrubText(counted, body);
+    assert.ok(scanned < 2.5 * body.length, `${depth} deep: ${scanned} of ${body.length}`);
+    assert.equal(out.text, body.replace(value, '"fnox_proxy_digits"'));
+  }
+});
+
+test('values in adjacent and sibling JSON numbers are each quoted, and the body stays JSON', async (t) => {
+  const { page, model } = await ready(t);
+  const values = ['10000000', '10007919', '10015838', '10023757'];
+  const sealed = await page.evaluate(
+    (list) =>
+      Promise.all(list.map((value, i) => window.harness.call('put', { name: `N${i}`, value }))),
+    values
+  );
+  const ph = sealed.map((record) => record.placeholder);
+  const across = await page.evaluate(() =>
+    window.harness.call('put', { name: 'ACROSS', value: 'xab12","cd34e' })
+  );
+  for (const [body, want] of [
+    [`[${values[0]},${values[1]}]`, `["${ph[0]}","${ph[1]}"]`],
+    [`{"a":${values[0]},"b":${values[1]}}`, `{"a":"${ph[0]}","b":"${ph[1]}"}`],
+    [`[${values[2]},${values[2]}]`, `["${ph[2]}","${ph[2]}"]`],
+    [
+      `[${values[3]},["xab12","cd34e"]]`,
+      `["${ph[3]}",${JSON.stringify(`["${across.placeholder}"]`)}]`,
+    ],
+    [
+      `[${Array.from({ length: 3000 }, (_, i) => values[i % 4]).join(',')}]`,
+      JSON.stringify(Array.from({ length: 3000 }, (_, i) => ph[i % 4])),
+    ],
+  ]) {
+    const got = await page.evaluate(
+      async (request) =>
+        (await window.harness.ask('model', { provider: 'anthropic', request })).request?.body,
+      req('https://api.anthropic.com/v1/messages', [['x-api-key', model.placeholder]], body)
+    );
+    assert.equal(got, want);
+  }
+});
+
+test('a JSON body nested 30,000 deep stays valid JSON when a value crosses one of its escapes', async (t) => {
+  const { page, model } = await ready(t);
+  const value = `"${SECRET}-quoted`;
+  const quoted = await page.evaluate(
+    (v) => window.harness.call('put', { name: 'QUOTED', value: v }),
+    value
+  );
+  const inner = JSON.stringify({ a: `echo "${SECRET}-quo x` });
+  const body = `${'['.repeat(30000)}${inner}${']'.repeat(30000)}`;
+  const scrubber = compile([{ name: 'QUOTED', value, placeholder: quoted.placeholder }]);
+  assert.throws(() => JSON.parse(scrubber.text(body).text));
+  const got = await page.evaluate(
+    async (request) =>
+      (await window.harness.ask('model', { provider: 'anthropic', request })).request?.body,
+    req('https://api.anthropic.com/v1/messages', [['x-api-key', model.placeholder]], body)
+  );
+  let parsed = JSON.parse(got);
+  for (let i = 0; i < 30000; i++) parsed = parsed[0];
+  assert.equal(parsed.a, 'echo [redacted:QUOTED] x');
+  assert.ok(!got.includes(SECRET));
 });
 
 test('mcp fills a kernel bridge token on its loopback, and never sends one elsewhere', async (t) => {
