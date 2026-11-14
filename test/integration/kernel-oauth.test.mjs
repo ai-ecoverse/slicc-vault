@@ -1,8 +1,9 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
+import { browser } from './browser.mjs';
 import { setup } from './setup.mjs';
 
-const { embedder } = await setup();
+const { served, chrome, embedder } = await setup();
 const ROOT = { pid: 1, ppid: 0, uid: 0, gid: 0, tag: null, users: 'enforce' };
 const CONE = { ...ROOT, uid: 1000, groups: [27] };
 const ID = { name: 'KERNEL_TOKEN', provider: 'example', account: 'default' };
@@ -441,6 +442,121 @@ test('import over a managed record is refused and leaves the grant', async (t) =
   assert.deepEqual(done.imported, []);
   assert.equal(done.reasons[ID.name], 'the record belongs to an OAuth sign-in');
   assert.equal((await call(page, 'oauthStatus', {}, CONE)).state, 'ready');
+  const grant = (await page.evaluate(() => window.harness.call('list'))).list.secrets.find(
+    (record) => record.kind === 'grant'
+  );
+  assert.equal(grant.state, 'inert');
+});
+
+async function gated(t) {
+  const { page } = await connected(t);
+  const cdp = await browser(chrome);
+  t.after(() => cdp.close());
+  const core = await cdp.target(new RegExp(`^${RegExp.escape(served.vault)}/$`));
+  await page.evaluate(() => window.harness.twin());
+  await core.evaluate(() => {
+    const gate = { armed: true, held: [] };
+    window.gate = gate;
+    const getAll = IDBIndex.prototype.getAll;
+    IDBIndex.prototype.getAll = function (...args) {
+      const pending = getAll.apply(this, args);
+      if (!gate.armed || this.objectStore.name !== 'records') return pending;
+      let handler = null;
+      Object.defineProperty(pending, 'onsuccess', {
+        configurable: true,
+        get: () => handler,
+        set: (fn) => {
+          handler = fn;
+        },
+      });
+      pending.addEventListener('success', (event) => {
+        gate.held.push(() => handler?.call(pending, event));
+      });
+      return pending;
+    };
+    return true;
+  });
+  return { page, core };
+}
+
+async function interleave(core, page, k, commit) {
+  const deadline = Date.now() + 30000;
+  for (let n = 0; Date.now() < deadline; ) {
+    const held = await core.evaluate(() => window.gate.held.length);
+    const done = await page.evaluate(() => window.settled !== undefined);
+    if (held > 0 && ++n < k) {
+      await core.evaluate(() => window.gate.held.shift()());
+      continue;
+    }
+    if (held > 0 || done) {
+      await commit();
+      await core.evaluate(() => {
+        window.gate.armed = false;
+        while (window.gate.held.length) window.gate.held.shift()();
+        return true;
+      });
+      return !done;
+    }
+    await new Promise((resolve) => setTimeout(resolve, 20));
+  }
+  throw new Error('the interleaving did not complete');
+}
+
+for (const k of [1, 2]) {
+  test(`a page refresh never sends a grant that became managed after its read ${k}`, async (t) => {
+    const { page, core } = await gated(t);
+    await egress(page);
+    await page.evaluate((name) => {
+      window.harness.call('refresh', { name }).then((reply) => {
+        window.settled = reply;
+      });
+    }, ID.name);
+    await interleave(core, page, k, async () => {
+      assert.equal(
+        (
+          await call(
+            page,
+            'oauthGrant',
+            { ...GRANT, expiresAt: Date.now() + 3600000 },
+            ROOT,
+            1,
+            true
+          )
+        ).state,
+        'ready'
+      );
+    });
+    const reply = await page.until(() => window.settled);
+    assert.ok(reply.error, JSON.stringify(reply));
+    assert.equal((await page.evaluate(() => window.harness.egress.requests)).length, 0);
+    const status = await call(page, 'oauthStatus');
+    assert.equal(status.state, 'ready');
+    assert.equal(status.refreshable, true);
+  });
+}
+
+test('an import refuses a record that became managed after it read the records', async (t) => {
+  const { page, core } = await gated(t);
+  const bytes = Buffer.from(`${ID.name}=fake-imported-value-0001`).toString('base64');
+  await page.evaluate(
+    (payload) => {
+      const raw = Uint8Array.from(atob(payload.bytes), (c) => c.charCodeAt(0));
+      window.harness
+        .call('import', { kind: 'six', bytes: raw, pick: [payload.name] })
+        .then((reply) => {
+          window.settled = reply;
+        });
+    },
+    { bytes, name: ID.name }
+  );
+  const raced = await interleave(core, page, 1, async () => {
+    assert.equal((await call(page, 'oauthGrant', GRANT, ROOT, 1, true)).state, 'ready');
+  });
+  const done = await page.until(() => window.settled);
+  assert.equal(raced, true);
+  assert.deepEqual(done.imported, []);
+  assert.equal(done.reasons[ID.name], 'the record belongs to an OAuth sign-in');
+  assert.equal((await call(page, 'oauthStatus')).state, 'ready');
   const grant = (await page.evaluate(() => window.harness.call('list'))).list.secrets.find(
     (record) => record.kind === 'grant'
   );
