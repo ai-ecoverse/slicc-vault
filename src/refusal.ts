@@ -138,6 +138,7 @@ export function coveredByBuiltIn(provider: string, url: string): boolean {
 export const NO_ENDPOINTS: Registered = { model: [], mcp: [] };
 export const BUILT_IN_ENDPOINTS: readonly (Endpoint & { providers: string[] })[] = BUILT_IN;
 const KERNEL = /^(\d{1,5})\.kernel\.localhost$/;
+export const AMBIGUOUS = /(^|\/)\.\.?(\/|$)|\\|%2e|%2f|%5c|%25/i;
 
 function hostPattern(host: string): RegExp {
   const escaped = host.replace(/[.+?^${}()|[\]\\]/g, '\\$&').replace(/\*/g, '[^.]+');
@@ -233,26 +234,25 @@ export function contains(pattern: Endpoint, domain: string, paths: string[]): bo
   });
 }
 
-function pageModels(page: PageEndpoints): (Endpoint | null)[] {
-  return [
-    ...page.model.map((url) => endpoint(url, false)),
-    ...page.custom.map((entry) => endpoint(entry.url, false, true)),
-  ];
-}
-
 export function patterns(registered: Registered): Endpoint[] {
   const page = registered.page ?? NO_PAGE;
+  const model = [...page.model, ...page.custom.map((entry) => entry.url)].map((url) =>
+    endpoint(url, false)
+  );
   const mcp = page.mcp.map((server) => endpoint(server.url, true));
-  return [
-    ...BUILT_IN_ENDPOINTS,
-    ...[...pageModels(page), ...mcp].filter((e): e is Endpoint => e !== null),
-  ];
+  return [...BUILT_IN_ENDPOINTS, ...[...model, ...mcp].filter((e): e is Endpoint => e !== null)];
 }
 
 export function modelRefused(registered: Registered, url: URL): boolean {
-  const own = pageModels(registered.page ?? NO_PAGE).filter((e): e is Endpoint => e !== null);
+  const page = registered.page ?? NO_PAGE;
+  const own = page.model
+    .map((base) => endpoint(base, false))
+    .filter((e): e is Endpoint => e !== null);
   const host = hostOf(url);
-  return [...BUILT_IN_ENDPOINTS, ...own].some((pattern) => covers(pattern, host, url.pathname));
+  return (
+    [...BUILT_IN_ENDPOINTS, ...own].some((pattern) => covers(pattern, host, url.pathname)) ||
+    page.custom.some((entry) => under(entry.url, url))
+  );
 }
 
 export function hostOf(url: URL): string {
@@ -293,7 +293,7 @@ export function modelFor(
   const owned = (registered.page ?? NO_PAGE).custom.filter(
     (entry) => entry.provider === provider && entry.name === name
   );
-  return built || owned.some((entry) => under(entry.url, url));
+  return built || (!AMBIGUOUS.test(url.pathname) && owned.some((entry) => under(entry.url, url)));
 }
 
 export function pageNearby(registered: Registered, url: URL): boolean {

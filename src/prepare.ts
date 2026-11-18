@@ -102,8 +102,9 @@ export interface Target {
   settle?: (filled: VaultRecord[]) => Promise<void>;
 }
 
-function still(target: Target, filled: VaultRecord[]): void {
-  if (filled.some((record) => !target.owns(record) || !target.reaches(record))) {
+function still(target: Target, filled: VaultRecord[], url: URL): void {
+  const lost = url.protocol !== 'https:' && !target.loopback;
+  if (lost || filled.some((record) => !target.owns(record) || !target.reaches(record))) {
     throw new Refused(
       'EAGAIN',
       "the vault's endpoints changed meanwhile; prepare the request again"
@@ -215,7 +216,7 @@ export class Preparer {
       headers.push([name, await this.fill(value, held, target, false, seen)]);
     }
     const again = await make();
-    still(again, seen.filled);
+    still(again, seen.filled, parsed);
     await again.settle?.(seen.filled);
     const scrubber = await this.scrubber();
     if (scrubber.version !== first.version + seen.refreshes) {
@@ -262,7 +263,7 @@ export class Preparer {
       );
     }
     const last = await make(registered);
-    still(last, seen.filled);
+    still(last, seen.filled, parsed);
     const now = new Map(live.map((r) => [r.placeholder, r]));
     const moved = seen.filled.some((r) => {
       const found = now.get(r.placeholder);

@@ -341,6 +341,11 @@ test('NEGATIVE a page base URL must be a plain https URL of a live model record,
     [{ name: 'OPENAI_API_KEY', url: 'http://[fe80::1]/v1' }],
     [{ name: 'OPENAI_API_KEY', url: 'http://ollama.example.com/v1' }],
     [{ name: 'OPENAI_API_KEY', url: 'https://127.0.0.1:8443/v1' }],
+    [{ name: 'OPENAI_API_KEY', url: 'http://[::ffff:127.0.0.1]/v1' }],
+    [{ name: 'OPENAI_API_KEY', url: 'http://localhost.evil.com/v1' }],
+    [{ name: 'OPENAI_API_KEY', url: 'http://evil.local.example/v1' }],
+    [{ name: 'OPENAI_API_KEY', url: 'http://x.ts.net.evil.com/v1' }],
+    [{ name: 'OPENAI_API_KEY', url: 'http://09222.kernel.localhost/v1' }],
     [{ name: 'NO_SUCH_KEY', url: 'https://gateway.example.com/v1' }],
     [{ name: 'GH_TOKEN', url: 'https://gateway.example.com/v1' }],
     [{ name: 'OPENAI_API_KEY', url: 'https://docs.example.com/mcp/v1' }],
@@ -419,6 +424,8 @@ test('a page { name, url } on a local http server gets its key, on the same sche
     'http://127.0.0.2:11434/v1/chat/completions',
     'http://11436.kernel.localhost/v1/chat/completions',
     'http://192.168.1.20/v1/chat/completions',
+    'http://127.0.0.1:11434/v1/..%2fadmin',
+    'http://127.0.0.1:11434/v1/%2e%2e/admin',
   ]) {
     const sent = await send(url);
     assert.equal(sent.error?.code, 'EACCES', url);
