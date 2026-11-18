@@ -1,7 +1,7 @@
 import type { ErrorCause, ExitName, Rule, Stamp } from './contract.ts';
 import { decrypt } from './keys.ts';
 import { PAUSED, type Policy } from './policy.ts';
-import { aad, removed, rulesFor, type VaultRecord } from './records.ts';
+import { aad, configEntry, entryNeeded, removed, rulesFor, type VaultRecord } from './records.ts';
 import {
   holds,
   hostOf,
@@ -208,6 +208,8 @@ class Injector {
     const found = rules.find((rule) => matches(rule, this.method, this.host, this.path, header));
     if (!found) {
       const domains = [...new Set(rules.map((rule) => rule.domain))];
+      if (!rules.length && configEntry(record, policy))
+        throw new Refusal('config-entry', entryNeeded(record));
       if (!rules.length)
         throw new Refusal(
           'no-rule',

@@ -1,4 +1,5 @@
 import type {
+  ConfigEntry,
   ExecMode,
   ExitName,
   ExitPolicyView,
@@ -21,6 +22,7 @@ export interface Policy {
   paused(): boolean;
   refused(): RefusedRule[];
   placeholder(name: string): string | null;
+  dropped(name: string): ConfigEntry | null;
   rules(name: string): Rule[];
   sessionRules(name: string): { index: number; rule: Rule }[];
   everySessionRule(): { secret: string; index: number; rule: Rule }[];
@@ -48,6 +50,7 @@ export const LIMITS: Limits = {
 export interface ConfigPolicy {
   secrets: Record<string, string>;
   rules: { secret: string; rule: Rule; index?: number }[];
+  dropped?: Record<string, ConfigEntry>;
 }
 
 export interface ExtraPolicy {
@@ -218,14 +221,18 @@ export function parseConfig(text: string, warnings: string[]): ConfigPolicy {
   const root = parseToml(text);
   const fallback = typeof root.default_provider === 'string' ? root.default_provider : null;
   const secrets: Record<string, string> = Object.create(null);
+  const dropped: Record<string, ConfigEntry> = Object.create(null);
   const listed = isTable(root.secrets) ? root.secrets : {};
   for (const [name, entry] of Object.entries(listed)) {
     if (!isTable(entry)) continue;
     const provider = typeof entry.provider === 'string' ? entry.provider : fallback;
     if (provider !== 'seven') continue;
-    if (typeof entry.value === 'string' && PLACEHOLDER.test(entry.value))
+    if (typeof entry.value === 'string' && PLACEHOLDER.test(entry.value)) {
       secrets[name] = entry.value;
-    else warnings.push(`${name}: its value isn't a vault placeholder`);
+      continue;
+    }
+    warnings.push(`${name}: its value isn't a vault placeholder`);
+    dropped[name] = entry.value === undefined ? 'no-value' : 'not-a-placeholder';
   }
   const proxy = isTable(root.proxy) ? root.proxy.rules : undefined;
   const entries = Array.isArray(proxy) ? proxy : [];
@@ -235,11 +242,12 @@ export function parseConfig(text: string, warnings: string[]): ConfigPolicy {
     if (!parsed) return;
     if (!(parsed.secret in secrets)) {
       warnings.push(`proxy rule ${index + 1}: ${parsed.secret} isn't a seven secret in [secrets]`);
+      if (!Object.hasOwn(listed, parsed.secret)) dropped[parsed.secret] = 'no-entry';
       return;
     }
     rules.push({ ...parsed, index: index + 1 });
   });
-  return { secrets, rules };
+  return { secrets, rules, dropped };
 }
 
 function execEntry(name: string, value: TomlValue, warnings: string[]) {
@@ -391,6 +399,10 @@ export function build(accepted: Accepted, refuse: Refuse = () => false): Policy 
     paused: () => (accepted.paused ?? []).length > 0,
     refused: () => refused,
     placeholder: (name) => (Object.hasOwn(config.secrets, name) ? config.secrets[name] : null),
+    dropped: (name) => {
+      const dropped = config.dropped ?? {};
+      return Object.hasOwn(dropped, name) ? dropped[name] : null;
+    },
     rules: (name) => kept.filter((entry) => entry.secret === name).map((entry) => entry.rule),
     everySessionRule: () =>
       kept

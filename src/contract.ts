@@ -29,6 +29,7 @@ export type ErrorCode =
 export type ExitName = 'page' | 'proxy' | 'tailscale' | `device:${DeviceId}`;
 export type ExecMode = false | 'any' | 'argv' | 'shell';
 export type Role = 'page' | 'agent';
+export type ConfigEntry = 'no-value' | 'not-a-placeholder' | 'wrong-placeholder' | 'no-entry';
 
 export interface Stamp {
   pid: number;
@@ -57,6 +58,7 @@ export type ErrorCause =
   | 'oauth-reauth-required'
   | 'oauth-refresh-failed'
   | 'no-rule'
+  | 'config-entry'
   | 'rule-domain'
   | 'rule-request'
   | 'rule-exit'

@@ -11,6 +11,7 @@ import {
   type Clean,
   checkName,
   checkValue,
+  configEntry,
   find,
   MAX_PROVIDER,
   records,
@@ -161,6 +162,11 @@ const placeholderOp: Handler = async (ctx, req, stamp) => {
   };
 };
 
+function entryShown(record: VaultRecord, policy: Policy): Fields {
+  const reason = removed(record) ? null : configEntry(record, policy);
+  return reason ? { configEntry: reason } : {};
+}
+
 const listOp: Handler = async (ctx) => {
   const now = ctx.now();
   const policy = ctx.policy();
@@ -173,6 +179,7 @@ const listOp: Handler = async (ctx) => {
       state: state(entry, policy, now),
       exec: policy.exec(entry.name),
       rules: rulesFor(entry, policy),
+      ...entryShown(entry, policy),
       ...(entry.expiresAt === undefined ? {} : { expiresAt: entry.expiresAt }),
       ...(entry.kernelOAuth ? { oauthManaged: true } : {}),
     }));
@@ -328,7 +335,12 @@ const statusOp: Handler = async (ctx, req, stamp) => {
   const found = held.find((r) => r.kind === 'secret' && r.placeholder === entry.placeholder);
   if (!found) return mcpStatus(ctx, entry, stamp, held, reply);
   const recordState = state(found, ctx.policy(), now);
-  return { ...reply, placeholder: found.placeholder, record: recordState };
+  return {
+    ...reply,
+    placeholder: found.placeholder,
+    record: recordState,
+    ...entryShown(found, ctx.policy()),
+  };
 };
 
 const cancelOp: Handler = async (ctx, req, stamp) => {
