@@ -14,6 +14,8 @@ const EXTRA = [
   ['https://{AZURE_OPENAI_RESOURCE_NAME}.openai.azure.com', 'azure'],
   ['https://{AZURE_OPENAI_RESOURCE_NAME}.services.ai.azure.com', 'azure'],
   ['https://adobe-llm-proxy.paolo-moz.workers.dev', 'adobe'],
+  ['https://api.business.githubcopilot.com', 'github-copilot'],
+  ['https://api.enterprise.githubcopilot.com', 'github-copilot'],
   ['https://cli-chat-proxy.grok.com/v1/billing', 'xai', { exact: true, methods: ['GET'] }],
 ];
 

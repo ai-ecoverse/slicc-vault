@@ -276,6 +276,15 @@ function plain(url: URL, port: string): boolean {
   return !url.username && !url.password && url.port === port;
 }
 
+const FIXED_HOST = /^https:\/\/([^/?#]+)/i;
+
+export function publicHost(raw: string): string {
+  const match = FIXED_HOST.exec(raw);
+  const host = match?.[1].toLowerCase();
+  const fixed = BUILT_IN_ENDPOINTS.some((e) => e.host === host && !e.host.includes('*'));
+  return fixed ? raw.slice((match as RegExpExecArray)[0].length) : raw;
+}
+
 export function modelFor(
   registered: Registered,
   provider: string,

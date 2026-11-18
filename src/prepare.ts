@@ -29,6 +29,7 @@ import {
   pageNearby,
   pageSealed,
   pageServer,
+  publicHost,
   type Registered,
   rawPath,
   serverFor,
@@ -227,7 +228,7 @@ export class Preparer {
       );
     }
     const all = scrubber.version === first.version ? [scrubber] : [first, scrubber];
-    const head = [request.method, request.url, ...request.headers.flat()];
+    const head = [request.method, publicHost(request.url), ...request.headers.flat()];
     if (head.some((text) => all.some((s) => s.text(text).hits.length > 0))) {
       throw new Refused('EACCES', 'the request head carries a value; send its placeholder instead');
     }

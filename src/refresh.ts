@@ -1,5 +1,6 @@
 import type { Scrubber } from '@ai-ecoverse/slicc-scrub';
 import { text } from './bytes.ts';
+import { exchanged, exchangeRequest, exchanges } from './copilot.ts';
 import { all, request, transact } from './db.ts';
 import { Refused } from './errors.ts';
 import { decrypt, type Keys } from './keys.ts';
@@ -423,10 +424,14 @@ export class Refresher {
     if (!this.send) throw new Refused('ENOTCONN', 'no page is connected to send the refresh');
     const dek = this.vault.keyring.use();
     const token = await decrypt(dek.key, grant.sealed, aad(grant.ns, grant.kind, grant.name));
-    const prepared = await tokenRequest(grant.oauth as OAuth, token);
+    const copilot = exchanges(record, grant);
+    const prepared = copilot
+      ? exchangeRequest(token)
+      : await tokenRequest(grant.oauth as OAuth, token);
     guard?.check();
-    const response = await this.send(ns, prepared);
+    const sent = await this.send(ns, prepared);
     guard?.check();
+    const response = copilot ? exchanged(sent, Math.floor(this.vault.now() / 1000)) : sent;
     const bearer = grant.oauth?.bearer === 'default' || !!record.kernelOAuth;
     const got = await tokens(
       response,

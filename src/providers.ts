@@ -1,5 +1,8 @@
 import type { OAuthConfig } from './records.ts';
 
+export const COPILOT = 'github-copilot';
+export const COPILOT_TOKEN_URL = 'https://api.github.com/copilot_internal/v2/token';
+
 export const SIGN_INS: Readonly<Record<string, OAuthConfig>> = {
   xai: {
     tokenUrl: 'https://auth.x.ai/oauth2/token',
@@ -14,6 +17,11 @@ export const SIGN_INS: Readonly<Record<string, OAuthConfig>> = {
   'openai-codex': {
     tokenUrl: 'https://auth.openai.com/oauth/token',
     clientId: 'app_EMoamEEZ73f0CkXaXp7hrann',
+    bearer: 'default',
+  },
+  [COPILOT]: {
+    tokenUrl: COPILOT_TOKEN_URL,
+    clientId: 'Iv1.b507a08c87ecfe98',
     bearer: 'default',
   },
 };

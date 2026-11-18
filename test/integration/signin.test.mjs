@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import { test } from 'node:test';
+import { COPILOT_HEADERS } from '../../src/copilot.ts';
 import { SIGN_INS } from '../../src/providers.ts';
 import { setup } from './setup.mjs';
 
@@ -563,6 +564,145 @@ test('a refused refresh shows the key expired, a network failure keeps it refres
   );
 });
 
+const COPILOT_TOKEN =
+  'tid=fake;exp=1;proxy-ep=proxy.business.githubcopilot.com;sig=fake-copilot-0901';
+const GITHUB_TOKEN = 'gho_fake-github-0902';
+
+async function copilot(t) {
+  const given = await ready(t);
+  const granted = await given.ask('grant', {
+    provider: 'github-copilot',
+    name: 'COPILOT_GITHUB_TOKEN',
+    response: response({ access_token: COPILOT_TOKEN, refresh_token: GITHUB_TOKEN }),
+    settings: { COPILOT_ENDPOINT: 'business' },
+  });
+  return { ...given, granted, key: granted.records[0].placeholder };
+}
+
+test('a GitHub Copilot sign-in fills only on Copilot hosts and refreshes by exchanging the GitHub token', async (t) => {
+  const { page, ask, answer, granted, key } = await copilot(t);
+  assert.deepEqual(
+    granted.records.map((r) => [r.kind, r.name]),
+    [
+      ['model', 'COPILOT_GITHUB_TOKEN'],
+      ['grant', 'COPILOT_GITHUB_TOKEN_GRANT'],
+    ]
+  );
+  for (const host of ['individual', 'business', 'enterprise']) {
+    const own = await ask('model', {
+      provider: 'github-copilot',
+      request: chat(`https://api.${host}.githubcopilot.com/chat/completions`, key),
+    });
+    assert.deepEqual(
+      own.request?.headers,
+      [['authorization', `Bearer ${COPILOT_TOKEN}`]],
+      JSON.stringify(own)
+    );
+  }
+  for (const url of [
+    'https://api.business.githubcopilot.com/proxy.business.githubcopilot.com',
+    'https://api.business.githubcopilot.com/x?sig=fake-copilot-0901',
+  ]) {
+    const carried = await ask('model', { provider: 'github-copilot', request: chat(url, key) });
+    assert.match(carried.error.message, /the request head carries a value/, url);
+  }
+  for (const url of [
+    'https://api.github.com/copilot_internal/v2/token',
+    'https://api.evil.githubcopilot.com/chat/completions',
+    'https://api.evil.githubcopilot.com.business.githubcopilot.com/chat',
+  ]) {
+    const elsewhere = await ask('model', { provider: 'github-copilot', request: chat(url, key) });
+    assert.match(elsewhere.error.message, /sent only to github-copilot's own endpoints/, url);
+  }
+  const at = Math.floor(Date.now() / 1000) + 1800;
+  await answer({ token: 'tid=fake;exp=2;sig=fake-copilot-0903', expires_at: at });
+  const refreshed = await ask('refresh', {
+    provider: 'github-copilot',
+    name: 'COPILOT_GITHUB_TOKEN',
+  });
+  assert.equal(refreshed.state, 'refreshed');
+  assert.ok(Math.abs(refreshed.expiresAt - (at - 300) * 1000) < 5000);
+  const sent = await page.evaluate(() => window.harness.egress.requests.at(-1));
+  assert.equal(sent.method, 'GET');
+  assert.equal(sent.url, 'https://api.github.com/copilot_internal/v2/token');
+  assert.equal(sent.body, '');
+  assert.deepEqual(sent.headers, [
+    ['authorization', `Bearer ${GITHUB_TOKEN}`],
+    ['accept', 'application/json'],
+    ['editor-version', 'vscode/1.107.0'],
+    ['editor-plugin-version', 'copilot-chat/0.35.0'],
+    ['copilot-integration-id', 'vscode-chat'],
+  ]);
+  const again = await ask('model', {
+    provider: 'github-copilot',
+    request: chat('https://api.business.githubcopilot.com/chat/completions', key),
+  });
+  assert.deepEqual(again.request.headers, [
+    ['authorization', 'Bearer tid=fake;exp=2;sig=fake-copilot-0903'],
+  ]);
+  const records = (await ask('records', {})).records;
+  const record = records.find((r) => r.name === 'COPILOT_GITHUB_TOKEN');
+  assert.deepEqual(record.settings, { COPILOT_ENDPOINT: 'business' });
+  assert.ok(!JSON.stringify(records).includes('fake-'));
+});
+
+test('NEGATIVE a Copilot exchange GitHub refuses with 401 ends the sign-in, other refusals keep it', async (t) => {
+  const { page, ask, key } = await copilot(t);
+  const reply = (status, body) =>
+    page.evaluate(
+      (a) => {
+        window.harness.egress.answer = a;
+      },
+      { status, headers: [], body: JSON.stringify(body) }
+    );
+  const refresh = () =>
+    ask('refresh', { provider: 'github-copilot', name: 'COPILOT_GITHUB_TOKEN' });
+  const state = async () =>
+    (await ask('records', {})).records.find((r) => r.name === 'COPILOT_GITHUB_TOKEN').state;
+  await reply(403, { message: 'Resource not accessible by integration' });
+  assert.equal((await refresh()).error.message, 'refresh failed: status 403');
+  await reply(200, { token: 'tid=fake;sig=fake-copilot-0904' });
+  assert.equal((await refresh()).error.message, 'refresh failed: invalid_copilot_token');
+  await reply(200, { access_token: 'fake-copilot-0905', expires_in: 60 });
+  assert.equal((await refresh()).error.message, 'refresh failed: invalid_copilot_token');
+  assert.equal(await state(), 'ready');
+  await reply(401, { message: 'Bad credentials' });
+  assert.equal((await refresh()).error.message, 'refresh failed: invalid_grant');
+  assert.equal(await state(), 'expired');
+  const used = await ask('model', {
+    provider: 'github-copilot',
+    request: chat('https://api.individual.githubcopilot.com/chat/completions', key),
+  });
+  assert.match(used.error.message, /COPILOT_GITHUB_TOKEN expired; sign in again/);
+});
+
+test('NEGATIVE a templated host is still checked for values', async (t) => {
+  const { page, ask } = await ready(t);
+  await page.evaluate(() =>
+    window.harness.call('put', { name: 'LABEL', value: 'fake-secret-label-0908' })
+  );
+  const carried = await ask('model', {
+    provider: 'azure',
+    request: {
+      method: 'POST',
+      url: 'https://fake-secret-label-0908.openai.azure.com/openai/v1/chat',
+      headers: [],
+      body: '{}',
+    },
+  });
+  assert.match(carried.error.message, /the request head carries a value/);
+});
+
+test('NEGATIVE only a Copilot sign-in exchanges: another provider with the same grant refreshes as OAuth', async (t) => {
+  const { page, ask, answer } = await ready(t);
+  await ask('grant', { provider: 'xai', name: 'XAI_OAUTH_TOKEN', response: response() });
+  await answer({ access_token: 'fake-xai-access-0906', expires_in: 3600 });
+  await ask('refresh', { provider: 'xai', name: 'XAI_OAUTH_TOKEN' });
+  const sent = await page.evaluate(() => window.harness.egress.requests.at(-1));
+  assert.equal(sent.method, 'POST');
+  assert.equal(sent.url, 'https://auth.x.ai/oauth2/token');
+});
+
 test("the vault's sign-in table matches the installed pi-ai", async () => {
   const dir = new URL('../../node_modules/@earendil-works/pi-ai/dist/auth/oauth/', import.meta.url);
   const read = (file) => readFile(new URL(file, dir), 'utf8');
@@ -577,6 +717,16 @@ test("the vault's sign-in table matches the installed pi-ai", async () => {
   assert.ok(codex.includes(`"${SIGN_INS['openai-codex'].clientId}"`));
   assert.ok(codex.includes('"https://auth.openai.com"') && codex.includes('/oauth/token`'));
   assert.equal(SIGN_INS['openai-codex'].tokenUrl, 'https://auth.openai.com/oauth/token');
+  const copilot = await read('github-copilot.js');
+  assert.ok(copilot.includes(`"${btoa(SIGN_INS['github-copilot'].clientId)}"`));
+  assert.ok(copilot.includes('/copilot_internal/v2/token`'));
+  assert.equal(
+    SIGN_INS['github-copilot'].tokenUrl,
+    'https://api.github.com/copilot_internal/v2/token'
+  );
+  for (const [name, value] of COPILOT_HEADERS) {
+    assert.match(copilot, new RegExp(`"${name}": "${value.replaceAll('.', '\\.')}"`, 'i'));
+  }
 });
 
 const BILLING = 'https://cli-chat-proxy.grok.com/v1/billing';

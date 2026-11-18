@@ -759,7 +759,7 @@ export type AgentOp =
     }
   | {
       op: 'grant';
-      provider: 'xai' | 'kimi-coding' | 'openai-codex';
+      provider: 'xai' | 'kimi-coding' | 'openai-codex' | 'github-copilot';
       name: string;
       response: string | Uint8Array;
       settings?: Record<string, string>;
