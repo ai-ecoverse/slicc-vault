@@ -64,9 +64,14 @@ test('a vault frame is never shown from the back/forward cache with its embedder
     history.back();
   });
   const deadline = Date.now() + 20000;
-  while (seen[0] !== 'Navigation' && loads() === before && Date.now() < deadline) {
-    await new Promise((resolve) => setTimeout(resolve, 25));
-  }
+  const until = async (done) => {
+    while (!done() && Date.now() < deadline) {
+      await new Promise((resolve) => setTimeout(resolve, 25));
+    }
+  };
+  await until(() => seen.length > 0);
+  const restored = seen[0] === 'BackForwardCacheRestore';
+  if (restored) await until(() => loads() > before);
   assert.equal(seen.length, 1);
-  assert.equal(loads(), seen[0] === 'BackForwardCacheRestore' ? before + 1 : before);
+  assert.equal(loads(), restored ? before + 1 : before);
 });
