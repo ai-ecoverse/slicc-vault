@@ -30,6 +30,7 @@ import {
   pageSealed,
   pageServer,
   type Registered,
+  rawPath,
   serverFor,
   servers,
   tofu,
@@ -319,7 +320,8 @@ export class Preparer {
             new URL(request.url),
             record.name,
             record.settings,
-            request.method
+            request.method,
+            rawPath(request.url)
           ),
         loopback: pageNearby(registered, new URL(request.url)),
       };

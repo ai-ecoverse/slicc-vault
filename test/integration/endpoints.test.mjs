@@ -426,6 +426,9 @@ test('a page { name, url } on a local http server gets its key, on the same sche
     'http://192.168.1.20/v1/chat/completions',
     'http://127.0.0.1:11434/v1/..%2fadmin',
     'http://127.0.0.1:11434/v1/%2e%2e/admin',
+    'http://127.0.0.1:11434/v1/./chat',
+    'http://127.0.0.1:11434/v1/x/../chat',
+    'http://127.0.0.1:11434/v1\\chat',
   ]) {
     const sent = await send(url);
     assert.equal(sent.error?.code, 'EACCES', url);
