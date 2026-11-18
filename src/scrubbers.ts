@@ -16,6 +16,7 @@ export class Scrubbers {
   readonly epochs = new Map<string, number>();
   readonly held = new WeakMap<Scrubber, Secret[]>();
   readonly twins = new WeakMap<Scrubber, Scrubber>();
+  readonly limit = { values: 256, bytes: 1024 * 1024 };
 
   constructor(vault: Vault) {
     this.vault = vault;
@@ -69,6 +70,11 @@ export class Scrubbers {
     const known = new Set(has.map(key));
     const kept = had.filter((secret) => !known.has(key(secret)));
     if (!kept.length) return next;
+    const bytes = kept.reduce(
+      (sum, secret) => sum + new TextEncoder().encode(secret.value).length,
+      0
+    );
+    if (kept.length > this.limit.values || bytes > this.limit.bytes) return null;
     const values = [...has, ...kept];
     const wide = compile(values, { version: next.version });
     this.held.set(wide, values);
@@ -78,7 +84,9 @@ export class Scrubbers {
   twin(scrubber: Scrubber): Scrubber {
     let twin = this.twins.get(scrubber);
     if (!twin) {
-      twin = compile(this.held.get(scrubber) ?? [], { sameLength: true });
+      const values = this.held.get(scrubber);
+      if (!values) throw new Error('no values for this scrub');
+      twin = compile(values, { sameLength: true });
       this.twins.set(scrubber, twin);
     }
     return twin;

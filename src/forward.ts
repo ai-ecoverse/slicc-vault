@@ -209,7 +209,14 @@ export function relay(
 ): void {
   let current = scrubber;
   let stream: Stream = current.stream();
-  let twin: Stream = watcher.twin(current).stream();
+  let twin: Stream;
+  try {
+    twin = watcher.twin(current).stream();
+  } catch {
+    port.postMessage({ op: 'error', message: CANCELLED });
+    port.close();
+    return;
+  }
   let held: Uint8Array = new Uint8Array(0);
   let timer: ReturnType<typeof setTimeout> | undefined;
   let turn = Promise.resolve();
@@ -227,11 +234,11 @@ export function relay(
     held = joined(held, chunk);
     return take(stream.push(chunk), twin.push(chunk));
   };
-  const swap = (next: Scrubber) => {
+  const swap = (next: Scrubber, pair: Scrubber) => {
     const tail = held;
     current = next;
     stream = next.stream();
-    twin = watcher.twin(next).stream();
+    twin = pair.stream();
     held = new Uint8Array(0);
     send(push(tail));
   };
@@ -250,11 +257,12 @@ export function relay(
       let next = current;
       for (let tries = 0; !done; tries++) {
         const candidate = next;
+        const pair = candidate === current ? null : watcher.twin(candidate);
         let stale = false;
         await watcher.at(
           candidate.version,
           () => {
-            if (candidate !== current) swap(candidate);
+            if (pair) swap(candidate, pair);
             work();
           },
           () => {
@@ -263,7 +271,7 @@ export function relay(
         );
         if (!stale) return;
         if (tries === TRIES) break;
-        const wide = await watcher.widen(current);
+        const wide = await watcher.widen(candidate);
         if (!wide) break;
         next = wide;
       }

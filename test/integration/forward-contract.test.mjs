@@ -500,17 +500,23 @@ test('a rotation in another vault document swaps the scrub', async (t) => {
 
 test('no byte of a held value gets out unscrubbed with the swap point anywhere across it', async (t) => {
   const { page, a } = await ready(t);
-  for (let at = 0; at <= SECRET.length; at++) {
-    const fresh = `fake-contract-sweep-${String(at).padStart(4, '0')}`;
-    const sent = await stream(page, secretCall(a), [
-      HEAD,
-      { text: `<${SECRET.slice(0, at)}` },
-      { call: 'put', fields: { name: 'SWEPT', value: fresh } },
-      { text: `${SECRET.slice(at)}>` },
-      { op: 'end' },
-    ]);
-    assert.equal(textOf(sent), `<${a}>`);
-    assert.equal(sent.parts.at(-1).op, 'end');
+  const encoded = btoa(SECRET);
+  for (const [value, shown] of [
+    [SECRET, a],
+    [encoded, '[redacted:TOKEN_A]'],
+  ]) {
+    for (let at = 0; at <= value.length; at++) {
+      const fresh = `fake-contract-sweep-${value === SECRET ? 'r' : 'b'}${String(at).padStart(4, '0')}`;
+      const sent = await stream(page, secretCall(a), [
+        HEAD,
+        { text: `<${value.slice(0, at)}` },
+        { call: 'put', fields: { name: 'SWEPT', value: fresh } },
+        { text: `${value.slice(at)}>` },
+        { op: 'end' },
+      ]);
+      assert.equal(textOf(sent), `<${shown}>`);
+      assert.equal(sent.parts.at(-1).op, 'end');
+    }
   }
 });
 
