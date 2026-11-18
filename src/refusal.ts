@@ -141,7 +141,7 @@ const KERNEL = /^(\d{1,5})\.kernel\.localhost$/;
 export const AMBIGUOUS = /(^|\/)\.\.?(\/|$)|\\|%2e|%2f|%5c|%25/i;
 
 export function rawPath(url: string): string {
-  return url.replace(/^[a-z][a-z0-9+.-]*:\/\/[^/?#]*/i, '').split(/[?#]/)[0];
+  return url.replace(/^[a-z][a-z0-9+.-]*:[/\\]{2}[^/\\?#]*/i, '').split(/[?#]/)[0];
 }
 
 function hostPattern(host: string): RegExp {
@@ -298,7 +298,12 @@ export function modelFor(
   const owned = (registered.page ?? NO_PAGE).custom.filter(
     (entry) => entry.provider === provider && entry.name === name
   );
-  return built || (!AMBIGUOUS.test(raw) && owned.some((entry) => under(entry.url, url)));
+  return (
+    built ||
+    (!/[\t\n\r]|%09|%0a|%0d/i.test(raw) &&
+      !AMBIGUOUS.test(raw) &&
+      owned.some((entry) => under(entry.url, url)))
+  );
 }
 
 export function pageNearby(registered: Registered, url: URL): boolean {
