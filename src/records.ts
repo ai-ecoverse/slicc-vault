@@ -2,6 +2,7 @@ import { hex, random } from './bytes.ts';
 import type {
   AgentRecord,
   BackupReminder,
+  ConfigEntry,
   KernelOAuthConfig,
   KernelOAuthIdentity,
   McpView,
@@ -229,6 +230,18 @@ export function removed(record: VaultRecord): boolean {
 export function rulesFor(record: VaultRecord, policy: Policy): Rule[] {
   if (record.kind !== 'secret' || policy.placeholder(record.name) !== record.placeholder) return [];
   return policy.rules(record.name);
+}
+
+export function configEntry(record: VaultRecord, policy: Policy): ConfigEntry | null {
+  if (record.kind !== 'secret') return null;
+  const dropped = policy.dropped(record.name);
+  if (dropped) return dropped;
+  const placeholder = policy.placeholder(record.name);
+  return placeholder !== null && placeholder !== record.placeholder ? 'wrong-placeholder' : null;
+}
+
+export function entryNeeded(record: VaultRecord): string {
+  return `${record.name}'s [secrets] entry in /etc/fnox/config.toml needs value = "${record.placeholder}"`;
 }
 
 export function state(record: VaultRecord, policy: Policy, now: number): RecordState {

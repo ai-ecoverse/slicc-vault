@@ -5,7 +5,16 @@ import { checkExit } from './forward.ts';
 import { AMBIGUOUS, matches } from './inject.ts';
 import { decrypt } from './keys.ts';
 import { type Policy, running } from './policy.ts';
-import { aad, audit, PLACEHOLDER, records, removed, type VaultRecord } from './records.ts';
+import {
+  aad,
+  audit,
+  configEntry,
+  entryNeeded,
+  PLACEHOLDER,
+  records,
+  removed,
+  type VaultRecord,
+} from './records.ts';
 import { type Registered, refusedUrl } from './refusal.ts';
 import { policyIn } from './rules.ts';
 import { clientProof, parseScram, SCRAM_CANDIDATES, type Scram, same } from './scram.ts';
@@ -231,6 +240,9 @@ export class Sessions {
     if (!record) fail('a placeholder of no record of this vault');
     const name = record.name;
     if (record.kind !== 'secret') fail(`${name} isn't a secret`);
+    if (configEntry(record, policy)) {
+      throw new Refused('EACCES', `session refused: ${entryNeeded(record)}`, 'config-entry');
+    }
     if (policy.placeholder(name) !== record.placeholder) {
       fail(`${name}'s placeholder isn't the one /etc/fnox/config.toml names`);
     }
@@ -319,7 +331,7 @@ export class Sessions {
     const held = new Map((await records(this.vault.db, ns)).map((r) => [r.placeholder, r]));
     if (ask.scram) ask.placeholders = await this.prover(held, policy, ask, now);
     const handed: Handed[] = [];
-    const reasons: string[] = [];
+    const reasons: Refused[] = [];
     for (const placeholder of ask.placeholders) {
       const record = held.get(placeholder);
       try {
@@ -329,14 +341,14 @@ export class Sessions {
         handed.push({ record: seen, index, value });
       } catch (error) {
         if (!(error instanceof Refused)) throw error;
-        reasons.push(error.message);
+        reasons.push(error);
       }
     }
     const kept = await this.record(ns, ask, handed, key);
     if (!kept.length) {
-      throw new Refused(
-        'EACCES',
-        reasons[0] ?? 'session refused: the secret or its rule changed meanwhile'
+      throw (
+        reasons[0] ??
+        new Refused('EACCES', 'session refused: the secret or its rule changed meanwhile')
       );
     }
     return { values: Object.fromEntries(kept.map((h) => [h.record.placeholder, h.value])) };
