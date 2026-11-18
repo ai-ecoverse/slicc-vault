@@ -1,4 +1,4 @@
-import { compile, type Scrubber } from '@ai-ecoverse/slicc-scrub';
+import { compile, type Scrubber, type Secret } from '@ai-ecoverse/slicc-scrub';
 import { decrypt } from './keys.ts';
 import { aad, records, scrubVersion } from './records.ts';
 import type { Vault } from './vault.ts';
@@ -14,6 +14,9 @@ export class Scrubbers {
   readonly vault: Vault;
   readonly cache = new Map<string, Compiled>();
   readonly epochs = new Map<string, number>();
+  readonly held = new WeakMap<Scrubber, Secret[]>();
+  readonly twins = new WeakMap<Scrubber, Scrubber>();
+  readonly limit = { values: 256, bytes: 1024 * 1024 };
 
   constructor(vault: Vault) {
     this.vault = vault;
@@ -53,8 +56,40 @@ export class Scrubbers {
       }))
     );
     const scrubber = compile(values, { version });
+    this.held.set(scrubber, values);
     this.cache.set(ns, { version, scrubber, values, others: new Map() });
     return scrubber;
+  }
+
+  async widen(ns: string, prior: Scrubber): Promise<Scrubber | null> {
+    const next = await this.get(ns);
+    const had = this.held.get(prior);
+    const has = next && this.held.get(next);
+    if (!next || !had || !has) return null;
+    const key = (secret: Secret) => JSON.stringify([secret.name, secret.placeholder, secret.value]);
+    const known = new Set(has.map(key));
+    const kept = had.filter((secret) => !known.has(key(secret)));
+    if (!kept.length) return next;
+    const bytes = kept.reduce(
+      (sum, secret) => sum + new TextEncoder().encode(secret.value).length,
+      0
+    );
+    if (kept.length > this.limit.values || bytes > this.limit.bytes) return null;
+    const values = [...has, ...kept];
+    const wide = compile(values, { version: next.version });
+    this.held.set(wide, values);
+    return wide;
+  }
+
+  twin(scrubber: Scrubber): Scrubber {
+    let twin = this.twins.get(scrubber);
+    if (!twin) {
+      const values = this.held.get(scrubber);
+      if (!values) throw new Error('no values for this scrub');
+      twin = compile(values, { sameLength: true });
+      this.twins.set(scrubber, twin);
+    }
+    return twin;
   }
 
   async holdsAnother(ns: string, own: { kind: string; name: string }, value: string) {
