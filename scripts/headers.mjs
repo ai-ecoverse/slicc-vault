@@ -79,7 +79,7 @@ export function contentType(extension) {
 
 export function servedHeaders(embedders, extension) {
   const headers = vaultHeaders(embedders);
-  if (extension === '.html') headers['cache-control'] = 'no-store';
+  if (extension === '.html' || extension === '.json') headers['cache-control'] = 'no-store';
   if (extension) headers['content-type'] = contentType(extension);
   return headers;
 }

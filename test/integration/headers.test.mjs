@@ -166,8 +166,8 @@ test('the package lists every built site file, and headers.json matches the serv
       ['/probe-class.map', 'maps', 'no-cache', 'application/json'],
       ['/probe-class.txt', 'text', 'no-cache', 'text/plain; charset=utf-8'],
       ['/probe-class.wasm', 'wasm', 'no-cache', 'application/wasm'],
-      ['/config.json', 'config.json', 'no-cache', 'application/json'],
-      ['/embedders.json', 'embedders.json', 'no-cache', 'application/json'],
+      ['/config.json', 'config.json', 'no-store', 'application/json'],
+      ['/embedders.json', 'embedders.json', 'no-store', 'application/json'],
     ];
     for (const [, name, cache, type] of cases) {
       assert.deepEqual(doc.classes[name].headers, classHeaders(PRODUCTION_CSP, cache, type), name);

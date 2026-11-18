@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { setup } from './setup.mjs';
 
-const { served, chrome } = await setup();
+const { served, chrome, embedder } = await setup();
 
 test('history.back() to the vault document never restores it from the back/forward cache', async (t) => {
   const page = await chrome.page(t);
@@ -23,26 +23,50 @@ test('history.back() to the vault document never restores it from the back/forwa
   await page.evaluate(() => {
     history.back();
   });
-  await page
-    .until((url) => location.href === url && document.readyState === 'complete', `${served.vault}/`)
-    .catch(() => null);
-  const navigated = await new Promise((resolve) => {
-    const deadline = Date.now() + 10000;
-    const check = () => {
-      const found = seen.find(({ method }) => method === 'Page.frameNavigated');
-      if (found) return resolve(found);
-      if (Date.now() > deadline) return resolve(null);
-      setTimeout(check, 25);
-    };
-    check();
-  });
-  const missed = seen.filter(({ method }) => method === 'Page.backForwardCacheNotUsed');
-  const reasons = missed.flatMap(({ params }) => params.notRestoredExplanations);
-  assert.ok(
-    navigated?.params.type !== 'BackForwardCacheRestore' &&
-      navigated?.params.frame.url === `${served.vault}/` &&
-      missed.length === 1 &&
-      reasons.some(({ reason }) => reason === 'UnloadHandlerExistsInMainFrame'),
-    'BFCache exclusion lost: only the guard protects seven now'
+  await page.until(
+    (url) => location.href === url && document.readyState === 'complete',
+    `${served.vault}/`
   );
+  await new Promise((resolve) => setTimeout(resolve, 1000));
+  const navigations = seen.filter(({ method }) => method === 'Page.frameNavigated');
+  const missed = seen.filter(({ method }) => method === 'Page.backForwardCacheNotUsed');
+  const entry = await page.evaluate(() => performance.getEntriesByType('navigation')[0]?.type);
+  assert.ok(
+    navigations.length === 1 &&
+      navigations[0].params.type !== 'BackForwardCacheRestore' &&
+      navigations[0].params.frame.url === `${served.vault}/` &&
+      missed.length === 1 &&
+      entry === 'back_forward',
+    `BFCache exclusion lost: only the guard protects seven now ${JSON.stringify({
+      navigations: navigations.map(({ params }) => params.type),
+      reasons: missed.flatMap(({ params }) =>
+        params.notRestoredExplanations.map(({ reason }) => reason)
+      ),
+      entry,
+    })}`
+  );
+});
+
+test('a vault frame is never shown from the back/forward cache with its embedder: it reloads', async (t) => {
+  const page = await embedder(t);
+  await page.send('Page.enable');
+  await page.evaluate(() => window.harness.connect());
+  const host = new URL(served.vault).host.split(':')[0];
+  const loads = () => served.state.requests.filter((entry) => entry === `${host}/`).length;
+  await page.goto(`${served.origin('bios')}/`);
+  const before = loads();
+  const seen = [];
+  const stop = chrome.cdp.on(({ method, params }) => {
+    if (method === 'Page.frameNavigated' && !params.frame.parentId) seen.push(params.type);
+  });
+  t.after(stop);
+  await page.evaluate(() => {
+    history.back();
+  });
+  const deadline = Date.now() + 20000;
+  while (seen[0] !== 'Navigation' && loads() === before && Date.now() < deadline) {
+    await new Promise((resolve) => setTimeout(resolve, 25));
+  }
+  assert.equal(seen.length, 1);
+  assert.equal(loads(), seen[0] === 'BackForwardCacheRestore' ? before + 1 : before);
 });
