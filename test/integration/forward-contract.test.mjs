@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { after, test } from 'node:test';
 import { attest, CONFIG, config, missing, POLICY } from './attest.mjs';
-import { browser } from './browser.mjs';
+import { browser, openPopup, press, typeInto } from './browser.mjs';
 import { setup } from './setup.mjs';
 
 const { chrome, embedder, served } = await setup();
@@ -384,12 +384,25 @@ const stream = (page, fields, steps) =>
 
 function cancelled({ parts }, kept) {
   assert.deepEqual(
-    parts.map((part) => part.op),
+    parts.map((part) => part.op).filter((op) => op !== 'body'),
     [...kept, 'error']
   );
   assert.deepEqual(parts.at(-1), CANCEL);
   assert.ok(!JSON.stringify(parts).includes(NEW));
 }
+
+function swapped({ parts }, last = 'end') {
+  const shown = JSON.stringify(parts);
+  assert.ok(!parts.some((part) => part.message === CANCEL.message));
+  assert.equal(parts.at(-1).op, last);
+  for (const value of [NEW, SECRET, TOKEN, SECRET.slice(11)]) assert.ok(!shown.includes(value));
+}
+
+const textOf = ({ parts }) =>
+  parts
+    .filter((part) => part.op === 'body')
+    .map((part) => part.text)
+    .join('');
 
 const CHANGES = {
   rotated: ROTATE,
@@ -408,46 +421,44 @@ const held = SECRET.slice(0, 11);
 const CHANNELS = {
   head: {
     before: [],
-    after: [{ ...HEAD, statusText: NEW, url: `${API}?${NEW}`, headers: [['x-echo', NEW]] }],
-    kept: [],
+    after: [
+      { ...HEAD, statusText: NEW, url: `${API}?${NEW}`, headers: [['x-echo', NEW]] },
+      { op: 'end' },
+    ],
+    last: 'end',
   },
   chunk: {
-    before: [HEAD, { text: 'x'.repeat(64) }],
-    after: [{ text: `echo ${NEW}` }, { text: 'more' }, { op: 'end' }],
-    kept: ['response', 'credit'],
+    before: [HEAD, { text: `x ${held}` }],
+    after: [{ text: `${SECRET.slice(11)} echo ${NEW}` }, { text: ' more' }, { op: 'end' }],
+    last: 'end',
   },
-  error: { before: [HEAD], after: [{ op: 'error', message: NEW }], kept: ['response'] },
+  error: { before: [HEAD], after: [{ op: 'error', message: `${SECRET} ${NEW}` }], last: 'error' },
   end: {
-    before: [HEAD, { text: held }],
-    after: [{ op: 'end' }],
-    kept: ['response', 'credit'],
+    before: [HEAD, { text: `x ${held}` }],
+    after: [{ text: SECRET.slice(11) }, { op: 'end' }],
+    last: 'end',
   },
   idle: {
-    before: [HEAD, { text: held }],
-    after: [{ pause: 500 }],
-    kept: ['response', 'credit'],
+    before: [HEAD, { text: `x ${held}` }],
+    after: [{ pause: 500 }, { text: ` ${NEW}` }, { pause: 500 }, { op: 'end' }],
+    last: 'end',
   },
 };
 
 for (const [change, step] of Object.entries(CHANGES)) {
-  for (const [channel, { before, after: rest, kept }] of Object.entries(CHANNELS)) {
-    test(`${change} cancels a response at its ${channel}`, async (t) => {
+  for (const [channel, { before, after: rest, last }] of Object.entries(CHANNELS)) {
+    test(`${change} swaps the scrub of a response at its ${channel} and it streams on`, async (t) => {
       const { page, a } = await ready(t);
       const fields = secretCall(a, { streamCredit: true });
       const sent = await stream(page, fields, [...before, step, ...rest]);
-      const { parts } = sent;
-      assert.deepEqual(
-        parts.map((part) => part.op).filter((op) => op !== 'body'),
-        [...kept, 'error']
-      );
-      assert.deepEqual(parts.at(-1), CANCEL);
-      assert.ok(!JSON.stringify(parts).includes(NEW));
-      assert.ok(!JSON.stringify(parts).includes(held));
+      swapped(sent, last);
+      if (channel === 'chunk') assert.ok(textOf(sent).startsWith(`x ${a} echo `));
+      if (channel === 'end') assert.equal(textOf(sent), `x ${a}`);
     });
   }
 }
 
-test('a restored record cancels the response', async (t) => {
+test('a restored record swaps the scrub and its value is caught', async (t) => {
   const { page, a } = await ready(t);
   await page.evaluate((value) => window.harness.call('put', { name: 'BACK', value }), NEW);
   await page.evaluate(() => window.harness.call('remove', { name: 'BACK' }));
@@ -455,15 +466,143 @@ test('a restored record cancels the response', async (t) => {
     HEAD,
     { call: 'restore', fields: { name: 'BACK' } },
     { text: NEW },
+    { op: 'end' },
   ]);
-  cancelled(sent, ['response']);
+  swapped(sent);
 });
 
-test('a rotation in another vault document cancels the response', async (t) => {
+test('a removed value stays caught for the rest of the response', async (t) => {
+  const { page, a } = await ready(t);
+  const sent = await stream(page, secretCall(a), [
+    HEAD,
+    { text: `x ${held}` },
+    { call: 'remove', fields: { name: 'NOTES_MCP', kind: 'mcp' } },
+    { text: `${SECRET.slice(11)} ${TOKEN}` },
+    { op: 'end' },
+  ]);
+  swapped(sent);
+  assert.ok(textOf(sent).startsWith(`x ${a} `));
+});
+
+test('a rotation in another vault document swaps the scrub', async (t) => {
   const { page, a } = await ready(t);
   await page.evaluate(() => window.harness.twin());
-  const sent = await stream(page, secretCall(a), [HEAD, { ...ROTATE, twin: true }, { text: NEW }]);
-  cancelled(sent, ['response']);
+  const sent = await stream(page, secretCall(a), [
+    HEAD,
+    { text: `x ${held}` },
+    { ...ROTATE, twin: true },
+    { text: `${SECRET.slice(11)} ${NEW}` },
+    { op: 'end' },
+  ]);
+  swapped(sent);
+  assert.equal(textOf(sent), `x ${a} ${a}`);
+});
+
+test('no byte of a held value gets out unscrubbed with the swap point anywhere across it', async (t) => {
+  const { page, a } = await ready(t);
+  for (let at = 0; at <= SECRET.length; at++) {
+    const fresh = `fake-contract-sweep-${String(at).padStart(4, '0')}`;
+    const sent = await stream(page, secretCall(a), [
+      HEAD,
+      { text: `<${SECRET.slice(0, at)}` },
+      { call: 'put', fields: { name: 'SWEPT', value: fresh } },
+      { text: `${SECRET.slice(at)}>` },
+      { op: 'end' },
+    ]);
+    assert.equal(textOf(sent), `<${a}>`);
+    assert.equal(sent.parts.at(-1).op, 'end');
+  }
+});
+
+const OLD_ACCESS = 'fake-contract-access-0605';
+const NEW_ACCESS = 'fake-contract-access-0606';
+
+async function refreshable(page) {
+  const asked = await page.evaluate(
+    (owner) =>
+      window.harness.sealed(
+        { v: 1, op: 'request', kind: 'oauth', provider: 'github', oauth: {} },
+        owner
+      ),
+    OWNER
+  );
+  await page.evaluate(() =>
+    window.harness.call('seal', {
+      name: 'OTHER_GRANT',
+      value: 'fake-contract-refresh-0607',
+      kind: 'grant',
+      source: 'oauth:github',
+      oauth: { tokenUrl: 'https://auth.example.com/token', clientId: 'fake-client' },
+    })
+  );
+  await page.evaluate(
+    ({ id, value }) =>
+      window.harness.call('seal', {
+        name: 'OTHER_TOKEN',
+        value,
+        source: 'oauth:github',
+        refresh: 'OTHER_GRANT',
+        expiresAt: Date.now() + 60000,
+        request: id,
+        jerk: { exit: 0, user: 'octo', scopes: [] },
+      }),
+    { id: asked.id, value: OLD_ACCESS }
+  );
+  await page.evaluate((value) => {
+    window.harness.egress.answer = {
+      status: 200,
+      headers: [['content-type', 'application/json']],
+      body: JSON.stringify({
+        token_type: 'Bearer',
+        access_token: value,
+        refresh_token: 'fake-contract-refresh-0608',
+        expires_in: 3600,
+      }),
+    };
+  }, NEW_ACCESS);
+}
+
+test('a long-lived stream survives an unrelated OAuth refresh and scrubs every value after it', async (t) => {
+  const { page, a, m } = await ready(t);
+  await refreshable(page);
+  const sent = await stream(page, mcpCall(m, { streamCredit: true }), [
+    { ...HEAD, url: `${SERVER}/call` },
+    { text: `data: ${TOKEN.slice(0, 9)}` },
+    { call: 'refresh', fields: { name: 'OTHER_TOKEN' } },
+    { text: `${TOKEN.slice(9)} ${OLD_ACCESS.slice(0, 7)}` },
+    { text: `${OLD_ACCESS.slice(7)} ${NEW_ACCESS} ${SECRET}` },
+    { op: 'end' },
+  ]);
+  const shown = JSON.stringify(sent.parts);
+  assert.equal(sent.parts.at(-1).op, 'end');
+  assert.deepEqual(credits(sent.parts).length, 3);
+  for (const value of [TOKEN, OLD_ACCESS, NEW_ACCESS, SECRET, 'fake-contract-refresh-060']) {
+    assert.ok(!shown.includes(value));
+  }
+  assert.ok(textOf(sent).startsWith(`data: ${m} `));
+  assert.ok(textOf(sent).endsWith(` ${a}`));
+  assert.equal(await page.evaluate(() => window.harness.egress.requests.length), 1);
+});
+
+test('a change the locked vault cannot compile still cancels the response', async (t) => {
+  const { page, a } = await ready(t);
+  await page.evaluate((f) => window.harness.open(f), secretCall(a, { streamCredit: true }));
+  await page.evaluate((s) => window.harness.post(s), HEAD);
+  const manage = await openPopup(cdp, page, { kind: 'protect' }, 'Vault lock');
+  await press(manage, 'Protect with a passphrase');
+  await typeInto(manage, '#passphrase', 'fake contract passphrase');
+  await typeInto(manage, '#confirm', 'fake contract passphrase');
+  await press(manage, 'Protect');
+  await manage.until(() => document.body.textContent.includes('Protected with a passphrase.'));
+  await page.evaluate((s) => window.harness.post(s), { text: `x ${held}` });
+  await press(manage, 'Lock now');
+  await page.until(async () => (await window.harness.call('status')).status.locked === true);
+  await page.evaluate(() => window.harness.call('remove', { name: 'NOTES_MCP', kind: 'mcp' }));
+  await page.evaluate((s) => window.harness.post(s), { text: `${SECRET.slice(11)} ${NEW}` });
+  await page.until(() => window.harness.opened.parts.some((part) => part.op === 'error'));
+  const parts = await page.evaluate(() => window.harness.opened.parts);
+  cancelled({ parts }, ['response', 'credit']);
+  assert.ok(!JSON.stringify(parts).includes(held));
 });
 
 test('a response streams on while the values stay the same', async (t) => {
