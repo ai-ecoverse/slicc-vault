@@ -22,10 +22,11 @@ import {
 import { checkOAuth, type TokenKind, tokens } from './refresh.ts';
 import {
   holds,
-  kernelPort,
   type McpServer,
   modelFor,
   modelRefused,
+  nearby,
+  pageNearby,
   pageSealed,
   pageServer,
   type Registered,
@@ -201,7 +202,7 @@ export class Preparer {
   ): Promise<Fields> {
     const target = await make();
     const parsed = new URL(request.url);
-    const loopback = target.loopback && kernelPort(parsed) !== null;
+    const loopback = target.loopback && nearby(parsed) !== null;
     if (parsed.protocol !== 'https:' && !loopback) {
       throw new Refused('EACCES', 'model and MCP requests go out over https only');
     }
@@ -319,7 +320,7 @@ export class Preparer {
             record.settings,
             request.method
           ),
-        loopback: false,
+        loopback: pageNearby(registered, new URL(request.url)),
       };
     });
   }

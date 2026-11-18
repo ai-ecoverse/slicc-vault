@@ -26,6 +26,7 @@ import {
   type McpServer,
   NO_ENDPOINTS,
   NO_PAGE,
+  nearby,
   type Owned,
   onHost,
   pageSealed,
@@ -178,12 +179,12 @@ function pageModelsOf(model: unknown): PageModels {
     (typeof item === 'string' && endpoint(item, false) !== null) ||
     (bound(item) &&
       NAME.test(item.name) &&
-      endpoint(item.url, false) !== null &&
+      endpoint(item.url, false, true) !== null &&
       !/[*{}]/.test(item.url));
   if (!Array.isArray(given) || !given.every(ok)) {
     throw new Refused(
       'EINVAL',
-      'model must be a list of https base URLs or { name, url } for a model record'
+      'model must be a list of https base URLs or { name, url } for a model record, https or http on this machine or a local network'
     );
   }
   return {
@@ -343,7 +344,7 @@ export function registerPage(
   unpin?: unknown,
   now = 0,
   clean: Clean = (text) => text
-): Promise<{ registered: Registered; changed: number; unpins: number }> {
+): Promise<{ registered: Registered; changed: number; unpins: number; insecure: boolean }> {
   const models = pageModelsOf(model);
   const mcps = mcp === undefined ? [] : serversOf(mcp);
   const removal = removalOf(remove);
@@ -376,7 +377,8 @@ export function registerPage(
     const registered = { ...before, ...fresh, page: next, ...(held.length ? { held } : {}) };
     if (changed) await request(tx.objectStore('meta').put(registered, `endpoints:${ns}`));
     const unpins = await unpinIn(tx, ns, unpinned, now, clean);
-    return { registered, changed: changed ? 1 : 0, unpins };
+    const insecure = custom.some((c) => nearby(new URL(c.url)) === 'network');
+    return { registered, changed: changed ? 1 : 0, unpins, insecure };
   });
 }
 

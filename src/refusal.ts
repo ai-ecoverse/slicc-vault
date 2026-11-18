@@ -164,12 +164,34 @@ export function kernelPort(url: URL): number | null {
   return port;
 }
 
-export function endpoint(raw: string, mcp: boolean): Endpoint | null {
+function octets(host: string): number[] | null {
+  const parts = host.split('.');
+  return parts.length === 4 && parts.every((part) => /^\d+$/.test(part)) ? parts.map(Number) : null;
+}
+
+export function nearby(url: URL): 'loopback' | 'network' | null {
+  if (url.protocol !== 'http:' || url.username || url.password || url.port === '9222') return null;
+  if (kernelPort(url) !== null) return 'loopback';
+  const host = hostOf(url);
+  if (KERNEL.test(host)) return null;
+  const [a, b] = octets(host) ?? [0, 0];
+  if (host === 'localhost' || host === '[::1]' || a === 127) return 'loopback';
+  const v4 =
+    a === 10 ||
+    (a === 172 && b >= 16 && b < 32) ||
+    (a === 192 && b === 168) ||
+    (a === 100 && b >= 64 && b < 128);
+  const named = /.\.(local|ts\.net)$/.test(host) || /^\[f[cd][0-9a-f]{2}:/.test(host);
+  return v4 || named ? 'network' : null;
+}
+
+export function endpoint(raw: string, mcp: boolean, local = false): Endpoint | null {
   const url = URL.parse(raw);
   if (!url || url.username || url.password) return null;
   const kernel = mcp && kernelPort(url) !== null;
-  if (url.protocol !== 'https:' && !kernel) return null;
-  if (url.port !== '' && url.port !== '443') return null;
+  const near = local && nearby(url) !== null;
+  if (url.protocol !== 'https:' && !kernel && !near) return null;
+  if (!near && url.port !== '' && url.port !== '443') return null;
   return { host: url.hostname.toLowerCase(), path: url.pathname.replace(/\/+$/, '') };
 }
 
@@ -211,20 +233,24 @@ export function contains(pattern: Endpoint, domain: string, paths: string[]): bo
   });
 }
 
+function pageModels(page: PageEndpoints): (Endpoint | null)[] {
+  return [
+    ...page.model.map((url) => endpoint(url, false)),
+    ...page.custom.map((entry) => endpoint(entry.url, false, true)),
+  ];
+}
+
 export function patterns(registered: Registered): Endpoint[] {
   const page = registered.page ?? NO_PAGE;
-  const model = [...page.model, ...page.custom.map((entry) => entry.url)].map((url) =>
-    endpoint(url, false)
-  );
   const mcp = page.mcp.map((server) => endpoint(server.url, true));
-  return [...BUILT_IN_ENDPOINTS, ...[...model, ...mcp].filter((e): e is Endpoint => e !== null)];
+  return [
+    ...BUILT_IN_ENDPOINTS,
+    ...[...pageModels(page), ...mcp].filter((e): e is Endpoint => e !== null),
+  ];
 }
 
 export function modelRefused(registered: Registered, url: URL): boolean {
-  const page = registered.page ?? NO_PAGE;
-  const own = [...page.model, ...page.custom.map((entry) => entry.url)]
-    .map((base) => endpoint(base, false))
-    .filter((e): e is Endpoint => e !== null);
+  const own = pageModels(registered.page ?? NO_PAGE).filter((e): e is Endpoint => e !== null);
   const host = hostOf(url);
   return [...BUILT_IN_ENDPOINTS, ...own].some((pattern) => covers(pattern, host, url.pathname));
 }
@@ -254,23 +280,31 @@ export function modelFor(
   settings?: Record<string, string>,
   method: string | null = null
 ): boolean {
-  if (url.protocol !== 'https:' || !plain(url, '')) return false;
   const host = hostOf(url);
-  const built = BUILT_IN_ENDPOINTS.filter(
-    (e) =>
-      e.providers.includes(provider) &&
-      admits(e, host, url.pathname, method) &&
-      tenant(e, host, url.pathname, settings)
+  const built =
+    url.protocol === 'https:' &&
+    plain(url, '') &&
+    BUILT_IN_ENDPOINTS.some(
+      (e) =>
+        e.providers.includes(provider) &&
+        admits(e, host, url.pathname, method) &&
+        tenant(e, host, url.pathname, settings)
+    );
+  const owned = (registered.page ?? NO_PAGE).custom.filter(
+    (entry) => entry.provider === provider && entry.name === name
   );
-  const owned = (registered.page ?? NO_PAGE).custom
-    .filter((entry) => entry.provider === provider && entry.name === name)
-    .map((entry) => endpoint(entry.url, false) as Endpoint);
-  return built.length > 0 || owned.some((pattern) => covers(pattern, host, url.pathname));
+  return built || owned.some((entry) => under(entry.url, url));
+}
+
+export function pageNearby(registered: Registered, url: URL): boolean {
+  return (registered.page ?? NO_PAGE).custom.some(
+    (entry) => nearby(new URL(entry.url)) !== null && under(entry.url, url)
+  );
 }
 
 export function under(base: string, url: URL): boolean {
   const own = new URL(base);
-  const pattern = endpoint(base, true) as Endpoint;
+  const pattern = endpoint(base, true, true) as Endpoint;
   return (
     own.protocol === url.protocol &&
     plain(url, own.port) &&
