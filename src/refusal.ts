@@ -300,7 +300,8 @@ export function modelFor(
   );
   return (
     built ||
-    (!/[\t\n\r]|%09|%0a|%0d/i.test(raw) &&
+    (![...raw].some((c) => c <= ' ' || c === '\u007f') &&
+      !/%09|%0a|%0d/i.test(raw) &&
       !AMBIGUOUS.test(raw) &&
       owned.some((entry) => under(entry.url, url)))
   );
