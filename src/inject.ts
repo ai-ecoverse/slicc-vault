@@ -3,6 +3,7 @@ import { decrypt } from './keys.ts';
 import { PAUSED, type Policy } from './policy.ts';
 import { aad, configEntry, entryNeeded, removed, rulesFor, type VaultRecord } from './records.ts';
 import {
+  AMBIGUOUS,
   holds,
   hostOf,
   type McpServer,
@@ -66,7 +67,6 @@ class Refusal extends Error {
 }
 
 const FOUND = /fnox_proxy_[0-9a-f]{24}/g;
-export const AMBIGUOUS = /(^|\/)\.\.?(\/|$)|\\|%2e|%2f|%5c|%25/i;
 
 function glob(pattern: string, path: string): boolean {
   let source = '';

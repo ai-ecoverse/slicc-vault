@@ -804,7 +804,7 @@ export type OpReply =
   | { op: 'lock' }
   | { op: 'dismissBackupReminder'; backupReminder: BackupReminder }
   | ({ op: 'policy' } & PolicyResult)
-  | { op: 'endpoints'; ok: true }
+  | { op: 'endpoints'; ok: true; insecure?: true }
   | { op: 'refresh'; state: 'refreshed' | 'requested'; expiresAt?: EpochMs }
   | { op: 'answer'; state: RequestState }
   | ({ op: 'forward' } & ForwardResult)

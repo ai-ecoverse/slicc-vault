@@ -22,13 +22,15 @@ import {
 import { checkOAuth, type TokenKind, tokens } from './refresh.ts';
 import {
   holds,
-  kernelPort,
   type McpServer,
   modelFor,
   modelRefused,
+  nearby,
+  pageNearby,
   pageSealed,
   pageServer,
   type Registered,
+  rawPath,
   serverFor,
   servers,
   tofu,
@@ -101,8 +103,9 @@ export interface Target {
   settle?: (filled: VaultRecord[]) => Promise<void>;
 }
 
-function still(target: Target, filled: VaultRecord[]): void {
-  if (filled.some((record) => !target.owns(record) || !target.reaches(record))) {
+function still(target: Target, filled: VaultRecord[], url: URL): void {
+  const lost = url.protocol !== 'https:' && !target.loopback;
+  if (lost || filled.some((record) => !target.owns(record) || !target.reaches(record))) {
     throw new Refused(
       'EAGAIN',
       "the vault's endpoints changed meanwhile; prepare the request again"
@@ -201,7 +204,7 @@ export class Preparer {
   ): Promise<Fields> {
     const target = await make();
     const parsed = new URL(request.url);
-    const loopback = target.loopback && kernelPort(parsed) !== null;
+    const loopback = target.loopback && nearby(parsed) !== null;
     if (parsed.protocol !== 'https:' && !loopback) {
       throw new Refused('EACCES', 'model and MCP requests go out over https only');
     }
@@ -214,7 +217,7 @@ export class Preparer {
       headers.push([name, await this.fill(value, held, target, false, seen)]);
     }
     const again = await make();
-    still(again, seen.filled);
+    still(again, seen.filled, parsed);
     await again.settle?.(seen.filled);
     const scrubber = await this.scrubber();
     if (scrubber.version !== first.version + seen.refreshes) {
@@ -261,7 +264,7 @@ export class Preparer {
       );
     }
     const last = await make(registered);
-    still(last, seen.filled);
+    still(last, seen.filled, parsed);
     const now = new Map(live.map((r) => [r.placeholder, r]));
     const moved = seen.filled.some((r) => {
       const found = now.get(r.placeholder);
@@ -317,9 +320,10 @@ export class Preparer {
             new URL(request.url),
             record.name,
             record.settings,
-            request.method
+            request.method,
+            rawPath(request.url)
           ),
-        loopback: false,
+        loopback: pageNearby(registered, new URL(request.url)),
       };
     });
   }

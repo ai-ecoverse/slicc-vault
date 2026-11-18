@@ -2,7 +2,7 @@ import type { ExitName, Rule, Stamp } from './contract.ts';
 import { request, transact } from './db.ts';
 import { Refused } from './errors.ts';
 import { checkExit } from './forward.ts';
-import { AMBIGUOUS, matches } from './inject.ts';
+import { matches } from './inject.ts';
 import { decrypt } from './keys.ts';
 import { type Policy, running } from './policy.ts';
 import {
@@ -15,7 +15,7 @@ import {
   removed,
   type VaultRecord,
 } from './records.ts';
-import { type Registered, refusedUrl } from './refusal.ts';
+import { AMBIGUOUS, type Registered, refusedUrl } from './refusal.ts';
 import { policyIn } from './rules.ts';
 import { clientProof, parseScram, SCRAM_CANDIDATES, type Scram, same } from './scram.ts';
 import { checkStamp } from './sealed.ts';

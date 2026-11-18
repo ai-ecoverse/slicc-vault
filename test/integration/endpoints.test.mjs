@@ -331,7 +331,21 @@ test('NEGATIVE a page base URL must be a plain https URL of a live model record,
     [{ name: 'OPENAI_API_KEY', url: 'http://gateway.example.com/v1' }],
     [{ name: 'OPENAI_API_KEY', url: 'https://gateway.example.com:8443/v1' }],
     [{ name: 'OPENAI_API_KEY', url: 'https://*.gateway.example.com/v1' }],
-    [{ name: 'OPENAI_API_KEY', url: 'http://8080.kernel.localhost/v1' }],
+    [{ name: 'OPENAI_API_KEY', url: 'http://9222.kernel.localhost/v1' }],
+    [{ name: 'OPENAI_API_KEY', url: 'http://8080.kernel.localhost:8080/v1' }],
+    [{ name: 'OPENAI_API_KEY', url: 'http://127.0.0.1:9222/v1' }],
+    [{ name: 'OPENAI_API_KEY', url: 'http://user:pw@127.0.0.1:8080/v1' }],
+    [{ name: 'OPENAI_API_KEY', url: 'http://8.8.8.8:8080/v1' }],
+    [{ name: 'OPENAI_API_KEY', url: 'http://172.32.0.1/v1' }],
+    [{ name: 'OPENAI_API_KEY', url: 'http://100.128.0.1/v1' }],
+    [{ name: 'OPENAI_API_KEY', url: 'http://[fe80::1]/v1' }],
+    [{ name: 'OPENAI_API_KEY', url: 'http://ollama.example.com/v1' }],
+    [{ name: 'OPENAI_API_KEY', url: 'https://127.0.0.1:8443/v1' }],
+    [{ name: 'OPENAI_API_KEY', url: 'http://[::ffff:127.0.0.1]/v1' }],
+    [{ name: 'OPENAI_API_KEY', url: 'http://localhost.evil.com/v1' }],
+    [{ name: 'OPENAI_API_KEY', url: 'http://evil.local.example/v1' }],
+    [{ name: 'OPENAI_API_KEY', url: 'http://x.ts.net.evil.com/v1' }],
+    [{ name: 'OPENAI_API_KEY', url: 'http://09222.kernel.localhost/v1' }],
     [{ name: 'NO_SUCH_KEY', url: 'https://gateway.example.com/v1' }],
     [{ name: 'GH_TOKEN', url: 'https://gateway.example.com/v1' }],
     [{ name: 'OPENAI_API_KEY', url: 'https://docs.example.com/mcp/v1' }],
@@ -362,4 +376,86 @@ test('NEGATIVE a page base URL must be a plain https URL of a live model record,
     })
   );
   assert.equal(servers.ok, true);
+});
+
+test('a page { name, url } on a local http server gets its key, on the same scheme, host and port', async (t) => {
+  const { page, ask, openai } = await ready(t);
+  const register = (url) =>
+    page.evaluate(
+      (u) => window.harness.call('endpoints', { model: [{ name: 'OPENAI_API_KEY', url: u }] }),
+      url
+    );
+  const send = (url, provider = 'openai') =>
+    ask('model', {
+      provider,
+      request: req(url, [['authorization', `Bearer ${openai.placeholder}`]]),
+    });
+  const local = [
+    'http://127.0.0.1:11434/v1',
+    'http://localhost:1234/v1',
+    'http://[::1]:8080/v1',
+    'http://11435.kernel.localhost/v1',
+  ];
+  const network = [
+    'http://192.168.1.20:8000/v1',
+    'http://10.0.0.5/v1',
+    'http://172.16.4.4:8080/v1',
+    'http://[fd7a:115c:a1e0::7]:8080/v1',
+    'http://gpu.local:8080/v1',
+    'http://100.64.12.7:11434/v1',
+    'http://harbor.tail1234.ts.net:11434/v1',
+  ];
+  for (const url of local) {
+    const reply = await register(url);
+    assert.deepEqual([reply.ok, reply.insecure], [true, undefined], url);
+  }
+  for (const url of network) {
+    const reply = await register(url);
+    assert.deepEqual([reply.ok, reply.insecure], [true, true], url);
+  }
+  for (const url of [...local, ...network]) {
+    const sent = await send(`${url}/chat/completions`);
+    assert.deepEqual(sent.request?.headers, [['authorization', `Bearer ${OPENAI_KEY}`]], url);
+  }
+  for (const url of [
+    'http://127.0.0.1:11435/v1/chat/completions',
+    'http://127.0.0.1:11434/v2/chat/completions',
+    'https://127.0.0.1:11434/v1/chat/completions',
+    'http://127.0.0.2:11434/v1/chat/completions',
+    'http://11436.kernel.localhost/v1/chat/completions',
+    'http://192.168.1.20/v1/chat/completions',
+    'http://127.0.0.1:11434/v1/..%2fadmin',
+    'http://127.0.0.1:11434/v1/%2e%2e/admin',
+    'http://127.0.0.1:11434/v1/./chat',
+    'http://127.0.0.1:11434/v1/x/../chat',
+    'http://127.0.0.1:11434/v1\\chat',
+  ]) {
+    const sent = await send(url);
+    assert.equal(sent.error?.code, 'EACCES', url);
+  }
+  const other = await send('http://127.0.0.1:11434/v1/chat', 'anthropic');
+  assert.equal(other.error?.code, 'EACCES');
+  const keyless = await ask('model', { request: req('http://10.0.0.5/v1/models', []) });
+  assert.equal(keyless.request?.body, '{}');
+  const elsewhere = await ask('model', { request: req('http://10.0.0.6/v1/models', []) });
+  assert.match(elsewhere.error.message, /https only/);
+});
+
+test("NEGATIVE an agent's local http model URL never gets a key", async (t) => {
+  const { ask, openai } = await ready(t);
+  for (const model of [
+    ['http://127.0.0.1:11434/v1'],
+    [{ provider: 'openai', url: 'http://127.0.0.1:11434/v1' }],
+    [{ name: 'OPENAI_API_KEY', url: 'http://127.0.0.1:11434/v1' }],
+  ]) {
+    const reply = await ask('endpoints', { model });
+    assert.equal(reply.error?.code, 'EINVAL', JSON.stringify(model));
+  }
+  const sent = await ask('model', {
+    provider: 'openai',
+    request: req('http://127.0.0.1:11434/v1/chat', [
+      ['authorization', `Bearer ${openai.placeholder}`],
+    ]),
+  });
+  assert.match(sent.error.message, /https only/);
 });
