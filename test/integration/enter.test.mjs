@@ -77,7 +77,7 @@ test('enter over a live record needs replace, and keeps its placeholder', async 
   );
   const frame = await typed(page, opened.request, 'second-frame-value');
   await page.until(() => window.harness.valueEvents.some((e) => e.event === 'done'));
-  assert.equal(await frame.evaluate(() => document.querySelector('input')), null);
+  assert.equal(await frame.until(() => document.querySelector('input') === null), true);
   const looked = await page.evaluate(() =>
     window.harness.sealed({ v: 1, op: 'placeholder', name: 'KEEP_ME' })
   );

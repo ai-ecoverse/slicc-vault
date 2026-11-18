@@ -4,6 +4,11 @@ import { setup } from './setup.mjs';
 
 const { served, chrome, embedder } = await setup();
 
+async function back(page) {
+  const { currentIndex, entries } = await page.send('Page.getNavigationHistory');
+  await page.send('Page.navigateToHistoryEntry', { entryId: entries[currentIndex - 1].id });
+}
+
 test('history.back() to the vault document never restores it from the back/forward cache', async (t) => {
   const page = await chrome.page(t);
   await page.send('Page.enable');
@@ -20,9 +25,7 @@ test('history.back() to the vault document never restores it from the back/forwa
     }
   });
   t.after(stop);
-  await page.evaluate(() => {
-    history.back();
-  });
+  await back(page);
   await page.until(
     (url) => location.href === url && document.readyState === 'complete',
     `${served.vault}/`
@@ -60,9 +63,7 @@ test('a vault frame is never shown from the back/forward cache with its embedder
     if (method === 'Page.frameNavigated' && !params.frame.parentId) seen.push(params.type);
   });
   t.after(stop);
-  await page.evaluate(() => {
-    history.back();
-  });
+  await back(page);
   const deadline = Date.now() + 20000;
   const until = async (done) => {
     while (!done() && Date.now() < deadline) {
