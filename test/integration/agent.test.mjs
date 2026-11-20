@@ -354,3 +354,68 @@ test('a kernel request to a registered MCP server gets no credential while kerne
   });
   assert.ok(!JSON.stringify(sent).includes(VALUE_M));
 });
+
+test('a stream survives a value sealed meanwhile and scrubs every value across the swap', async (t) => {
+  const { page, a } = await ready(t);
+  const out = await page.evaluate(async (value) => {
+    const h = window.harness;
+    const enc = (text) => new TextEncoder().encode(text);
+    const dec = (bytes) => new TextDecoder().decode(bytes);
+    const runs = [];
+    for (let at = 0; at <= value.length; at++) {
+      const fresh = `fake-stream-fresh-${String(at).padStart(4, '0')}`;
+      const opened = await h.ask('redactStream', { stream: 'w' });
+      const one = await h.ask('push', { stream: 'w', chunk: enc(`<${value.slice(0, at)}`) });
+      const sealed = await h.call('put', { name: `FRESH_${at}`, value: fresh });
+      const two = await h.ask('push', { stream: 'w', chunk: enc(`${value.slice(at)}> ${fresh}`) });
+      const end = await h.ask('end', { stream: 'w' });
+      runs.push({
+        text: dec(one.chunk) + dec(two.chunk) + dec(end.chunk),
+        expected: `> ${sealed.placeholder}`,
+        moved: two.version > opened.version && end.version === two.version,
+        error: two.error ?? end.error ?? null,
+      });
+    }
+    return runs;
+  }, VALUE_A);
+  for (const run of out) {
+    assert.equal(run.error, null);
+    assert.equal(run.text, `<${a}${run.expected}`);
+    assert.equal(run.moved, true);
+  }
+});
+
+test('a value rotated away while a stream holds its raw tail is never handed out', async (t) => {
+  const { page } = await ready(t);
+  const long = `fake-long-${'0123456789abcdef'.repeat(6)}${'z'.repeat(11)}`;
+  assert.equal(long.length, 117);
+  const out = await page.evaluate(async (value) => {
+    const h = window.harness;
+    const enc = (text) => new TextEncoder().encode(text);
+    const dec = (bytes) => new TextDecoder().decode(bytes);
+    const { placeholder } = await h.call('put', { name: 'LONG', value });
+    await h.ask('redactStream', { stream: 'l' });
+    const one = await h.ask('push', { stream: 'l', chunk: enc(`${value} ${value.slice(0, 74)}`) });
+    await h.call('put', { name: 'LONG', value: `fake-long-rotated-${'9'.repeat(40)}` });
+    const idle = await h.ask('idle', { stream: 'l' });
+    const two = await h.ask('push', { stream: 'l', chunk: enc(`${value.slice(74)}!`) });
+    const end = await h.ask('end', { stream: 'l' });
+    return {
+      placeholder,
+      first: dec(one.chunk),
+      text: dec(one.chunk) + dec(idle.chunk) + dec(two.chunk) + dec(end.chunk),
+    };
+  }, long);
+  assert.equal(out.first, `${out.placeholder} `);
+  assert.equal(out.text, `${out.placeholder} ${out.placeholder}!`);
+  for (let at = 0; at + 16 <= long.length; at++) {
+    assert.ok(!out.text.includes(long.slice(at, at + 16)));
+  }
+});
+
+test('the agent sees the streamWiden capability', async (t) => {
+  const page = await embedder(t);
+  await page.evaluate(() => window.harness.connect());
+  const welcome = await page.evaluate(() => window.harness.agent());
+  assert.equal(welcome.status.capabilities.streamWiden, 1);
+});

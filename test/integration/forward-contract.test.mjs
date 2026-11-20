@@ -14,6 +14,7 @@ const OWNER = { pid: 9, ppid: 1, uid: 1000, gid: 1000, tag: 'cone', users: 'enfo
 const MANUAL = { manualRedirects: true };
 const SERVER = 'https://notes.example.com/mcp';
 const API = 'https://api.example.com/v1/items';
+const CAPABILITIES = { forward: 1, leases: 1, kernelOAuth: 1, streamWiden: 1 };
 
 async function ready(t) {
   const page = await embedder(t);
@@ -95,13 +96,13 @@ const shown = async (page, name) =>
 
 test('status names the forward capability', async (t) => {
   const { page, welcome } = await ready(t);
-  assert.deepEqual(welcome.status.capabilities, { forward: 1, leases: 1, kernelOAuth: 1 });
+  assert.deepEqual(welcome.status.capabilities, CAPABILITIES);
   const { status } = await page.evaluate(() => window.harness.call('status'));
-  assert.deepEqual(status.capabilities, { forward: 1, leases: 1, kernelOAuth: 1 });
+  assert.deepEqual(status.capabilities, CAPABILITIES);
   const pushed = await page.evaluate(
     () => window.harness.events.findLast((event) => event.event === 'status').status
   );
-  assert.deepEqual(pushed.capabilities, { forward: 1, leases: 1, kernelOAuth: 1 });
+  assert.deepEqual(pushed.capabilities, CAPABILITIES);
 });
 
 test('a secret needs a manual exit in any header', async (t) => {

@@ -202,6 +202,7 @@ export interface Capabilities {
   forward: 1;
   leases: 1;
   kernelOAuth: 1;
+  streamWiden: 1;
 }
 
 export interface LeaseBinding {
@@ -770,8 +771,8 @@ export type AgentOp =
 export type AgentReply =
   | { op: 'redact'; texts: (string | Uint8Array)[]; hits: ScrubHit[]; version: number }
   | { op: 'redactStream'; stream: string; idleMs: number; version: number }
-  | { op: 'push' | 'idle'; chunk: Uint8Array }
-  | { op: 'end'; chunk: Uint8Array; hits: ScrubHit[] }
+  | { op: 'push' | 'idle'; chunk: Uint8Array; version: number }
+  | { op: 'end'; chunk: Uint8Array; hits: ScrubHit[]; version: number }
   | { op: 'drop' }
   | { op: 'endpoints'; ok: true }
   | { op: 'model' | 'mcp'; request: OutgoingRequest; hits: ScrubHit[]; version: number }
