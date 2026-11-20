@@ -111,7 +111,9 @@ export async function audit(
     .sort((a, b) => b.seq - a.seq);
   const page = older.slice(0, limit);
   const more = older.length > page.length;
-  const scrubber = page.some((e) => e.type === 'endpoints') ? await vault.scrubbers.get(ns) : null;
+  const scrubber = page.some((e) => e.type === 'endpoints')
+    ? await vault.scrubbers.get(ns).catch(() => null)
+    : null;
   const scrub = (value: unknown): unknown => {
     if (typeof value === 'string') return (scrubber as Scrubber).text(value).text;
     if (Array.isArray(value)) return value.map(scrub);
@@ -139,9 +141,10 @@ export async function audit(
 
 async function consistent(vault: Vault, ns: string) {
   for (let tries = 0; tries < 3; tries++) {
-    const scrubber = await vault.scrubbers.get(ns);
+    const scrubber = await vault.scrubbers.get(ns).catch(() => null);
     const held = await records(vault.db, ns);
-    if ((await vault.scrubbers.get(ns))?.version === scrubber?.version) return { scrubber, held };
+    const again = await vault.scrubbers.get(ns).catch(() => null);
+    if (again?.version === scrubber?.version) return { scrubber, held };
   }
   throw new Refused('EAGAIN', "the vault's values keep changing; try again");
 }
@@ -698,7 +701,7 @@ export class Server {
   }
 
   async welcome(session: Session): Promise<void> {
-    const scrubber = await this.vault.scrubbers.get(session.ns);
+    const scrubber = await this.vault.scrubbers.get(session.ns).catch(() => null);
     const clean = scrubber ? (text: string) => scrubber.text(text).text : null;
     if (clean && (await migrate(this.vault.db, session.ns, this.vault.now(), clean))) {
       await this.vault.loadPolicy(session.ns);
@@ -775,7 +778,7 @@ export class Server {
 
   async changed(ns: string, parts: Part[]): Promise<void> {
     if (![...this.sessions].some((session) => session.ns === ns)) return;
-    await this.vault.scrubbers.get(ns);
+    await this.vault.scrubbers.get(ns).catch(() => null);
     const shown = parts.filter((part) => part !== 'requests') as ('secrets' | 'audit' | 'exits')[];
     const [current, scrub, status] = await Promise.all([
       live(this.vault, ns),

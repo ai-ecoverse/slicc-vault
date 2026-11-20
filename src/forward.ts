@@ -263,7 +263,11 @@ export async function forward(
   const head = checkHead(fields.head);
   const exit = checkExit(fields.exit);
   const traits = checkTraits(fields.rawTraits);
-  const early = await vault.scrubbers.get(ns);
+  const cancelled = (): never => {
+    throw new Refused('EAGAIN', CANCELLED);
+  };
+  const scrub = () => vault.scrubbers.get(ns).catch(cancelled);
+  const early = await scrub();
   const tidy = early ? (text: string) => early.text(text).text : null;
   if (tidy && (await migrate(vault.db, ns, vault.now(), tidy))) {
     await vault.loadPolicy(ns);
@@ -282,7 +286,7 @@ export async function forward(
     exit,
     traits,
     holdsAnother: (found: VaultRecord, value: string) =>
-      vault.scrubbers.holdsAnother(ns, found, value),
+      vault.scrubbers.holdsAnother(ns, found, value).catch(cancelled),
   };
   const prepared = await prepare({
     ...asked,
@@ -300,7 +304,7 @@ export async function forward(
   const body = server ? bodyOf(fields.body) : null;
   const unready = server ? unsendable(fields.bodyPresent, body) : null;
   if (unready) return unready;
-  const scrubber = (await vault.scrubbers.get(ns)) as Scrubber;
+  const scrubber = (await scrub()) as Scrubber;
   const same = () => vault.scrubbers.epoch(ns) === epoch;
   const stale = {
     refused: {

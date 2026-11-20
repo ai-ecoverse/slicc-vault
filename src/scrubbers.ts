@@ -1,6 +1,6 @@
-import { compile, type Scrubber, type Secret } from '@ai-ecoverse/slicc-scrub';
+import { compile, type Options, type Scrubber, type Secret } from '@ai-ecoverse/slicc-scrub';
 import { decrypt } from './keys.ts';
-import { aad, records, scrubVersion } from './records.ts';
+import { aad, MAX_VALUES, records, scrubVersion } from './records.ts';
 import type { Vault } from './vault.ts';
 
 interface Compiled {
@@ -16,7 +16,9 @@ export class Scrubbers {
   readonly epochs = new Map<string, number>();
   readonly held = new WeakMap<Scrubber, Secret[]>();
   readonly twins = new WeakMap<Scrubber, Scrubber>();
-  readonly limit = { values: 256, bytes: 1024 * 1024 };
+  readonly wides = new WeakMap<Scrubber, { next: Scrubber; wide: Scrubber }>();
+  readonly failed = new Map<string, number>();
+  readonly limit = { values: 256, bytes: MAX_VALUES };
 
   constructor(vault: Vault) {
     this.vault = vault;
@@ -30,8 +32,19 @@ export class Scrubbers {
     return this.epochs.get(ns) ?? 0;
   }
 
-  ready(ns: string, needed: boolean): boolean {
-    return !needed || this.cache.has(ns) || !this.vault.keyring.locked;
+  build(values: Secret[], options: Options): Scrubber {
+    const encoder = new TextEncoder();
+    const bytes = values.reduce((sum, secret) => sum + encoder.encode(secret.value).length, 0);
+    if (bytes > this.limit.bytes) throw new RangeError('too many values to scrub');
+    const scrubber = compile(values, options);
+    this.held.set(scrubber, values);
+    return scrubber;
+  }
+
+  ready(ns: string, needed: boolean, version: number): boolean {
+    if (!needed) return true;
+    if (this.failed.get(ns) === version) return false;
+    return this.cache.has(ns) || !this.vault.keyring.locked;
   }
 
   async get(ns: string): Promise<Scrubber | null> {
@@ -55,8 +68,13 @@ export class Scrubbers {
         value: await decrypt(key, blob, aad(record.ns, record.kind, record.name)),
       }))
     );
-    const scrubber = compile(values, { version });
-    this.held.set(scrubber, values);
+    let scrubber: Scrubber;
+    try {
+      scrubber = this.build(values, { version });
+    } catch (error) {
+      this.failed.set(ns, version);
+      throw error;
+    }
     this.cache.set(ns, { version, scrubber, values, others: new Map() });
     return scrubber;
   }
@@ -66,18 +84,15 @@ export class Scrubbers {
     const had = this.held.get(prior);
     const has = next && this.held.get(next);
     if (!next || !had || !has) return null;
+    const memo = this.wides.get(prior);
+    if (memo?.next === next) return memo.wide;
     const key = (secret: Secret) => JSON.stringify([secret.name, secret.placeholder, secret.value]);
     const known = new Set(has.map(key));
     const kept = had.filter((secret) => !known.has(key(secret)));
     if (!kept.length) return next;
-    const bytes = kept.reduce(
-      (sum, secret) => sum + new TextEncoder().encode(secret.value).length,
-      0
-    );
-    if (kept.length > this.limit.values || bytes > this.limit.bytes) return null;
-    const values = [...has, ...kept];
-    const wide = compile(values, { version: next.version });
-    this.held.set(wide, values);
+    if (kept.length > this.limit.values) return null;
+    const wide = this.build([...has, ...kept], { version: next.version });
+    this.wides.set(prior, { next, wide });
     return wide;
   }
 
@@ -86,7 +101,7 @@ export class Scrubbers {
     if (!twin) {
       const values = this.held.get(scrubber);
       if (!values) throw new Error('no values for this scrub');
-      twin = compile(values, { sameLength: true });
+      twin = this.build(values, { sameLength: true });
       this.twins.set(scrubber, twin);
     }
     return twin;
@@ -99,7 +114,7 @@ export class Scrubbers {
     let others = compiled.others.get(key);
     if (!others) {
       const rest = compiled.values.filter((o) => o.kind !== own.kind || o.name !== own.name);
-      others = compile(rest, { version: compiled.version });
+      others = this.build(rest, { version: compiled.version });
       compiled.others.set(key, others);
     }
     return others.text(value).hits.some((hit) => hit.form !== 'fragment');

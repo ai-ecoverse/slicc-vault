@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { randomBytes } from 'node:crypto';
 import { after, test } from 'node:test';
 import { attest, CONFIG, config, missing, POLICY } from './attest.mjs';
 import { browser, openPopup, press, typeInto } from './browser.mjs';
@@ -610,6 +611,21 @@ test('a change the locked vault cannot compile still cancels the response', asyn
   const parts = await page.evaluate(() => window.harness.opened.parts);
   cancelled({ parts }, ['response', 'credit']);
   assert.ok(!JSON.stringify(parts).includes(held));
+});
+
+test('a change past the scrub cap cancels the response', async (t) => {
+  const { page, a } = await ready(t);
+  const big = () => `fake-big-${randomBytes(33 * 1024).toString('hex')}`;
+  await page.evaluate((value) => window.harness.call('put', { name: 'BIG', value }), big());
+  const sent = await stream(page, secretCall(a), [
+    HEAD,
+    { text: `x ${held}` },
+    { call: 'put', fields: { name: 'BIG', value: big() } },
+    { text: `${SECRET.slice(11)} ${NEW}` },
+    { op: 'end' },
+  ]);
+  cancelled(sent, ['response']);
+  assert.ok(!JSON.stringify(sent.parts).includes(held));
 });
 
 test('a response streams on while the values stay the same', async (t) => {

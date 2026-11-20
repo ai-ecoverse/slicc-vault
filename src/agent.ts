@@ -12,6 +12,8 @@ export const MAX_STREAMS = 64;
 const SANITIZED = new Set(['model', 'mcp', 'records', 'grant', 'refresh']);
 const CHANGED = "the vault's values changed; open the stream again and push from its start";
 const LOCKED = 'vault is locked: unlock it in the vault window to continue';
+const UNSCRUBBED = "the vault can't scrub this answer: its values are over its size limit";
+const FIXED = new Set([CHANGED, LOCKED]);
 
 export class AgentPort {
   readonly vault: Vault;
@@ -66,11 +68,13 @@ export class AgentPort {
       throw new Refused('EAGAIN', `at most ${MAX_STREAMS} streams are open`);
     }
     const epoch = this.vault.scrubbers.epoch(this.ns);
-    const scrubber = await this.scrubber();
+    let scrubber: Scrubber;
     let rescan: Rescan;
     try {
+      scrubber = await this.scrubber();
       rescan = new Rescan(scrubber, watch(this.vault, this.ns, epoch));
-    } catch {
+    } catch (error) {
+      if (error instanceof Refused) throw error;
       throw new Refused('EAGAIN', CHANGED);
     }
     this.streams.set(id, { rescan, turn: Promise.resolve() });
@@ -166,7 +170,10 @@ export class AgentPort {
   }
 
   async cleaned(error: unknown): Promise<never> {
-    const scrubber = error instanceof Refused ? await this.vault.scrubbers.get(this.ns) : null;
+    if (!(error instanceof Refused) || FIXED.has(error.message)) throw error;
+    const scrubber = await this.vault.scrubbers.get(this.ns).catch(() => {
+      throw new Refused(error.code, UNSCRUBBED);
+    });
     if (!scrubber) throw error;
     throw new Refused((error as Refused).code, scrubber.text((error as Refused).message).text);
   }
