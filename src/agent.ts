@@ -66,11 +66,13 @@ export class AgentPort {
       throw new Refused('EAGAIN', `at most ${MAX_STREAMS} streams are open`);
     }
     const epoch = this.vault.scrubbers.epoch(this.ns);
-    const scrubber = await this.scrubber();
+    let scrubber: Scrubber;
     let rescan: Rescan;
     try {
+      scrubber = await this.scrubber();
       rescan = new Rescan(scrubber, watch(this.vault, this.ns, epoch));
-    } catch {
+    } catch (error) {
+      if (error instanceof Refused) throw error;
       throw new Refused('EAGAIN', CHANGED);
     }
     this.streams.set(id, { rescan, turn: Promise.resolve() });
@@ -166,7 +168,8 @@ export class AgentPort {
   }
 
   async cleaned(error: unknown): Promise<never> {
-    const scrubber = error instanceof Refused ? await this.vault.scrubbers.get(this.ns) : null;
+    const scrubber =
+      error instanceof Refused ? await this.vault.scrubbers.get(this.ns).catch(() => null) : null;
     if (!scrubber) throw error;
     throw new Refused((error as Refused).code, scrubber.text((error as Refused).message).text);
   }

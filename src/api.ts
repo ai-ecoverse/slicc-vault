@@ -698,7 +698,7 @@ export class Server {
   }
 
   async welcome(session: Session): Promise<void> {
-    const scrubber = await this.vault.scrubbers.get(session.ns);
+    const scrubber = await this.vault.scrubbers.get(session.ns).catch(() => null);
     const clean = scrubber ? (text: string) => scrubber.text(text).text : null;
     if (clean && (await migrate(this.vault.db, session.ns, this.vault.now(), clean))) {
       await this.vault.loadPolicy(session.ns);
@@ -775,7 +775,7 @@ export class Server {
 
   async changed(ns: string, parts: Part[]): Promise<void> {
     if (![...this.sessions].some((session) => session.ns === ns)) return;
-    await this.vault.scrubbers.get(ns);
+    await this.vault.scrubbers.get(ns).catch(() => null);
     const shown = parts.filter((part) => part !== 'requests') as ('secrets' | 'audit' | 'exits')[];
     const [current, scrub, status] = await Promise.all([
       live(this.vault, ns),

@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { randomBytes } from 'node:crypto';
 import { test } from 'node:test';
 import { attest, CONFIG, config } from './attest.mjs';
 import { setup } from './setup.mjs';
@@ -10,6 +11,8 @@ const VALUE_M = 'fake-mcp-cred-0003-mmmm';
 const VALUE_LOOP = 'fake-loop-cred-0005-llll';
 const OWNER = { pid: 9, ppid: 1, uid: 1000, gid: 1000, tag: 'cone', users: 'enforce' };
 const SERVER = 'http://8080.kernel.localhost/mcp';
+const CHANGED = "the vault's values changed; open the stream again and push from its start";
+const big = () => `fake-big-${randomBytes(33 * 1024).toString('hex')}`;
 
 async function ready(t) {
   const page = await embedder(t);
@@ -418,4 +421,41 @@ test('the agent sees the streamWiden capability', async (t) => {
   await page.evaluate(() => window.harness.connect());
   const welcome = await page.evaluate(() => window.harness.agent());
   assert.equal(welcome.status.capabilities.streamWiden, 1);
+});
+
+test('a namespace past the scrub cap answers EAGAIN at redactStream, never a generic error', async (t) => {
+  const { page } = await ready(t);
+  const out = await page.evaluate(
+    async (values) => {
+      const h = window.harness;
+      for (const [i, value] of values.entries()) await h.call('put', { name: `BIG_${i}`, value });
+      return h.ask('redactStream', { stream: 'big' });
+    },
+    [big(), big()]
+  );
+  assert.deepEqual(out.error, { code: 'EAGAIN', message: CHANGED });
+});
+
+test('a stream whose kept values pass the scrub cap answers EAGAIN and hands nothing out', async (t) => {
+  const { page } = await ready(t);
+  const [first, second] = [big(), big()];
+  const out = await page.evaluate(
+    async (one, two) => {
+      const h = window.harness;
+      const enc = (text) => new TextEncoder().encode(text);
+      const dec = (bytes) => new TextDecoder().decode(bytes);
+      await h.call('put', { name: 'BIG', value: one });
+      await h.ask('redactStream', { stream: 'kept' });
+      const head = await h.ask('push', { stream: 'kept', chunk: enc(`x ${one.slice(0, 40)}`) });
+      await h.call('put', { name: 'BIG', value: two });
+      const next = await h.ask('push', { stream: 'kept', chunk: enc(`${one.slice(40)} ${two}`) });
+      const gone = await h.ask('end', { stream: 'kept' });
+      return { head: dec(head.chunk), next, gone: gone.error };
+    },
+    first,
+    second
+  );
+  assert.equal(out.head, 'x ');
+  assert.deepEqual(out.next.error, { code: 'EAGAIN', message: CHANGED });
+  assert.equal(out.gone.code, 'ENOENT');
 });
