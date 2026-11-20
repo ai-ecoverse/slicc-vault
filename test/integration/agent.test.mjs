@@ -423,17 +423,28 @@ test('the agent sees the streamWiden capability', async (t) => {
   assert.equal(welcome.status.capabilities.streamWiden, 1);
 });
 
-test('a namespace past the scrub cap answers EAGAIN at redactStream, never a generic error', async (t) => {
+test('a value that would pass the scrub cap is refused, changes nothing, and streams still open', async (t) => {
   const { page } = await ready(t);
   const out = await page.evaluate(
     async (values) => {
       const h = window.harness;
-      for (const [i, value] of values.entries()) await h.call('put', { name: `BIG_${i}`, value });
-      return h.ask('redactStream', { stream: 'big' });
+      const first = await h.call('put', { name: 'BIG_0', value: values[0] });
+      const second = await h.call('put', { name: 'BIG_1', value: values[1] });
+      const names = (await h.call('list')).list.secrets.map((r) => r.name);
+      const opened = await h.ask('redactStream', { stream: 'big' });
+      return { first: first.error ?? null, second: second.error, names, opened };
     },
     [big(), big()]
   );
-  assert.deepEqual(out.error, { code: 'EAGAIN', message: CHANGED });
+  assert.equal(out.first, null);
+  assert.deepEqual(out.second, {
+    code: 'EINVAL',
+    message:
+      'the values of this vault may total at most 128 KiB, removed ones until they are purged',
+  });
+  assert.deepEqual(out.names.sort(), ['BIG_0', 'DOCS_MCP', 'TOKEN_A']);
+  assert.equal(out.opened.error, undefined);
+  assert.equal(typeof out.opened.version, 'number');
 });
 
 test('a stream whose kept values pass the scrub cap answers EAGAIN and hands nothing out', async (t) => {

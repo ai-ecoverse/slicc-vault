@@ -6,7 +6,15 @@ import { Exec } from './exec.ts';
 import { Holder } from './holders.ts';
 import { Keyring } from './lock.ts';
 import { EMPTY, type Policy } from './policy.ts';
-import { backupState, onBump, records, reminder, scrubVersion } from './records.ts';
+import {
+  backupState,
+  MAX_VALUES,
+  onBump,
+  records,
+  reminder,
+  scrubVersion,
+  valueBytes,
+} from './records.ts';
 import { Refresher } from './refresh.ts';
 import { pending, waiting } from './requests.ts';
 import { loadPolicy, loadStored } from './rules.ts';
@@ -122,7 +130,8 @@ export async function start(options: Options = {}): Promise<Vault> {
     async scrub(ns) {
       const [held, version] = await Promise.all([records(db, ns), scrubVersion(db, ns)]);
       const needed = held.length > 0;
-      return { needed, version, ready: vault.scrubbers.ready(ns, needed) };
+      const fits = valueBytes(held) <= MAX_VALUES;
+      return { needed, version, ready: fits && vault.scrubbers.ready(ns, needed, version) };
     },
     async status(ns) {
       const [backup, held, stored] = await Promise.all([

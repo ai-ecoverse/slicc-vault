@@ -1,6 +1,6 @@
 import { compile, type Options, type Scrubber, type Secret } from '@ai-ecoverse/slicc-scrub';
 import { decrypt } from './keys.ts';
-import { aad, records, scrubVersion } from './records.ts';
+import { aad, MAX_VALUES, records, scrubVersion } from './records.ts';
 import type { Vault } from './vault.ts';
 
 interface Compiled {
@@ -17,7 +17,8 @@ export class Scrubbers {
   readonly held = new WeakMap<Scrubber, Secret[]>();
   readonly twins = new WeakMap<Scrubber, Scrubber>();
   readonly wides = new WeakMap<Scrubber, { next: Scrubber; wide: Scrubber }>();
-  readonly limit = { values: 256, bytes: 128 * 1024 };
+  readonly failed = new Map<string, number>();
+  readonly limit = { values: 256, bytes: MAX_VALUES };
 
   constructor(vault: Vault) {
     this.vault = vault;
@@ -40,8 +41,10 @@ export class Scrubbers {
     return scrubber;
   }
 
-  ready(ns: string, needed: boolean): boolean {
-    return !needed || this.cache.has(ns) || !this.vault.keyring.locked;
+  ready(ns: string, needed: boolean, version: number): boolean {
+    if (!needed) return true;
+    if (this.failed.get(ns) === version) return false;
+    return this.cache.has(ns) || !this.vault.keyring.locked;
   }
 
   async get(ns: string): Promise<Scrubber | null> {
@@ -65,7 +68,13 @@ export class Scrubbers {
         value: await decrypt(key, blob, aad(record.ns, record.kind, record.name)),
       }))
     );
-    const scrubber = this.build(values, { version });
+    let scrubber: Scrubber;
+    try {
+      scrubber = this.build(values, { version });
+    } catch (error) {
+      this.failed.set(ns, version);
+      throw error;
+    }
     this.cache.set(ns, { version, scrubber, values, others: new Map() });
     return scrubber;
   }

@@ -24,6 +24,9 @@ export const PLACEHOLDER = /^fnox_proxy_[0-9a-f]{24}$/;
 export const RESTORABLE = 30 * 24 * 60 * 60 * 1000;
 export const MIN_VALUE = 8;
 export const MAX_PROVIDER = 128;
+export const MAX_VALUES = 128 * 1024;
+export const FULL =
+  'the values of this vault may total at most 128 KiB, removed ones until they are purged';
 export const REVOKED = 256;
 export const REVOKED_FOR = 7 * 24 * 60 * 60 * 1000;
 const CONTAINS_PLACEHOLDER = /fnox_proxy_[0-9a-f]{24}/;
@@ -221,6 +224,20 @@ export function checkValue(value: unknown): string {
     throw new Refused('EINVAL', 'a value must not contain a placeholder');
   }
   return value;
+}
+
+export function valueBytes(held: VaultRecord[]): number {
+  const size = (sealed: Sealed) => sealed.data.byteLength - 16;
+  return held.reduce(
+    (sum, r) => sum + size(r.sealed) + (r.replaced ? size(r.replaced.sealed) : 0),
+    0
+  );
+}
+
+async function fits(tx: IDBTransaction, ns: string): Promise<void> {
+  if (valueBytes(await all<VaultRecord>(tx, 'records', ns)) > MAX_VALUES) {
+    throw new Refused('EINVAL', FULL);
+  }
 }
 
 export function removed(record: VaultRecord): boolean {
@@ -479,6 +496,7 @@ export async function sealAll(
     await guard?.validate?.(tx);
     const out: Sealing[] = [];
     for (const [i, input] of inputs.entries()) out.push(await write(tx, input, sealed[i], keys[i]));
+    for (const ns of new Set(inputs.map((input) => input.ns))) await fits(tx, ns);
     guard?.check();
     return out;
   });
@@ -660,6 +678,7 @@ export async function rotate(
       const updatedAt = Math.max(now, current.updatedAt + 1);
       await request(store.put({ ...rest, sealed: fresh, updatedAt, ...expiry }));
     }
+    await fits(tx, ns);
     await bump(tx, ns);
     await audit(tx, ns, { ...entry, at: now });
     guard?.check();
