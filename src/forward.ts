@@ -1,12 +1,13 @@
-import type { Scrubber, Stream } from '@ai-ecoverse/slicc-scrub';
+import type { Scrubber } from '@ai-ecoverse/slicc-scrub';
 import type { ExitName, Stamp } from './contract.ts';
 import { all, request, transact } from './db.ts';
 import { Refused } from './errors.ts';
 import { type Head, type Prepared, prepare, type Traits } from './inject.ts';
 import { scrubBytes } from './json.ts';
 import { MAX_BODY } from './prepare.ts';
-import { atVersion, audit, records, scrubIn, scrubVersion, type VaultRecord } from './records.ts';
+import { audit, records, scrubIn, scrubVersion, type VaultRecord } from './records.ts';
 import { type McpServer, tofu } from './refusal.ts';
+import { Rescan, type Watch, watch } from './rescan.ts';
 import { loadRegistered, migrate, pin, policyIn } from './rules.ts';
 import { checkStamp } from './sealed.ts';
 import type { Vault } from './vault.ts';
@@ -15,7 +16,6 @@ type Fields = Record<string, unknown>;
 
 const EXIT = /^(?:page|proxy|tailscale|device:[A-Za-z0-9._:-]+)$/;
 const CANCELLED = "the vault's values changed; send the request again";
-const TRIES = 3;
 
 export function checkHead(value: unknown): Head {
   const head = (value ?? {}) as Fields;
@@ -168,38 +168,6 @@ async function record(
   });
 }
 
-export interface Watch {
-  at(version: number, work: () => void, stale: () => void): void | Promise<void>;
-  widen(prior: Scrubber): Promise<Scrubber | null>;
-  twin(scrubber: Scrubber): Scrubber;
-}
-
-export function watch(vault: Vault, ns: string, epoch: number): Watch {
-  let mark = epoch;
-  return {
-    at: (version, work, stale) =>
-      atVersion(
-        vault.db,
-        ns,
-        version,
-        () => (vault.scrubbers.epoch(ns) === mark ? work() : stale()),
-        stale
-      ),
-    widen: (prior) => {
-      mark = vault.scrubbers.epoch(ns);
-      return vault.scrubbers.widen(ns, prior);
-    },
-    twin: (scrubber) => vault.scrubbers.twin(scrubber),
-  };
-}
-
-function joined(head: Uint8Array, tail: Uint8Array): Uint8Array {
-  const out = new Uint8Array(head.length + tail.length);
-  out.set(head);
-  out.set(tail, head.length);
-  return out;
-}
-
 export function relay(
   port: MessagePort,
   scrubber: Scrubber,
@@ -207,40 +175,22 @@ export function relay(
   succeeded: () => void = () => {},
   credit = false
 ): void {
-  let current = scrubber;
-  let stream: Stream = current.stream();
-  let twin: Stream;
+  let rescan: Rescan;
   try {
-    twin = watcher.twin(current).stream();
+    rescan = new Rescan(scrubber, watcher);
   } catch {
     port.postMessage({ op: 'error', message: CANCELLED });
     port.close();
     return;
   }
-  let held: Uint8Array = new Uint8Array(0);
   let timer: ReturnType<typeof setTimeout> | undefined;
   let turn = Promise.resolve();
   let seen = 0;
   let done = false;
-  const text = (value: unknown) => (typeof value === 'string' ? current.text(value).text : '');
+  const text = (value: unknown) =>
+    typeof value === 'string' ? rescan.current.text(value).text : '';
   const send = (chunk: Uint8Array) => {
     if (chunk.length) port.postMessage({ op: 'body', chunk }, [chunk.buffer]);
-  };
-  const take = (out: Uint8Array, passed: Uint8Array) => {
-    held = held.slice(passed.length);
-    return out;
-  };
-  const push = (chunk: Uint8Array) => {
-    held = joined(held, chunk);
-    return take(stream.push(chunk), twin.push(chunk));
-  };
-  const swap = (next: Scrubber, pair: Scrubber) => {
-    const tail = held;
-    current = next;
-    stream = next.stream();
-    twin = pair.stream();
-    held = new Uint8Array(0);
-    send(push(tail));
   };
   const finish = (message: Fields) => {
     done = true;
@@ -254,28 +204,12 @@ export function relay(
   };
   const inOrder = (work: () => void) => {
     const step = async () => {
-      let next = current;
-      for (let tries = 0; !done; tries++) {
-        const candidate = next;
-        const pair = candidate === current ? null : watcher.twin(candidate);
-        let stale = false;
-        await watcher.at(
-          candidate.version,
-          () => {
-            if (pair) swap(candidate, pair);
-            work();
-          },
-          () => {
-            stale = true;
-          }
-        );
-        if (!stale) return;
-        if (tries === TRIES) break;
-        const wide = await watcher.widen(candidate);
-        if (!wide) break;
-        next = wide;
-      }
-      cancel();
+      if (done) return;
+      const held = await rescan.at((swapped) => {
+        send(swapped);
+        work();
+      });
+      if (!held) cancel();
     };
     turn = turn.then(step).catch(cancel);
   };
@@ -294,19 +228,19 @@ export function relay(
       });
     } else if (data.op === 'body' && data.chunk instanceof Uint8Array) {
       const bytes = data.chunk.byteLength;
-      send(push(data.chunk));
+      send(rescan.push(data.chunk));
       if (credit) port.postMessage({ op: 'credit', bytes });
       const armed = seen;
       timer = setTimeout(() => {
         inOrder(() => {
-          if (armed === seen) send(take(stream.idle(), twin.idle()));
+          if (armed === seen) send(rescan.idle());
         });
-      }, current.idleMs);
+      }, rescan.current.idleMs);
     } else if (data.op === 'end') {
-      send(take(stream.end(), twin.end()));
+      send(rescan.end());
       finish({ op: 'end' });
     } else if (data.op === 'error') {
-      send(take(stream.end(), twin.end()));
+      send(rescan.end());
       finish({ op: 'error', message: text(data.message) });
     }
   };

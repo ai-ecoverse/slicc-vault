@@ -1,7 +1,8 @@
-import type { Hit, Scrubber, Stream } from '@ai-ecoverse/slicc-scrub';
+import type { Hit, Scrubber } from '@ai-ecoverse/slicc-scrub';
 import { bytesOf } from './bytes.ts';
 import { Refused } from './errors.ts';
 import { Preparer } from './prepare.ts';
+import { concat, Rescan, watch } from './rescan.ts';
 import { register } from './rules.ts';
 import type { Vault } from './vault.ts';
 
@@ -9,12 +10,13 @@ type Fields = Record<string, unknown>;
 
 export const MAX_STREAMS = 64;
 const SANITIZED = new Set(['model', 'mcp', 'records', 'grant', 'refresh']);
+const CHANGED = "the vault's values changed; open the stream again and push from its start";
 const LOCKED = 'vault is locked: unlock it in the vault window to continue';
 
 export class AgentPort {
   readonly vault: Vault;
   readonly ns: string;
-  readonly streams = new Map<string, { stream: Stream; version: number }>();
+  readonly streams = new Map<string, { rescan: Rescan; turn: Promise<unknown> }>();
   readonly preparer: Preparer;
 
   constructor(vault: Vault, ns: string) {
@@ -58,42 +60,69 @@ export class AgentPort {
     return fields.stream;
   }
 
-  open(fields: Fields): Promise<Fields> {
+  async open(fields: Fields): Promise<Fields> {
     const id = this.id(fields);
     if (this.streams.size >= MAX_STREAMS && !this.streams.has(id)) {
       throw new Refused('EAGAIN', `at most ${MAX_STREAMS} streams are open`);
     }
-    return this.scrubber().then((scrubber) => {
-      this.streams.set(id, { stream: scrubber.stream(), version: scrubber.version });
-      return { stream: id, idleMs: scrubber.idleMs, version: scrubber.version };
-    });
+    const epoch = this.vault.scrubbers.epoch(this.ns);
+    const scrubber = await this.scrubber();
+    let rescan: Rescan;
+    try {
+      rescan = new Rescan(scrubber, watch(this.vault, this.ns, epoch));
+    } catch {
+      throw new Refused('EAGAIN', CHANGED);
+    }
+    this.streams.set(id, { rescan, turn: Promise.resolve() });
+    return { stream: id, idleMs: scrubber.idleMs, version: scrubber.version };
   }
 
-  async stream(fields: Fields): Promise<Stream> {
+  async step(fields: Fields, work: (rescan: Rescan) => Fields, last = false): Promise<Fields> {
     const id = this.id(fields);
     const found = this.streams.get(id);
     if (!found) throw new Refused('ENOENT', 'no such stream');
-    const current = await this.scrubber();
-    if (current.version !== found.version) {
-      this.streams.delete(id);
-      throw new Refused(
-        'EAGAIN',
-        "the vault's values changed; open the stream again and push from its start"
-      );
-    }
-    return found.stream;
+    const run = async () => {
+      if (this.streams.get(id) !== found) throw new Refused('ENOENT', 'no such stream');
+      let out: Fields = {};
+      const held = await found.rescan
+        .at((swapped) => {
+          if (last && this.streams.get(id) === found) this.streams.delete(id);
+          const reply = work(found.rescan);
+          out = {
+            ...reply,
+            chunk: concat(swapped, reply.chunk as Uint8Array),
+            version: found.rescan.current.version,
+          };
+        })
+        .catch(() => false);
+      if (held) return out;
+      if (this.streams.get(id) === found) this.streams.delete(id);
+      throw new Refused('EAGAIN', CHANGED);
+    };
+    const result = found.turn.then(run);
+    found.turn = result.catch(() => undefined);
+    return result;
   }
 
   async push(fields: Fields): Promise<Fields> {
     const chunk = bytesOf(fields.chunk);
     if (!chunk) throw new Refused('EINVAL', 'chunk must be bytes');
-    return { chunk: (await this.stream(fields)).push(chunk) };
+    return this.step(fields, (rescan) => ({ chunk: rescan.push(chunk) }));
+  }
+
+  async idle(fields: Fields): Promise<Fields> {
+    return this.step(fields, (rescan) => ({ chunk: rescan.idle() }));
   }
 
   async end(fields: Fields): Promise<Fields> {
-    const stream = await this.stream(fields);
-    this.streams.delete(this.id(fields));
-    return { chunk: stream.end(), hits: stream.hits };
+    return this.step(
+      fields,
+      (rescan) => {
+        const chunk = rescan.end();
+        return { chunk, hits: merge(rescan.hits()) };
+      },
+      true
+    );
   }
 
   drop(fields: Fields): Fields {
@@ -151,7 +180,7 @@ export class AgentPort {
       case 'push':
         return this.push(fields);
       case 'idle':
-        return this.stream(fields).then((stream) => ({ chunk: stream.idle() }));
+        return this.idle(fields);
       case 'end':
         return this.end(fields);
       case 'drop':
