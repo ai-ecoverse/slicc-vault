@@ -46,7 +46,9 @@ async function held(page, req, stamp) {
 
 async function shown(page, request) {
   await page.evaluate((id) => window.harness.value(id), request);
-  return cdp.target(/\/value\.html$/);
+  const frame = await cdp.target(/\/value\.html$/);
+  await frame.until(() => document.querySelector('button') !== null);
+  return frame;
 }
 
 const reply = (page, id) => page.until((call) => window.harness.replies[call], id);
@@ -150,7 +152,7 @@ test('an enter ask waits for the value typed in the frame while the port goes on
     placeholder: answer.placeholder,
     record: answer.record,
   });
-  assert.equal(await frame.evaluate(() => document.querySelector('input')), null);
+  assert.equal(await frame.until(() => document.querySelector('input') === null), true);
   const { audit } = await page.evaluate(() => window.harness.call('audit', { limit: 5 }));
   const entry = audit.find((e) => e.type === 'seal' && e.name === 'TYPED_TOKEN');
   assert.equal(entry.source, 'settings');
