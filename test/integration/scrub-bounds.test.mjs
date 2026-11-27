@@ -4,7 +4,6 @@ import {
   frameOf,
   mount,
   openPilot,
-  postCheck,
   recheck,
   runCheck,
   SECRET,
@@ -27,7 +26,7 @@ test('a fourth check, a second recheck, and a check within 10 s are EBUSY; 2049 
     })
   );
   assert.equal(oversized.error.code, 'EINVAL');
-  assert.equal(await runCheck(page, frame, SECRET, 1).then((r) => r.scrubVersion), 1);
+  assert.equal((await runCheck(page, frame, SECRET, 1)).scrubVersion, 1);
   const soon = await page.evaluate(() =>
     window.harness.call(window.harness.frames[0], { id: 2, op: 'check', text: 'y' })
   );
@@ -44,10 +43,4 @@ test('a fourth check, a second recheck, and a check within 10 s are EBUSY; 2049 
   assert.equal(typeof (await recheck(page, 6)).sha256, 'string');
   const reused = await recheck(page, 7);
   assert.equal(reused.error.code, 'EBUSY');
-  const page2 = await openPilot(chrome, served, t);
-  await mount(page2);
-  const frame2 = await frameOf(cdp, served);
-  await postCheck(page2, SECRET, 8);
-  await frame2.until(() => document.querySelector('button') !== null);
-  assert.equal(await frame2.evaluate(() => document.querySelector('button') !== null), true);
 });

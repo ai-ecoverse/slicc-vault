@@ -127,3 +127,19 @@ test('the built site ships a dark scrub frame', async () => {
   assert.deepEqual(doc.config.scrub, {});
   assert.deepEqual(doc.frameAncestors.scrub, []);
 });
+
+test('production scrub mapping refuses anything but https: origins', async () => {
+  const { assertProductionScrub } = await import('../../scripts/headers.mjs');
+  assert.doesNotThrow(() => assertProductionScrub({}));
+  assert.doesNotThrow(() =>
+    assertProductionScrub({ 'https://pilot.sliccy.ai': 'https://seven.sliccy.ai' })
+  );
+  for (const bad of [
+    { 'http://pilot.sliccy.localhost:8790': 'https://seven.sliccy.ai' },
+    { 'https://pilot.sliccy.ai': 'http://seven.sliccy.localhost:8790' },
+    { 'https://pilot.sliccy.ai/': 'https://seven.sliccy.ai' },
+    { 'https://pilot.sliccy.ai': 'https://seven.sliccy.ai:*' },
+  ]) {
+    assert.throws(() => assertProductionScrub(bad), /https:/);
+  }
+});

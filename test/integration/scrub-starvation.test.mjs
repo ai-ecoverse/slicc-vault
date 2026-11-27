@@ -25,7 +25,7 @@ test('seven visible frames: four checks succeed, three get EBUSY, and each winne
   assert.equal(mounted.length, 7);
   assert.ok(mounted.every((entry) => entry.welcome?.op === 'welcome'));
   const frames = [];
-  for (let i = 0; i < 7; i++) frames.push(await frameOf(cdp, served));
+  for (let i = 0; i < 7; i++) frames.push(await frameOf(cdp, served, `scrub-${i}`));
   const replies = [];
   for (let i = 0; i < 7; i++) {
     await postCheck(page, `${SECRET}-${i}`, i + 1, i);

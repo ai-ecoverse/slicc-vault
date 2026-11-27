@@ -1,11 +1,14 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
+import { click } from './browser.mjs';
 import {
   armed,
   awaitReply,
+  budget,
   frameOf,
   mount,
   openPilot,
+  pollWhile,
   postCheck,
   press,
   SECRET,
@@ -13,33 +16,41 @@ import {
   sealSeven,
 } from './scrub-harness.mjs';
 
-const { served, chrome, embedder, cdp } = await scrubSetup();
+const { served, chrome, embedder, cdp, pilot } = await scrubSetup();
 
-test('no output without a trusted click; synthetic events and the arm delay do nothing', async (t) => {
+test('a trusted click before arming does nothing; after armed() it works; untrusted click does nothing', async (t) => {
   await sealSeven(embedder, t);
   const page = await openPilot(chrome, served, t);
   await mount(page);
   const frame = await frameOf(cdp, served);
   await postCheck(page, SECRET, 1);
-  await frame.until(() => document.querySelector('button')?.disabled === true);
-  await frame.evaluate(() => document.querySelector('button').click());
-  await frame.evaluate(() =>
-    document.querySelector('button').dispatchEvent(new MouseEvent('click', { bubbles: true }))
-  );
-  await page.evaluate(() => {
-    const iframe = window.harness.frames[0].iframe;
-    iframe.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+  await frame.until(() => document.querySelector('button') !== null);
+  assert.equal(await budget(frame, pilot), null);
+  const early = await pollWhile(450, async () => {
+    await click(frame, 'button').catch(() => undefined);
+    const replied = await page.evaluate(() =>
+      window.harness.frames[0].replies.some((row) => row.id === 1)
+    );
+    const stamps = await budget(frame, pilot);
+    return !replied && stamps === null;
   });
-  await new Promise((resolve) => setTimeout(resolve, 200));
+  assert.equal(early, true);
   assert.equal(
     await page.evaluate(() => window.harness.frames[0].replies.some((row) => row.id === 1)),
     false
   );
-  assert.equal(await frame.evaluate(() => document.querySelector('button').disabled), true);
-  await new Promise((resolve) => setTimeout(resolve, 400));
-  assert.equal(await frame.evaluate(() => document.querySelector('button').disabled), true);
+  assert.equal(await budget(frame, pilot), null);
+  await frame.evaluate(() => document.querySelector('button').click());
+  await frame.evaluate(() =>
+    document.querySelector('button').dispatchEvent(new MouseEvent('click', { bubbles: true }))
+  );
+  assert.equal(
+    await page.evaluate(() => window.harness.frames[0].replies.some((row) => row.id === 1)),
+    false
+  );
   await armed(frame);
   const reply = awaitReply(page, 1);
   await press(frame);
   assert.equal((await reply).text.includes(SECRET), false);
+  assert.equal((await budget(frame, pilot)).length, 2);
 });

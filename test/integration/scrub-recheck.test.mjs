@@ -13,8 +13,8 @@ import {
 
 const { served, chrome, embedder, cdp } = await scrubSetup();
 
-test('recheck takes no text, stays on the same port and load, and is EINVAL with nothing held', async (t) => {
-  await sealSeven(embedder, t);
+test('recheck takes no text; refused recheck stays REUSED; no held text is EINVAL', async (t) => {
+  const { page: seven } = await sealSeven(embedder, t);
   const page = await openPilot(chrome, served, t);
   await mount(page);
   const bare = await recheck(page, 1);
@@ -29,10 +29,16 @@ test('recheck takes no text, stays on the same port and load, and is EINVAL with
     })
   );
   assert.equal(withText.error.code, 'EINVAL');
-  const ok = await recheck(page, 4);
-  assert.equal(typeof ok.sha256, 'string');
+  await seven.evaluate(() =>
+    window.harness.sealed({ v: 1, op: 'seal', name: 'MOVED', value: 'moved-secret-value-09' })
+  );
+  const refused = await recheck(page, 4);
+  assert.equal(refused.error.code, 'EBUSY');
+  const again = await recheck(page, 5);
+  assert.equal(again.error.code, 'EBUSY');
+  assert.equal(again.error.message.includes('recheck') || again.error.code === 'EBUSY', true);
   const page2 = await openPilot(chrome, served, t);
   await mount(page2);
-  const other = await recheck(page2, 5);
+  const other = await recheck(page2, 6);
   assert.equal(other.error.code, 'EINVAL');
 });

@@ -22,8 +22,8 @@ test('exactly one check takes the last pair of free slots; one free slot is enou
   await sealSeven(embedder, t);
   const page = await openPilot(chrome, served, t);
   await page.evaluate(() => window.harness.mounts(2));
-  const a = await frameOf(cdp, served);
-  const b = await frameOf(cdp, served);
+  const a = await frameOf(cdp, served, 'scrub-0');
+  const b = await frameOf(cdp, served, 'scrub-1');
   const now = Date.now();
   await seedBudget(a, pilot, Array(6).fill(now));
   await postCheck(page, SECRET, 1, 0);
@@ -43,8 +43,8 @@ test('exactly one check takes the last pair of free slots; one free slot is enou
   await seedBudget(a, pilot, Array(7).fill(Date.now()));
   const page2 = await openPilot(chrome, served, t);
   await page2.evaluate(() => window.harness.mounts(2));
-  const c = await frameOf(cdp, served);
-  const d = await frameOf(cdp, served);
+  const c = await frameOf(cdp, served, 'scrub-0');
+  const d = await frameOf(cdp, served, 'scrub-1');
   await postCheck(page2, SECRET, 3, 0);
   await postCheck(page2, SECRET, 4, 1);
   const rc = awaitReply(page2, 3, 0);

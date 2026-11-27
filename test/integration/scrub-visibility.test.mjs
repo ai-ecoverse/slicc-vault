@@ -1,10 +1,12 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import {
+  armed,
   awaitReply,
   frameOf,
   mount,
   openPilot,
+  pollWhile,
   postCheck,
   press,
   SECRET,
@@ -17,18 +19,26 @@ const { served, chrome, embedder, cdp } = await scrubSetup();
 test('an occluded or zero-size frame never arms; without IntersectionObserver v2 a check is EACCES', async (t) => {
   await sealSeven(embedder, t);
   const page = await openPilot(chrome, served, t);
-  await mount(page, { style: 'width: 0; height: 0; border: 0; overflow: hidden;' });
-  const tiny = await frameOf(cdp, served);
+  await mount(page, {
+    tag: 'tiny',
+    style: 'width: 0; height: 0; border: 0; overflow: hidden;',
+  });
+  const tiny = await frameOf(cdp, served, 'tiny');
   await postCheck(page, SECRET, 1);
   await tiny.until(() => document.querySelector('button') !== null);
-  await new Promise((resolve) => setTimeout(resolve, 800));
-  assert.equal(await tiny.evaluate(() => document.querySelector('button').disabled), true);
+  assert.equal(
+    await pollWhile(1500, async () =>
+      tiny.evaluate(() => document.querySelector('button')?.disabled === true)
+    ),
+    true
+  );
   await page.evaluate(() => window.harness.frames[0].iframe.remove());
   await mount(page, {
+    tag: 'covered',
     style: 'width: 420px; height: 72px; border: 0;',
     id: 'covered',
   });
-  const frame = await frameOf(cdp, served);
+  const frame = await frameOf(cdp, served, 'covered');
   await page.evaluate(() => {
     const cover = document.createElement('div');
     cover.id = 'cover';
@@ -37,14 +47,20 @@ test('an occluded or zero-size frame never arms; without IntersectionObserver v2
   });
   await postCheck(page, SECRET, 2, 1);
   await frame.until(() => document.querySelector('button') !== null);
-  await new Promise((resolve) => setTimeout(resolve, 800));
-  assert.equal(await frame.evaluate(() => document.querySelector('button').disabled), true);
+  assert.equal(
+    await pollWhile(1500, async () =>
+      frame.evaluate(() => document.querySelector('button')?.disabled === true)
+    ),
+    true
+  );
   await page.evaluate(() => document.getElementById('cover').remove());
+  await armed(frame);
+  const reply = awaitReply(page, 2, 1);
   await press(frame);
-  assert.equal((await awaitReply(page, 2, 1)).text.includes(SECRET), false);
+  assert.equal((await reply).text.includes(SECRET), false);
   await page.evaluate(() => window.harness.frames[1].iframe.remove());
-  await mount(page);
-  const blind = await frameOf(cdp, served);
+  await mount(page, { tag: 'blind' });
+  const blind = await frameOf(cdp, served, 'blind');
   await blind.evaluate(() => {
     delete IntersectionObserverEntry.prototype.isVisible;
   });

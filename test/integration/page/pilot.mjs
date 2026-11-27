@@ -21,8 +21,11 @@ async function mount(options = {}) {
   const style =
     options.style ??
     'width: 420px; height: 72px; border: 0; display: inline-block; margin: 4px; vertical-align: top;';
-  const iframe = await load(`${vault}/scrub.html`, style);
+  const tag = options.tag ?? options.id ?? `f${frames.length}`;
+  const path = options.path ?? `/scrub.html?f=${encodeURIComponent(tag)}`;
+  const iframe = await load(`${vault}${path}`, style);
   if (options.id) iframe.id = options.id;
+  if (options.sandbox !== undefined) iframe.sandbox = options.sandbox;
   const channel = new MessageChannel();
   const replies = [];
   const waiting = new Map();
@@ -49,7 +52,7 @@ async function mount(options = {}) {
   const ports = options.ports === undefined ? [channel.port2] : options.ports;
   if (hello !== null) iframe.contentWindow.postMessage(hello, target, ports);
   else channel.port2.close();
-  const entry = { iframe, port: channel.port1, replies, waiting, welcome: null };
+  const entry = { iframe, port: channel.port1, replies, waiting, tag, welcome: null };
   frames.push(entry);
   if (options.wait === false) return entry;
   entry.welcome = await Promise.race([
@@ -86,7 +89,9 @@ function call(entry, fields) {
 
 async function mounts(count, options = {}) {
   const out = [];
-  for (let i = 0; i < count; i++) out.push(await mount({ ...options, id: `scrub-${i}` }));
+  for (let i = 0; i < count; i++) {
+    out.push(await mount({ ...options, id: `scrub-${i}`, tag: `scrub-${i}` }));
+  }
   return out;
 }
 

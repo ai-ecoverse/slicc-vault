@@ -43,12 +43,14 @@ export async function mount(page, options = {}) {
   return page.evaluate((opts) => window.harness.mount(opts), options);
 }
 
-export function scrubPattern(served) {
-  return new RegExp(`^${served.vault.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}/scrub\\.html$`);
+export function scrubPattern(served, tag) {
+  const base = served.vault.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  if (tag === undefined) return new RegExp(`^${base}/scrub\\.html`);
+  return new RegExp(`^${base}/scrub\\.html\\?f=${encodeURIComponent(tag)}(?:$|&)`);
 }
 
-export async function frameOf(cdp, served) {
-  return cdp.target(scrubPattern(served));
+export async function frameOf(cdp, served, tag) {
+  return cdp.target(scrubPattern(served, tag));
 }
 
 export async function armed(frame) {
@@ -144,6 +146,39 @@ export async function seedBudget(frame, origin, stamps) {
   );
 }
 
+export async function corruptRecord(frame, ns) {
+  return frame.evaluate(async (namespace) => {
+    const db = await new Promise((resolve, reject) => {
+      const opening = indexedDB.open('slicc-vault', 1);
+      opening.onsuccess = () => resolve(opening.result);
+      opening.onerror = () => reject(opening.error);
+    });
+    const held = await new Promise((resolve, reject) => {
+      const req = db
+        .transaction(['records'], 'readonly')
+        .objectStore('records')
+        .index('ns')
+        .getAll(namespace);
+      req.onsuccess = () => resolve(req.result);
+      req.onerror = () => reject(req.error);
+    });
+    const record = held[0];
+    if (!record) throw new Error('no record to corrupt');
+    record.sealed = {
+      alg: record.sealed?.alg ?? 'AES-GCM',
+      data: new Uint8Array(48),
+      iv: new Uint8Array(12),
+    };
+    await new Promise((resolve, reject) => {
+      const tx = db.transaction(['records'], 'readwrite');
+      tx.objectStore('records').put(record);
+      tx.oncomplete = () => resolve();
+      tx.onerror = () => reject(tx.error);
+    });
+    db.close();
+  }, ns);
+}
+
 export async function metaKeys(frame) {
   return frame.evaluate(async () => {
     const db = await new Promise((resolve, reject) => {
@@ -179,4 +214,17 @@ export async function scrubCounter(frame, ns) {
     db.close();
     return value ?? 0;
   }, ns);
+}
+
+export function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+export async function pollWhile(ms, fn) {
+  const deadline = Date.now() + ms;
+  while (Date.now() < deadline) {
+    if (!(await fn())) return false;
+    await sleep(50);
+  }
+  return true;
 }

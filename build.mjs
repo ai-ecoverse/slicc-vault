@@ -1,7 +1,12 @@
 import { cp, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { env } from 'node:process';
 import { build } from 'esbuild';
-import { siteConfig, siteVersion, writeHeaders } from './scripts/headers.mjs';
+import {
+  assertProductionScrub,
+  siteConfig,
+  siteVersion,
+  writeHeaders,
+} from './scripts/headers.mjs';
 
 const out = new URL('./dist/site/', import.meta.url);
 const manifest = JSON.parse(await readFile(new URL('./package.json', import.meta.url), 'utf8'));
@@ -43,6 +48,7 @@ await build({
 });
 await cp(new URL('./src/html/', import.meta.url), out, { recursive: true });
 await cp(new URL('./src/fonts/', import.meta.url), new URL('fonts/', out), { recursive: true });
+assertProductionScrub();
 const config = siteConfig(siteVersion(env.VAULT_VERSION, manifest.version));
 await writeFile(new URL('config.json', out), `${JSON.stringify(config, null, 2)}\n`);
 await writeHeaders(new URL('./dist/headers.json', import.meta.url));

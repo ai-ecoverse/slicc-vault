@@ -18,6 +18,20 @@ export const CONFIG_EMBEDDERS = ['https://seven.sliccy.ai'];
 
 export const SCRUB = {};
 
+export function assertProductionScrub(mapping = SCRUB) {
+  if (!mapping || typeof mapping !== 'object' || Array.isArray(mapping)) {
+    throw new Error('production scrub mapping must be an object');
+  }
+  for (const [from, to] of Object.entries(mapping)) {
+    for (const origin of [from, to]) {
+      const url = URL.parse(origin);
+      if (!url || url.origin !== origin || url.protocol !== 'https:') {
+        throw new Error(`production scrub mapping allows only https: origins, got ${origin}`);
+      }
+    }
+  }
+}
+
 const DIRECTIVES = [
   "default-src 'none'",
   "script-src 'self' 'wasm-unsafe-eval'",
@@ -98,6 +112,7 @@ export function siteVersion(override, packaged) {
 }
 
 export function siteConfig(version) {
+  assertProductionScrub(SCRUB);
   return { version, embedders: [...CONFIG_EMBEDDERS], scrub: { ...SCRUB } };
 }
 

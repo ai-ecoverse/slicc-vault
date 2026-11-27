@@ -70,7 +70,7 @@ const CHECK_FIELDS = new Set(['v', 'id', 'op', 'text']);
 const RECHECK_FIELDS = new Set(['v', 'id', 'op']);
 const KEYS = new Set(['key', 'key?', 'lock', 'keys']);
 const LANG = /^[A-Za-z]{2,8}(?:-[A-Za-z0-9]{1,8})*$/;
-const NAMED = '\\[redacted:[A-Za-z_][A-Za-z0-9_]*\\]';
+const NAMED = '\\[redacted:[^\\]\\n]*\\]';
 const SPECIAL = /[.*+?^${}()|[\]\\]/g;
 const CLASSES =
   'spectrum-Button spectrum-Button--accent spectrum-Button--fill spectrum-Button--sizeM';
@@ -117,6 +117,10 @@ export function masked(text: string, placeholders: readonly string[]): string {
 
 export function residue(text: string, placeholders: readonly string[]): boolean {
   return placeholders.some((placeholder) => text.includes(placeholder.slice(-24)));
+}
+
+export function leftover(text: string, values: readonly string[]): boolean {
+  return values.some((value) => value.length > 0 && text.includes(value));
 }
 
 export function budgetKey(origin: string): string {
@@ -402,8 +406,9 @@ export class ScrubFrame {
   async scrub(scrubber: Scrubber, text: string): Promise<string> {
     const secrets = (this.scrubbers as Scrubbers).held.get(scrubber) ?? [];
     const placeholders = secrets.map((secret) => secret.placeholder);
+    const values = secrets.map((secret) => secret.value);
     const out = masked(scrubber.text(text).text, placeholders);
-    if (placeholders.length === 0 || residue(out, placeholders)) {
+    if (placeholders.length === 0 || residue(out, placeholders) || leftover(out, values)) {
       throw new Denied('EINVAL', UNABLE);
     }
     const version = await scrubVersion(this.db as IDBDatabase, this.ns);
