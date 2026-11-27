@@ -947,3 +947,36 @@ export type ValueEvent = { type: MessageType; v: Protocol } & (
   | { event: 'gone'; request: string; state: RequestState }
   | { event: 'error'; code: ErrorCode; message: string }
 );
+
+export interface ScrubConfig {
+  theme?: 'light' | 'dark';
+  dir?: 'ltr' | 'rtl';
+  lang?: string;
+  scale?: 'medium' | 'large';
+}
+
+export interface ScrubHello {
+  type: MessageType;
+  v: Protocol;
+  op: 'scrub';
+  config?: ScrubConfig;
+}
+
+export interface ScrubWelcome {
+  v: Protocol;
+  op: 'welcome';
+  doc: 'scrub';
+  release: string;
+}
+
+export type ScrubRequest =
+  | { v: Protocol; id: string | number; op: 'check'; text: string }
+  | { v: Protocol; id: string | number; op: 'recheck' };
+
+export type ScrubReply =
+  | { id: string | number; text: string; scrubVersion: number }
+  | { id: string | number; sha256: string; scrubVersion: number }
+  | {
+      id: string | number | null;
+      error: { code: 'EACCES' | 'ENOENT' | 'EINVAL' | 'EBUSY' | 'ENOTSUP'; message: string };
+    };

@@ -112,3 +112,18 @@ for (const via of ['the checkout', 'a symlinked checkout']) {
     assert.match(got.out, /vault: {4}http:\/\/vault\.sliccy\.localhost:\d+\//);
   });
 }
+
+test('the built site ships a dark scrub frame', async () => {
+  const site = join(root, 'dist/site');
+  assert.equal((await readFile(join(site, 'scrub.html'), 'utf8')).includes('scrub.js'), true);
+  assert.equal((await readFile(join(site, 'scrub.js'), 'utf8')).length > 0, true);
+  const doc = JSON.parse(await readFile(join(root, 'dist/headers.json'), 'utf8'));
+  assert.deepEqual(doc.classes.scrub.paths, ['/scrub.html']);
+  assert.match(doc.classes.scrub.headers['content-security-policy'], /frame-ancestors 'none'/);
+  assert.doesNotMatch(
+    doc.classes.scrub.headers['content-security-policy'],
+    /https:\/\/seven\.sliccy\.ai/
+  );
+  assert.deepEqual(doc.config.scrub, {});
+  assert.deepEqual(doc.frameAncestors.scrub, []);
+});

@@ -16,6 +16,8 @@ export const PRODUCTION_EMBEDDERS = ['https://seven.sliccy.ai', 'https://www.sli
 
 export const CONFIG_EMBEDDERS = ['https://seven.sliccy.ai'];
 
+export const SCRUB = {};
+
 const DIRECTIVES = [
   "default-src 'none'",
   "script-src 'self' 'wasm-unsafe-eval'",
@@ -35,6 +37,7 @@ export const CLASSES = [
     paths: ['/', '/index.html', '/button.html', '/value.html', '/popup.html'],
     extension: '.html',
   },
+  { name: 'scrub', paths: ['/scrub.html'], extension: '.html', scrub: true },
   { name: 'scripts', extensions: ['.js'], extension: '.js' },
   { name: 'css', extensions: ['.css'], extension: '.css' },
   { name: 'maps', extensions: ['.map'], extension: '.map' },
@@ -47,6 +50,12 @@ export const CLASSES = [
 
 export function frameAncestors(embedders) {
   return embedders.join(' ') || "'none'";
+}
+
+export function scrubAncestors(mapping) {
+  return mapping && typeof mapping === 'object' && !Array.isArray(mapping)
+    ? Object.keys(mapping)
+    : [];
 }
 
 export function contentSecurityPolicy(embedders) {
@@ -89,7 +98,7 @@ export function siteVersion(override, packaged) {
 }
 
 export function siteConfig(version) {
-  return { version, embedders: [...CONFIG_EMBEDDERS] };
+  return { version, embedders: [...CONFIG_EMBEDDERS], scrub: { ...SCRUB } };
 }
 
 export function headersDocument() {
@@ -98,7 +107,10 @@ export function headersDocument() {
     classes[spec.name] = {
       ...(spec.paths ? { paths: spec.paths } : {}),
       ...(spec.extensions ? { extensions: spec.extensions } : {}),
-      headers: servedHeaders(PRODUCTION_EMBEDDERS, spec.extension),
+      headers: servedHeaders(
+        spec.scrub ? scrubAncestors(SCRUB) : PRODUCTION_EMBEDDERS,
+        spec.extension
+      ),
     };
   }
   return {
@@ -115,11 +127,12 @@ export function headersDocument() {
     },
     frameAncestors: {
       shape:
-        "space-separated embedder sources, each an http:// or https:// host with an optional :port or :*; an empty list is 'none'",
+        "space-separated embedder sources, each an http:// or https:// host with an optional :port or :*; an empty list is 'none'. The scrub class (/scrub.html) lists the top-level origins of config.json's scrub mapping instead, never the embedders",
       production: [...PRODUCTION_EMBEDDERS],
+      scrub: scrubAncestors(SCRUB),
     },
     embedders: { embedders: [...PRODUCTION_EMBEDDERS] },
-    config: { version: '<version>', embedders: [...CONFIG_EMBEDDERS] },
+    config: { version: '<version>', embedders: [...CONFIG_EMBEDDERS], scrub: { ...SCRUB } },
     productionOnly: {
       'strict-transport-security': 'max-age=31536000',
       etag: "the stored object's httpEtag; absent on /embedders.json",

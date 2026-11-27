@@ -11,7 +11,7 @@ interface Compiled {
 }
 
 export class Scrubbers {
-  readonly vault: Vault;
+  readonly vault: Pick<Vault, 'db' | 'keyring'>;
   readonly cache = new Map<string, Compiled>();
   readonly epochs = new Map<string, number>();
   readonly held = new WeakMap<Scrubber, Secret[]>();
@@ -20,7 +20,7 @@ export class Scrubbers {
   readonly failed = new Map<string, number>();
   readonly limit = { values: 256, bytes: MAX_VALUES };
 
-  constructor(vault: Vault) {
+  constructor(vault: Pick<Vault, 'db' | 'keyring'>) {
     this.vault = vault;
   }
 

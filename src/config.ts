@@ -3,9 +3,14 @@ import { allowed } from './origin.ts';
 export interface Config {
   version: string;
   embedders: string[];
+  scrub: ReadonlyMap<string, string>;
 }
 
-export const FALLBACK: Config = { version: '0.0.0', embedders: ['https://seven.sliccy.ai'] };
+export const FALLBACK: Config = {
+  version: '0.0.0',
+  embedders: ['https://seven.sliccy.ai'],
+  scrub: new Map(),
+};
 
 export const PRODUCTION = 'vault.sliccy.ai';
 
@@ -15,6 +20,22 @@ function sources(value: unknown): string[] | null {
   if (!Array.isArray(value)) return null;
   const valid = value.filter((entry) => typeof entry === 'string' && SOURCE.test(entry));
   return valid.length === value.length ? valid : null;
+}
+
+export function exactOrigin(value: unknown): value is string {
+  if (typeof value !== 'string' || value.includes('*')) return false;
+  const url = URL.parse(value);
+  if (!url || url.origin !== value) return false;
+  return (
+    url.protocol === 'https:' || (url.protocol === 'http:' && url.hostname.endsWith('.localhost'))
+  );
+}
+
+export function mapping(value: unknown): ReadonlyMap<string, string> {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return new Map();
+  const entries = Object.entries(value);
+  const valid = entries.every(([from, to]) => exactOrigin(from) && exactOrigin(to));
+  return new Map(valid ? (entries as [string, string][]) : []);
 }
 
 async function read(fetcher: typeof fetch, path: string): Promise<Record<string, unknown> | null> {
@@ -37,7 +58,7 @@ export async function load(
   const version = typeof own?.version === 'string' ? own.version : FALLBACK.version;
   const fallback = host === PRODUCTION ? (sources(own?.embedders) ?? FALLBACK.embedders) : [];
   const embedders = sources(served?.embedders) ?? fallback;
-  return { version, embedders };
+  return { version, embedders, scrub: mapping(own?.scrub) };
 }
 
 let shared: Promise<Config> | null = null;

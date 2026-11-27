@@ -64,6 +64,19 @@ test('framed vault documents throw nothing at start', async (t) => {
   });
   await cdp.target(new RegExp(`^${served.vault}/$`));
   await cdp.target(new RegExp(`^${served.vault}/button\\.html$`));
+  served.state.config = {
+    version: '0.0.0-test',
+    embedders: served.state.embedders,
+    scrub: { [served.origin('seven')]: served.origin('seven') },
+  };
+  await page.evaluate(async (vault) => {
+    const iframe = document.createElement('iframe');
+    iframe.src = `${vault}/scrub.html`;
+    iframe.style.cssText = 'width: 420px; height: 72px; border: 0;';
+    document.body.append(iframe);
+    await new Promise((resolve) => iframe.addEventListener('load', resolve, { once: true }));
+  }, served.vault);
+  await cdp.target(new RegExp(`^${served.vault}/scrub\\.html$`));
   await new Promise((resolve) => setTimeout(resolve, 500));
   assert.deepEqual(thrown, []);
 });

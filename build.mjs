@@ -14,6 +14,7 @@ await build({
     button: 'src/entry/button.ts',
     popup: 'src/entry/popup.ts',
     value: 'src/entry/value.ts',
+    scrub: 'src/entry/scrub.ts',
     vault: 'src/vault.css',
   },
   outdir: out.pathname,

@@ -63,6 +63,18 @@ body.button {
   display: none;
 }
 
+body.scrub {
+  background: transparent;
+  overflow: hidden;
+}
+
+.scrub .holder {
+  display: inline-block;
+  width: max-content;
+  white-space: nowrap;
+  padding: 2px;
+}
+
 body.popup {
   background: var(--spectrum-background-base-color);
   color: var(--spectrum-neutral-content-color-default);

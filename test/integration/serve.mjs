@@ -4,7 +4,14 @@ import { createServer } from 'node:http';
 import { extname, join, normalize, resolve, sep } from 'node:path';
 import { argv } from 'node:process';
 import { fileURLToPath } from 'node:url';
-import { contentType, pageHeaders, servedHeaders, vaultHeaders } from '../../scripts/headers.mjs';
+import {
+  contentType,
+  pageHeaders,
+  SCRUB,
+  scrubAncestors,
+  servedHeaders,
+  vaultHeaders,
+} from '../../scripts/headers.mjs';
 
 const site = resolve(fileURLToPath(new URL('../../dist/site/', import.meta.url)));
 const page = resolve(fileURLToPath(new URL('./page/', import.meta.url)));
@@ -26,7 +33,9 @@ export async function serveVault({ port = 0, embedders = EMBEDDERS, frameAncesto
     const host = (request.headers.host ?? '').split(':')[0];
     const vault = host.startsWith('vault.');
     state.requests.push(`${host}${url.pathname}`);
-    const frames = state.frameAncestors ? state.embedders : ['*'];
+    const scrub = scrubAncestors(state.config ? state.config.scrub : SCRUB);
+    const listed = url.pathname === '/scrub.html' ? scrub : state.embedders;
+    const frames = state.frameAncestors ? listed : ['*'];
     const headers = vault ? vaultHeaders(frames) : pageHeaders;
     if (vault && url.pathname === '/config.json' && state.config) {
       const body = JSON.stringify(state.config);

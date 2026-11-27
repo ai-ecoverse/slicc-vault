@@ -19,6 +19,9 @@ const PRODUCTION_CSP =
 const LOCAL_CSP =
   "default-src 'none'; script-src 'self' 'wasm-unsafe-eval'; style-src 'self'; img-src 'self' data:; font-src 'self'; connect-src 'self' https: http://localhost:* http://127.0.0.1:*; worker-src 'self'; manifest-src 'self'; base-uri 'none'; form-action 'none'; frame-ancestors http://seven.sliccy.localhost:* http://preview.sliccy.localhost:*";
 
+const DARK_SCRUB_CSP =
+  "default-src 'none'; script-src 'self' 'wasm-unsafe-eval'; style-src 'self'; img-src 'self' data:; font-src 'self'; connect-src 'self' https: http://localhost:* http://127.0.0.1:*; worker-src 'self'; manifest-src 'self'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'";
+
 const SECURITY = {
   'cross-origin-embedder-policy': 'require-corp',
   'cross-origin-resource-policy': 'same-site',
@@ -144,6 +147,13 @@ test('the package lists every built site file, and headers.json matches the serv
   assert.deepEqual(doc.classes.text.extensions, ['.txt']);
   assert.deepEqual(doc.embedders, { embedders: [...PRODUCTION_EMBEDDERS] });
   assert.deepEqual(doc.config.embedders, ['https://seven.sliccy.ai']);
+  assert.deepEqual(doc.config.scrub, {});
+  assert.deepEqual(doc.frameAncestors.scrub, []);
+  assert.deepEqual(doc.classes.scrub.paths, ['/scrub.html']);
+  assert.deepEqual(
+    doc.classes.scrub.headers,
+    classHeaders(DARK_SCRUB_CSP, 'no-store', 'text/html; charset=utf-8')
+  );
   const served = await serveVault();
   const probes = [
     join(site, 'probe-class.wasm'),
@@ -181,12 +191,40 @@ test('the package lists every built site file, and headers.json matches the serv
       }
       await response.arrayBuffer();
     }
+    const scrub = await get(`${served.vault}/scrub.html`);
+    assert.equal(scrub.status, 200);
+    assert.deepEqual(
+      picked(scrub),
+      classHeaders(DARK_SCRUB_CSP, 'no-store', 'text/html; charset=utf-8')
+    );
+    await scrub.arrayBuffer();
     const embedders = await get(`${served.vault}/embedders.json`);
     assert.deepEqual(await embedders.json(), { embedders: EMBEDDERS });
     const config = await get(`${served.vault}/config.json`);
     const body = await config.json();
     assert.equal(typeof body.version, 'string');
     assert.deepEqual(body.embedders, doc.config.embedders);
+    assert.deepEqual(body.scrub, {});
+    const pilot = served.origin('pilot');
+    const seven = served.origin('seven');
+    served.state.config = {
+      version: body.version,
+      embedders: body.embedders,
+      scrub: { [pilot]: seven },
+    };
+    const mapped = await get(`${served.vault}/scrub.html`);
+    const mappedCsp = DARK_SCRUB_CSP.replace("'none'", pilot);
+    assert.deepEqual(
+      picked(mapped),
+      classHeaders(mappedCsp, 'no-store', 'text/html; charset=utf-8')
+    );
+    await mapped.arrayBuffer();
+    const documents = await get(`${served.vault}/button.html`);
+    assert.deepEqual(
+      picked(documents),
+      classHeaders(LOCAL_CSP, 'no-store', 'text/html; charset=utf-8')
+    );
+    await documents.arrayBuffer();
     const page = await get(`${served.origin('seven')}/`);
     assert.equal(page.status, 200);
     assert.equal(page.headers.get('content-type'), 'text/html; charset=utf-8');
