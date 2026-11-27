@@ -18,7 +18,7 @@ import {
 
 const { served, chrome, embedder, cdp, pilot } = await scrubSetup();
 
-test('a trusted click before arming does nothing; after armed() it works; untrusted click does nothing', async (t) => {
+test('a trusted click before arming does nothing; after armed() untrusted clicks do nothing; then press works', async (t) => {
   await sealSeven(embedder, t);
   const page = await openPilot(chrome, served, t);
   await mount(page);
@@ -40,6 +40,7 @@ test('a trusted click before arming does nothing; after armed() it works; untrus
     false
   );
   assert.equal(await budget(frame, pilot), null);
+  await armed(frame);
   await frame.evaluate(() => document.querySelector('button').click());
   await frame.evaluate(() =>
     document.querySelector('button').dispatchEvent(new MouseEvent('click', { bubbles: true }))
@@ -48,7 +49,7 @@ test('a trusted click before arming does nothing; after armed() it works; untrus
     await page.evaluate(() => window.harness.frames[0].replies.some((row) => row.id === 1)),
     false
   );
-  await armed(frame);
+  assert.equal(await budget(frame, pilot), null);
   const reply = awaitReply(page, 1);
   await press(frame);
   assert.equal((await reply).text.includes(SECRET), false);
