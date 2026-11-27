@@ -9,6 +9,8 @@ const EXTRA = [
   ['https://opencode.ai/zen', null],
   ['https://opencode.ai/inference', null],
   ['https://api.kimi.com/coding', null],
+  ['https://token-plan.ap-southeast-1.maas.aliyuncs.com/compatible-mode/v1', null],
+  ['https://token-plan.cn-beijing.maas.aliyuncs.com/compatible-mode/v1', null],
   ['https://bedrock-runtime.{region}.amazonaws.com', 'amazon-bedrock'],
   ['https://bedrock-runtime-fips.{region}.amazonaws.com', 'amazon-bedrock'],
   ['https://{AZURE_OPENAI_RESOURCE_NAME}.openai.azure.com', 'azure'],

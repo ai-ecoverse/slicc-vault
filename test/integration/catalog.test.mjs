@@ -123,6 +123,9 @@ test('retired and new model hosts stay refused for secrets, and Azure Speech rul
     'api.kimi.com',
     'aiplatform.googleapis.com',
     'my-resource.cognitiveservices.azure.com',
+    'token-plan.ap-southeast-1.maas.aliyuncs.com',
+    'token-plan.cn-beijing.maas.aliyuncs.com',
+    'token-plan.maas.qwencloudapi.com',
   ];
   const text = config(
     { SVC_KEY: gh.placeholder },
@@ -149,6 +152,9 @@ test('retired and new model hosts stay refused for secrets, and Azure Speech rul
     'https://opencode.ai/inference/go/v1/chat/completions',
     'https://api.kimi.com/coding/chat',
     'https://my-resource.cognitiveservices.azure.com/openai/deployments/d/chat/completions',
+    'https://token-plan.ap-southeast-1.maas.aliyuncs.com/compatible-mode/v1/chat/completions',
+    'https://token-plan.cn-beijing.maas.aliyuncs.com/compatible-mode/v1/chat/completions',
+    'https://token-plan.maas.qwencloudapi.com/compatible-mode/v1/chat/completions',
   ]) {
     const refused = await send(url);
     assert.equal(refused.reply.refused?.status, 403, url);
